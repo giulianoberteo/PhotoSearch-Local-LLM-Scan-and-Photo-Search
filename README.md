@@ -1,0 +1,1 @@
+# PhotoSearch-Local-LLM-Scan-and-Photo-Search
