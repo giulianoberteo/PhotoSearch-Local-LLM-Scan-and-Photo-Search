@@ -1,0 +1,434 @@
+"use strict";
+/* ================= helpers ================= */
+const $ = s => document.querySelector(s);
+const el = (tag, cls, txt) => { const n = document.createElement(tag);
+  if (cls) n.className = cls; if (txt != null) n.textContent = txt; return n; };
+const fmt = n => n == null ? "–" : String(n);
+function fmtDur(s){
+  s = Math.round(s);
+  if (s < 90) return s + "s";
+  const m = Math.round(s / 60);
+  if (m < 90) return m + " min";
+  const h = s / 3600;
+  return h < 48 ? h.toFixed(1) + " h" : (h / 24).toFixed(1) + " days";
+}
+/* requestAnimationFrame does not fire while a tab is hidden, occluded, or on
+   another Space. Anything that AWAITS a repaint would then hang forever — which
+   is exactly what happened to the progress notes. Always resolve, with a timer
+   as the backstop. */
+const paint = () => new Promise(r => {
+  let done = false;
+  const fin = () => { if (done) return; done = true; r(); };
+  try { requestAnimationFrame(() => setTimeout(fin, 0)); } catch { /* ignore */ }
+  setTimeout(fin, 60);
+});
+
+/* ================= state ================= */
+const S = {
+  baseUrl: "http://localhost:1234",
+  models: [], nativeApi: null, connected: false,
+  dirHandle: null, indexDirHandle: null, photoCount: 0,
+  roles: { scan:"", embed:"", chat:"auto" },
+  scan: { concurrency:1, statConcurrency:12, maxTokens:900, temp:0.1,
+          estSecs:23, batchSize:25, bigPx:1024, thumbPx:384, thumbQ:0.7 },
+  date: { hemisphere:"north", occasions:null, overrides:[] },
+  events: { gapHours:6, km:25 },
+  search: { minCosine:0.30 },
+  chat: { historyChars:24000, toolResultChars:8000 },
+  ocr: { enabled:true, px:1600, maxTokens:3000, embedChars:1200, minChars:40 },
+  /* A NAS library wants its index on local disk: every batch flush would
+     otherwise cross SMB, and search should keep working when the share sleeps. */
+  indexMode: "folder",            // "folder" = .photoindex beside the photos
+  scanOrder: "newest",            // newest | oldest | path | smallest
+  /* Always keep the library ROOT as the picked folder so paths stay unique and
+     one index covers everything. Scope narrows only what a scan walks. */
+  scanScope: "",                  // "" = whole library, else "Sicily/" etc.
+  subfolders: [],
+  io: { retries:3, retryMs:400 },
+  backup: { enabled:true, keep:3, minNewRecords:1 },
+  plan: null
+};
+
+/* ================= settings persistence ================= */
+const LS = "photosearch.settings.v2";
+const LS_OLD = "photosearch.settings.v1";
+function saveSettings(){
+  try { localStorage.setItem(LS, JSON.stringify({
+    baseUrl:S.baseUrl, roles:S.roles, scan:S.scan, date:S.date, events:S.events,
+    search:S.search, ocr:S.ocr, indexMode:S.indexMode, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
+    mock: $("#mock").checked })); } catch {}
+}
+function loadSettings(){
+  try {
+    // Carry forward settings written by an earlier version rather than
+    // silently reverting the user to defaults (which loses the scan model).
+    let raw = localStorage.getItem(LS);
+    if (!raw){
+      const old = localStorage.getItem(LS_OLD);
+      if (old){ raw = old; try { localStorage.setItem(LS, old); } catch {} }
+    }
+    const d = JSON.parse(raw || "{}");
+    if (d.baseUrl){ S.baseUrl = d.baseUrl; $("#baseUrl").value = d.baseUrl; }
+    if (d.roles) S.roles = { ...S.roles, ...d.roles };
+    if (d.scan)  S.scan  = { ...S.scan,  ...d.scan };
+    if (d.date)  S.date  = { ...S.date,  ...d.date };
+    if (d.events) S.events = { ...S.events, ...d.events };
+    if (d.search) S.search = { ...S.search, ...d.search };
+    if (d.chat) S.chat = { ...S.chat, ...d.chat };
+    if (d.ocr) S.ocr = { ...S.ocr, ...d.ocr };
+    if (d.indexMode) S.indexMode = d.indexMode;
+    if (d.scanOrder) S.scanOrder = d.scanOrder;
+    if (d.scanScope) S.scanScope = d.scanScope;
+    if (d.io) S.io = { ...S.io, ...d.io };
+    if (d.backup) S.backup = { ...S.backup, ...d.backup };
+    if (d.mock) $("#mock").checked = true;
+    $("#sConc").value = S.scan.concurrency;
+    $("#sStat").value = S.scan.statConcurrency;
+    $("#sMaxTok").value = S.scan.maxTokens;
+    $("#sTemp").value = S.scan.temp;
+    $("#sGap").value = S.events.gapHours;
+    $("#sKm").value = S.events.km;
+    $("#sHemi").value = S.date.hemisphere;
+    $("#sMinCos").value = S.search.minCosine;
+    $("#sOcr").checked = S.ocr.enabled;
+    $("#sOrder").value = S.scanOrder;
+    $("#sBackup").checked = S.backup.enabled;
+    $("#sKeep").value = S.backup.keep;
+  } catch {}
+}
+function idb(){ return new Promise((res, rej) => {
+  const r = indexedDB.open("photosearch", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("kv");
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function idbSet(k, v){ const db = await idb(); return new Promise((res, rej) => {
+  const t = db.transaction("kv","readwrite"); t.objectStore("kv").put(v, k);
+  t.oncomplete = res; t.onerror = () => rej(t.error); }); }
+async function idbGet(k){ const db = await idb(); return new Promise((res, rej) => {
+  const t = db.transaction("kv","readonly"); const q = t.objectStore("kv").get(k);
+  q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
+
+/* ================= tabs ================= */
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x =>
+    x.setAttribute("aria-selected", String(x === b)));
+  ["chat","scan","settings"].forEach(t => $("#tab-" + t).hidden = (t !== b.dataset.tab));
+});
+
+/* ================= browser gate ================= */
+function checkBrowser(){
+  const miss = [];
+  if (!window.showDirectoryPicker) miss.push("File System Access API");
+  if (!window.createImageBitmap) miss.push("createImageBitmap");
+  if (!window.OffscreenCanvas) miss.push("OffscreenCanvas");
+  if (!miss.length) return true;
+  const w = $("#browserWarn"); w.hidden = false; w.innerHTML = "";
+  w.append(el("b", null, "This browser is not supported. "));
+  w.append(document.createTextNode(
+    "PhotoSearch needs desktop Chrome or Edge. Missing: " + miss.join(", ") + "."));
+  ["btnPick","btnWriteTest","btnReconnect"].forEach(id => { const n = $("#" + id); if (n) n.disabled = true; });
+  return false;
+}
+
+/* ================= check rows ================= */
+const ICON = { ok:"✓", warn:"!", err:"✕", busy:"…" };
+function setRow(row, c){
+  const ic = row.querySelector(".ic");
+  ic.className = "ic " + (c.status === "busy" ? "dim" : c.status);
+  ic.textContent = ICON[c.status] || "…";
+  row.querySelector(".t").textContent = c.title;
+  row.querySelector(".d").textContent = c.detail || "";
+}
+function checkRow(c){
+  const row = el("div","check");
+  row.append(el("div","ic"));
+  const b = el("div","body"); b.append(el("div","t")); b.append(el("div","d"));
+  row.append(b); setRow(row, c); return row;
+}
+function checksBox(host){
+  let box = host.querySelector(".checks");
+  if (!box){ host.innerHTML = ""; box = el("div","checks");
+    box.style.marginTop = "12px"; host.append(box); }
+  return box;
+}
+function resetChecks(host){ host.innerHTML = ""; return checksBox(host); }
+function renderChecks(host, checks){
+  const box = resetChecks(host);
+  for (const c of checks) box.append(checkRow(c));
+}
+function step(host, title){
+  const row = checkRow({ status:"busy", title, detail:"working…" });
+  checksBox(host).append(row);
+  return {
+    note: d => { row.querySelector(".d").textContent = d; return paint(); },
+    ok:   d => setRow(row, { status:"ok",   title, detail:d }),
+    warn: d => setRow(row, { status:"warn", title, detail:d }),
+    err:  d => setRow(row, { status:"err",  title, detail:d }),
+    paint
+  };
+}
+function toast(msg){
+  const t = $("#toast");
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.hidden = true; }, 7000);
+}
+
+/* A mounted SMB share drops reads under load. One failure should not become a
+   permanent error record in the middle of a multi-day scan. */
+async function withRetry(label, fn){
+  let last;
+  for (let i = 0; i < S.io.retries; i++){
+    try { return await fn(); }
+    catch (e){
+      if (e && e.name === "AbortError") throw e;
+      last = e;
+      await new Promise(r => setTimeout(r, S.io.retryMs * (i + 1)));
+    }
+  }
+  throw new Error(label + " failed after " + S.io.retries + " tries: "
+    + String(last && last.message || last));
+}
+
+/* ================= directory picker =================
+   Deliberately minimal. Earlier versions added a busy flag, a button-disable
+   and a watchdog; the disable let macOS dismiss the dialog and left the button
+   stuck. One direct call in the click handler is what works. */
+async function pickDirectory(){
+  return window.showDirectoryPicker({ mode:"readwrite" });
+}
+
+/* Chrome keeps a per-document "a file picker is open" flag. If a dialog is ever
+   dismissed without settling its promise, that flag stays set and every later
+   picker is refused — for the life of the document. Only a reload clears it,
+   and nothing the page does can reset it. So detect it and offer the reload;
+   folders and settings survive, since they live in IndexedDB and localStorage. */
+function isPickerStuck(e){
+  return !!e && /file picker already active/i.test(String(e.message || e));
+}
+function offerPickerReset(){
+  const w = $("#browserWarn");
+  w.hidden = false; w.innerHTML = "";
+  w.append(el("b", null, "The folder chooser is stuck. "));
+  w.append(document.createTextNode(
+    "Chrome thinks a file dialog is still open on this page. Reloading clears it "
+    + "— your folders and settings are remembered."));
+  const b = el("button", "btn");
+  b.textContent = "Reload now";
+  b.style.marginLeft = "10px";
+  b.onclick = () => location.reload();
+  w.append(b);
+  const b2 = el("button", "btn sec");
+  b2.textContent = "Dismiss";
+  b2.style.marginLeft = "6px";
+  b2.onclick = () => { w.hidden = true; };
+  w.append(b2);
+  w.scrollIntoView({ block:"nearest" });
+}
+
+/* Dragging a folder from Finder yields a directory handle directly, with no
+   dialog involved. It is the reliable fallback when the picker misbehaves. */
+function enableFolderDrop(btnId, onFolder){
+  const n = document.getElementById(btnId);
+  if (!n) return;
+  const stop = e => { e.preventDefault(); e.stopPropagation(); };
+  n.addEventListener("dragover", e => { stop(e); n.classList.add("dropping"); });
+  n.addEventListener("dragleave", e => { stop(e); n.classList.remove("dropping"); });
+  n.addEventListener("drop", async e => {
+    stop(e); n.classList.remove("dropping");
+    const item = e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items[0];
+    if (!item || !item.getAsFileSystemHandle){
+      toast("This browser cannot accept dropped folders."); return;
+    }
+    try {
+      const h = await item.getAsFileSystemHandle();
+      if (!h || h.kind !== "directory"){ toast("Drop a FOLDER, not a file."); return; }
+      let p = await h.queryPermission({ mode:"readwrite" });
+      if (p !== "granted") p = await h.requestPermission({ mode:"readwrite" });
+      if (p !== "granted"){ toast("Permission denied for " + h.name + "."); return; }
+      await onFolder(h);
+    } catch (err){ toast("Could not use that folder: " + String(err.message || err)); }
+  });
+}
+
+/* ================= LM Studio client ================= */
+function url(p){ return S.baseUrl.replace(/\/+$/,"") + p; }
+async function jget(path, ms = 8000){
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    const r = await fetch(url(path), { signal: ac.signal, mode: "cors" });
+    if (!r.ok) return { ok:false, error:"HTTP " + r.status };
+    return { ok:true, data: await r.json() };
+  } catch (e) {
+    return { ok:false, error: e.name === "AbortError" ? "timeout" : String(e.message || e) };
+  } finally { clearTimeout(t); }
+}
+/* Accepts an external AbortSignal so Stop cancels the in-flight request
+   immediately instead of waiting out the current image. */
+async function chat(body, signal, ms = 600000){
+  if ($("#mock").checked) return mockChat(body);
+  const ac = new AbortController();
+  const onAbort = () => ac.abort();
+  if (signal){
+    if (signal.aborted) throw new DOMException("aborted","AbortError");
+    signal.addEventListener("abort", onAbort, { once:true });
+  }
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    const r = await fetch(url("/v1/chat/completions"), {
+      method:"POST", mode:"cors", signal: ac.signal,
+      headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
+    const txt = await r.text();
+    if (!r.ok) throw new Error("HTTP " + r.status + ": " + txt.slice(0,300));
+    return JSON.parse(txt);
+  } catch (e){
+    if (e.name === "AbortError" && signal && signal.aborted)
+      throw new DOMException("aborted","AbortError");
+    throw e;
+  } finally {
+    clearTimeout(t);
+    if (signal) signal.removeEventListener("abort", onAbort);
+  }
+}
+function mockChat(body){
+  const structured = !!body.response_format;
+  if (!structured)
+    return Promise.resolve({ choices:[{ message:{ content:"The sky is blue.",
+      reasoning_content:"(pretend thinking) ".repeat(40) } }], usage:{ completion_tokens:780 } });
+  const rec = {
+    template_version:"1.0",
+    observations:["a mock scene with three shapes","flat colour background","no people present"],
+    image_type:"photo", scene_type:"outdoor", setting:"garden",
+    people:{ count:0, count_bucket:"0", age_groups:[], description:"" },
+    animals:[], objects:["tree","bench","path"], activities:["standing"],
+    visible_text:{ has_text:false, text:"" },
+    landmark:{ name:null, confidence:"low" },
+    time_of_day:"midday", season:"summer", weather:"sunny", mood:"calm",
+    dominant_colors:["green","blue"],
+    quality:{ sharpness:"sharp", exposure:"ok", flags:[] },
+    caption:"A mock photo of a garden with a bench under a tree.",
+    description:"This is a synthetic record produced by mock mode. It exists so the "
+      + "interface and the index can be exercised without a model loaded.",
+    search_keywords:["mock","garden","test"],
+    confidence:{ overall:"high", uncertain_fields:[] }
+  };
+  return Promise.resolve({ choices:[{ message:{ content:"", reasoning_content:JSON.stringify(rec) } }],
+    usage:{ completion_tokens:151 } });
+}
+
+/* ================= model detection ================= */
+async function detectModels(){
+  if ($("#mock").checked){
+    S.nativeApi = "/api/v0/models (mock)";
+    S.models = [
+      { id:"qwen3.5-9b-mlx", type:"vlm", state:"loaded" },
+      { id:"text-embedding-nomic-embed-text-v1.5", type:"embeddings", state:"loaded" },
+      { id:"mock-llm-20b", type:"llm", state:"not-loaded" }];
+    return { ok:true };
+  }
+  const n = await jget("/api/v0/models");
+  if (n.ok && n.data && Array.isArray(n.data.data)){
+    S.nativeApi = "/api/v0/models";
+    S.models = n.data.data.map(m => ({ id:m.id, type:m.type || "llm",
+      state:m.state || "unknown", arch:m.arch, ctx:m.max_context_length }));
+    return { ok:true };
+  }
+  const v = await jget("/v1/models");
+  if (v.ok && v.data && Array.isArray(v.data.data)){
+    S.nativeApi = null;
+    S.models = v.data.data.map(m => ({ id:m.id, type:guessType(m.id), state:"unknown" }));
+    return { ok:true };
+  }
+  return { ok:false, error: n.error || v.error };
+}
+function guessType(id){
+  const s = id.toLowerCase();
+  if (/embed|bge|nomic|gte|e5/.test(s)) return "embeddings";
+  if (/vl|vision|llava|gemma-?[34]|qwen3\.5/.test(s)) return "vlm";
+  return "llm";
+}
+function renderModels(){
+  const host = $("#models"); host.innerHTML = "";
+  if (!S.models.length){ host.append(el("span","dim","No models reported.")); return; }
+  const t = el("table");
+  t.innerHTML = "<thead><tr><th>Model</th><th>Type</th><th>State</th><th>Context</th></tr></thead>";
+  const tb = el("tbody");
+  for (const m of S.models){
+    const tr = el("tr");
+    tr.append(Object.assign(el("td","mono"), { textContent:m.id }));
+    const tt = el("td"); tt.append(el("span","pill" + (m.type === "vlm" ? " vlm" : ""), m.type)); tr.append(tt);
+    const ts = el("td"); ts.append(el("span","pill" + (m.state === "loaded" ? " loaded" : ""), m.state)); tr.append(ts);
+    tr.append(el("td","dim", m.ctx ? (m.ctx/1024).toFixed(0) + "k" : "–"));
+    tb.append(tr);
+  }
+  t.append(tb); host.append(t);
+  if (!S.nativeApi) host.append(Object.assign(el("div","hint"),
+    { textContent:"Native /api/v0/models unavailable — types guessed from the model id." }));
+  fillRoles();
+}
+function fillRoles(){
+  const before = { ...S.roles };
+  const vis = S.models.filter(m => m.type === "vlm");
+  const emb = S.models.filter(m => m.type === "embeddings");
+  const llm = S.models.filter(m => m.type !== "embeddings");
+  const opt = (sel, list, extra, cur) => {
+    sel.innerHTML = "";
+    if (extra) sel.append(new Option(extra.label, extra.value));
+    for (const m of list)
+      sel.append(new Option(m.id + (m.state === "loaded" ? "  • loaded" : ""), m.id));
+    if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  };
+  const pref = vis.find(m => /qwen3\.5|qwen3-?vl/i.test(m.id) && m.state === "loaded")
+            || vis.find(m => /qwen3\.5|qwen3-?vl/i.test(m.id))
+            || vis.find(m => m.state === "loaded") || vis[0];
+  opt($("#mScan"), vis, vis.length ? null : { label:"— no vision model found —", value:"" },
+      S.roles.scan || (pref && pref.id));
+  opt($("#mEmbed"), emb, { label:"None (keyword search only)", value:"" }, S.roles.embed);
+  opt($("#mChat"), llm, { label:"Auto: currently loaded LLM", value:"auto" }, S.roles.chat);
+  syncRoles();
+  /* A saved choice that LM Studio no longer offers is dropped by the selects
+     above. Say so, rather than quietly switching the user to None. */
+  const lost = [];
+  for (const k of ["scan","embed","chat"])
+    if (before[k] && before[k] !== "auto" && before[k] !== S.roles[k]) lost.push(before[k]);
+  if (lost.length && S.models.length)
+    toast("Model no longer available in LM Studio: " + lost.join(", ")
+      + ". Check Model roles in Settings.");
+}
+function syncRoles(){
+  S.roles = { scan:$("#mScan").value, embed:$("#mEmbed").value, chat:$("#mChat").value };
+  saveSettings();
+  const loaded = S.models.filter(m => m.state === "loaded").map(m => m.id);
+  $("#sModels").textContent = S.roles.scan
+    ? "scan: " + S.roles.scan + (loaded.length ? "   loaded: " + loaded.join(", ") : "") : "";
+}
+function setConn(kind, txt){ $("#dotConn").className = "dot " + kind; $("#sConn").textContent = txt; }
+
+/* Detect models without being asked. Nothing in the app can work until this has
+   run once, so making the user press a button first was simply a trap. */
+let connecting = null;
+async function autoConnect(){
+  if (connecting) return connecting;
+  connecting = (async () => {
+    setConn("busy", "Connecting…");
+    const r = await detectModels();
+    if (r.ok){
+      S.connected = true;
+      setConn("on", "Connected");
+      renderModels();
+    } else {
+      S.connected = false;
+      setConn("off", "Not connected");
+    }
+    connecting = null;
+    return r.ok;
+  })();
+  return connecting;
+}
+/* Resolves the chat model, connecting first if we have not looked yet. */
+async function ensureChatModel(){
+  if (!S.models.length) await autoConnect();
+  let m = chatModel();
+  if (!m && S.models.length) return null;
+  return m || null;
+}

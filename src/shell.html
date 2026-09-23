@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<!--
+  PhotoSearch.html - single-file AI photo search over a local LM Studio server.
+
+  SETUP
+  1. Install LM Studio and download a vision model (Qwen3.5-9B recommended).
+  2. Start its server WITH CORS:
+       CLI :  lms server start --cors --port 1234
+       GUI :  Developer tab -> Status: Running, and tick "Enable CORS"
+     If LM Studio runs on another machine, also enable "Serve on Local Network"
+     and point the URL in Settings at that machine.
+  3. Open this file in desktop Google Chrome or Microsoft Edge.
+     Other browsers lack the File System Access API and will not work.
+  4. Settings -> Test connection -> Choose folder. Then open the Scan tab.
+
+  The index is written to a .photoindex/ subfolder inside the folder you pick,
+  so it travels with the photos. Nothing outside .photoindex/ is ever modified.
+
+  NOTE ON DATES: EXIF is not ground truth. Exported, edited or AI-generated
+  files often carry the processing time in every date field. PhotoSearch records
+  where each date came from, flags the untrustworthy ones, and lets you override
+  a whole folder from Settings.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PhotoSearch</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --panel2:#f0f2f5; --text:#14171c; --dim:#5d6672;
+  --line:#dfe3e9; --accent:#2f6fed; --accent-t:#fff;
+  --ok:#1a8a4a; --warn:#b07400; --err:#c8362f;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace; --radius:10px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#15181d; --panel:#1d2127; --panel2:#252a32; --text:#e8eaed; --dim:#9aa3b0;
+    --line:#333a44; --accent:#5b8cff; --accent-t:#0b0e12;
+    --ok:#4ccf85; --warn:#e0b34a; --err:#ff7b72;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15181d; --panel:#1d2127; --panel2:#252a32; --text:#e8eaed; --dim:#9aa3b0;
+  --line:#333a44; --accent:#5b8cff; --accent-t:#0b0e12;
+  --ok:#4ccf85; --warn:#e0b34a; --err:#ff7b72;
+}
+*{box-sizing:border-box}
+/* An id selector beats the browser's [hidden] rule, so hiding must win explicitly. */
+[hidden]{display:none !important}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;
+  border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:20}
+h1{font-size:15px;margin:0;font-weight:650;letter-spacing:.2px}
+nav{display:flex;gap:4px;margin-left:8px}
+nav button{background:none;border:0;color:var(--dim);padding:6px 12px;border-radius:7px;
+  font:inherit;font-weight:550;cursor:pointer}
+nav button:hover{background:var(--panel2);color:var(--text)}
+nav button[aria-selected="true"]{background:var(--accent);color:var(--accent-t)}
+main{padding:18px 16px 70px;max-width:1080px;margin:0 auto}
+section[hidden]{display:none}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:16px;margin-bottom:14px}
+.card h2{font-size:13px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim)}
+label{display:block;font-size:12px;color:var(--dim);margin-bottom:4px}
+input[type=text],select,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);
+  border-radius:7px;background:var(--panel2);color:var(--text);font:inherit}
+textarea{font-family:var(--mono);font-size:12px;min-height:66px;resize:vertical}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.row>div{flex:1 1 200px;min-width:0}
+button.btn{background:var(--accent);color:var(--accent-t);border:0;padding:8px 14px;
+  border-radius:7px;font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+button.btn.sec{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+button.btn:disabled{opacity:.45;cursor:not-allowed}
+button.btn.dropping{outline:3px dashed var(--accent);outline-offset:2px}
+.check{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line)}
+.check:last-child{border-bottom:0}
+.check .ic{flex:0 0 18px;text-align:center;font-weight:700}
+.check .body{flex:1;min-width:0}
+.check .t{font-weight:600}
+.check .d{color:var(--dim);font-size:12.5px;margin-top:2px;word-wrap:break-word}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)} .dim{color:var(--dim)}
+pre{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:10px;
+  overflow-x:auto;font-family:var(--mono);font-size:12px;margin:8px 0 0;max-height:360px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+td.mono{font-family:var(--mono);font-size:12px}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:600;
+  background:var(--panel2);border:1px solid var(--line)}
+.pill.loaded{background:color-mix(in srgb,var(--ok) 18%,transparent);border-color:var(--ok);color:var(--ok)}
+.pill.vlm{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:var(--accent);color:var(--accent)}
+.bar{height:8px;background:var(--panel2);border:1px solid var(--line);border-radius:99px;overflow:hidden}
+.bar>div{height:100%;width:0;background:var(--accent);transition:width .2s}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;margin-top:10px}
+.grid figure{margin:0;cursor:pointer}
+.grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:7px;border:1px solid var(--line);display:block;background:var(--panel2)}
+.grid figcaption{font-size:11px;color:var(--dim);margin-top:3px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.kv{display:grid;grid-template-columns:132px 1fr;gap:3px 10px;font-size:12.5px}
+.kv dt{color:var(--dim)} .kv dd{margin:0;word-break:break-word}
+.stat{display:flex;gap:18px;flex-wrap:wrap;font-size:13px}
+.stat b{font-size:19px;display:block;font-weight:650;line-height:1.2}
+.stat span{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.note{background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid var(--warn);
+  border-radius:7px;padding:10px 12px;font-size:13px;margin:12px 0 0}
+#chatLog{flex:1;overflow-y:auto;padding-right:4px;min-height:120px}
+.msg{margin:0 0 14px}
+.msg .who{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
+.msg.user .body{background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+  padding:8px 11px;white-space:pre-wrap}
+.msg.assistant .body p:last-child{margin-bottom:0}
+.msg .body ul,.msg .body ol{margin:4px 0 8px;padding-left:22px}
+#lightbox{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:40;display:flex;
+  align-items:center;justify-content:center;padding:24px}
+.lbBox{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  max-width:1000px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.lbHead{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.lbBody{display:flex;gap:16px;padding:14px;overflow:auto;flex-wrap:wrap}
+#lbImg{max-width:100%;max-height:62vh;border-radius:8px;background:var(--panel2);
+  flex:1 1 360px;object-fit:contain}
+#lbMeta{flex:1 1 300px;min-width:0}
+footer{position:fixed;bottom:0;left:0;right:0;display:flex;gap:16px;align-items:center;
+  padding:7px 16px;background:var(--panel);border-top:1px solid var(--line);
+  font-size:12px;color:var(--dim);z-index:20;overflow-x:auto;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block;
+  margin-right:6px;vertical-align:middle;flex:0 0 auto}
+.dot.on{background:var(--ok)} .dot.off{background:var(--err)} .dot.busy{background:var(--warn)}
+.switch{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text)}
+.spacer{flex:1}
+.hint{font-size:12px;color:var(--dim);margin-top:6px}
+code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-radius:4px;font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>PhotoSearch</h1>
+  <nav role="tablist">
+    <button role="tab" data-tab="chat" aria-selected="false">Chat</button>
+    <button role="tab" data-tab="scan" aria-selected="false">Scan</button>
+    <button role="tab" data-tab="settings" aria-selected="true">Settings</button>
+  </nav>
+  <div class="spacer"></div>
+  <label class="switch"><input type="checkbox" id="mock"> Mock LM Studio</label>
+</header>
+
+<main>
+  <div id="browserWarn" class="note" hidden></div>
+
+  <section id="tab-scan" hidden>
+    <div class="card">
+      <h2>Plan</h2>
+      <div id="planBox"><span class="dim">Pick a folder in Settings.</span></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn sec" id="btnPlan">Refresh plan</button>
+        <button class="btn" id="btnScan" disabled>Scan new &amp; changed</button>
+        <button class="btn sec" id="btnStale" disabled>Refresh stale</button>
+        <button class="btn sec" id="btnFull" disabled>Full rescan</button>
+        <button class="btn sec" id="btnRetry" disabled>Retry failed</button>
+        <button class="btn sec" id="btnMissing" disabled>Mark missing</button>
+        <button class="btn sec" id="btnCompact">Compact log</button>
+        <span class="spacer"></span>
+        <button class="btn sec" id="btnPause" hidden>Pause</button>
+        <button class="btn sec" id="btnStop" hidden>Stop</button>
+      </div>
+    </div>
+    <div class="card" id="progCard" hidden>
+      <h2>Progress</h2>
+      <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+        <div style="flex:0 0 200px">
+          <img id="curThumb" alt="" style="width:200px;height:150px;object-fit:cover;
+            border-radius:8px;border:1px solid var(--line);background:var(--panel2)">
+          <div class="hint" id="curName" style="word-break:break-all"></div>
+        </div>
+        <div style="flex:1 1 280px;min-width:0">
+          <div class="bar"><div id="barFill"></div></div>
+          <div id="progStats" class="mono" style="margin-top:10px;font-size:13px"></div>
+          <div id="progEta" class="hint"></div>
+        </div>
+      </div>
+      <div id="errBox"></div>
+    </div>
+    <div class="card">
+      <h2>Recent records</h2>
+      <div id="recentBox"><span class="dim">Nothing scanned yet.</span></div>
+    </div>
+  </section>
+
+  <section id="tab-chat" hidden>
+    <div class="card" style="display:flex;flex-direction:column;height:calc(100vh - 190px);min-height:380px">
+      <h2 style="display:flex;align-items:center;gap:10px">Chat
+        <span id="modeBadge" class="pill" hidden></span>
+        <span class="spacer"></span>
+        <button class="btn sec" id="chatSave" style="padding:4px 10px;font-size:12px">Save</button>
+        <button class="btn sec" id="chatClear" style="padding:4px 10px;font-size:12px">Clear</button>
+      </h2>
+      <div id="chatLog"></div>
+      <div id="chatExamples" class="hint" style="margin:8px 0">
+        Try: <i>photos of children in a forest</i> · <i>anything from summer 2021</i> ·
+        <i>show me the screenshots</i> · <i>where was the boat photo taken?</i>
+      </div>
+      <div class="row" style="margin-top:6px;align-items:flex-end">
+        <div style="flex:1 1 320px">
+          <textarea id="chatInput" rows="2" spellcheck="true"
+            placeholder="Ask about your photos… (Enter to send, Shift+Enter for a new line)"
+            style="min-height:44px"></textarea>
+        </div>
+        <button class="btn" id="chatSend">Send</button>
+        <button class="btn sec" id="chatStop" hidden>Stop</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-settings">
+    <div class="card">
+      <h2>LM Studio connection</h2>
+      <div class="row">
+        <div style="flex:2 1 300px"><label for="baseUrl">Server URL</label>
+          <input type="text" id="baseUrl" value="http://localhost:1234" spellcheck="false"></div>
+        <button class="btn" id="btnTest">Test connection</button>
+        <button class="btn sec" id="btnThink">Probe thinking-off</button>
+      </div>
+      <div class="hint">Needs LM Studio's <b>Enable CORS</b>, or <code>lms server start --cors</code>.</div>
+      <div id="diag"></div>
+    </div>
+
+    <div class="card">
+      <h2>Models</h2>
+      <div id="models"><span class="dim">Run "Test connection" to detect models.</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Model roles</h2>
+      <div class="row">
+        <div><label for="mScan">Scan (vision)</label><select id="mScan"></select></div>
+        <div><label for="mEmbed">Embeddings (optional)</label><select id="mEmbed"></select></div>
+        <div><label for="mChat">Chat agent</label><select id="mChat"></select></div>
+      </div>
+      <div class="hint">Models load on demand. They are never all required at once.</div>
+    </div>
+
+    <div class="card">
+      <h2>Photo folder &amp; index</h2>
+      <div class="row">
+        <button class="btn" id="btnPick">Choose folder…</button>
+        <button class="btn sec" id="btnReconnect" disabled>Reconnect last folder</button>
+        <button class="btn sec" id="btnWriteTest" disabled>Test write to .photoindex/</button>
+      </div>
+      <div class="hint">By default the index lives in <code>.photoindex/</code> inside the folder
+        you pick. For a NAS library, keep it on this Mac instead: writes stay off the share and
+        search still works when the NAS is asleep.</div>
+      <div class="row" style="margin-top:12px">
+        <div style="flex:1 1 260px"><label for="sIndexMode">Where to save the index (the "DB")</label>
+          <select id="sIndexMode">
+            <option value="folder">Beside the photos (.photoindex/)</option>
+            <option value="custom">A folder I choose…</option>
+          </select></div>
+        <button class="btn" id="btnIndexDir">Choose where to save the DB…</button>
+        <button class="btn sec" id="btnIndexReveal">What's in it?</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div style="flex:1 1 240px"><label for="sScope">Scan scope (optional)</label>
+          <select id="sScope"><option value="">Whole library</option></select></div>
+        <div style="flex:1 1 220px"><label for="sOrder">Scan order</label>
+          <select id="sOrder">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="path">Folder order (A–Z)</option>
+            <option value="smallest">Smallest files first</option>
+          </select></div>
+      </div>
+      <div class="hint" id="indexWhere"></div>
+      <div class="hint">Photos are identified by the file itself, not by where you point the
+        picker, so you can scan a subfolder today and the whole library tomorrow and still end
+        up with one index. <b>Scan scope</b> is an optional shortcut for working through a
+        large library folder by folder without re-walking all of it.</div>
+      <div id="fsOut"></div>
+    </div>
+
+    <div class="card">
+      <h2>Scan settings</h2>
+      <div class="row">
+        <div><label for="sConc">Model concurrency</label><input type="text" id="sConc" value="1"></div>
+        <div><label for="sStat">File-stat concurrency</label><input type="text" id="sStat" value="12"></div>
+        <div><label for="sMaxTok">Max tokens</label><input type="text" id="sMaxTok" value="900"></div>
+        <div><label for="sTemp">Temperature</label><input type="text" id="sTemp" value="0.1"></div>
+        <div><label for="sMinCos">Search relevance floor</label><input type="text" id="sMinCos" value="0.3"></div>
+        <div><label for="sOcr">Read text in images</label>
+          <label class="switch" style="padding:8px 0"><input type="checkbox" id="sOcr" checked>
+            Extra text pass on screenshots &amp; documents</label></div>
+      </div>
+      <div class="hint">File-stat concurrency matters most on a NAS: reading size and modified
+        time is one round trip per file, so raise it for SMB shares.</div>
+    </div>
+
+    <div class="card">
+      <h2>Dates, places and events</h2>
+      <div class="row">
+        <div><label for="sHemi">Hemisphere (for seasons)</label>
+          <select id="sHemi"><option value="north">Northern</option><option value="south">Southern</option></select></div>
+        <div><label for="sGap">Event split: gap in hours</label><input type="text" id="sGap" value="6"></div>
+        <div><label for="sKm">Event split: distance in km</label><input type="text" id="sKm" value="25"></div>
+        <button class="btn sec" id="btnGeo">Get place names</button>
+      </div>
+      <div class="hint">Place names come from an offline GeoNames-derived list, downloaded once
+        and cached in <code>.photoindex/geo/</code>. No online geocoding service is ever called.</div>
+      <div id="geoOut"></div>
+      <div style="margin-top:14px">
+        <label for="sOverrides">Date overrides — one per line, <code>folder/prefix = YYYY-MM-DD</code></label>
+        <textarea id="sOverrides" spellcheck="false"
+          placeholder="holidays/2012 croatia = 2012-07-04"></textarea>
+        <div class="hint">Use this when a file's EXIF holds an export date rather than the day it
+          was taken. An override wins over every other source. Re-scan those files to apply it.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Backups</h2>
+      <div class="row">
+        <div style="flex:0 0 auto"><label class="switch" style="padding:8px 0">
+          <input type="checkbox" id="sBackup" checked> Back up after every scan</label></div>
+        <div style="flex:0 0 120px"><label for="sKeep">Keep</label>
+          <input type="text" id="sKeep" value="3"></div>
+        <button class="btn" id="btnBackup">Back up now</button>
+        <button class="btn sec" id="btnBackups">Show backups</button>
+      </div>
+      <div class="hint">Copies <code>records.jsonl</code>, <code>vectors.bin</code> and the
+        config into <code>.photoindex/backups/</code>. Thumbnails are excluded on purpose:
+        they are most of the index and can be rebuilt from the originals without any model
+        calls, whereas every record cost ~21 seconds of scanning.</div>
+      <div id="backupOut"></div>
+    </div>
+
+    <div class="card">
+      <h2>Diagnostics</h2>
+      <div class="row">
+        <button class="btn sec" id="btnSelfTest">Run self-test</button>
+      </div>
+      <div class="hint">Exercises the worker, index, plan, move detection, vectors, checkpoint
+        and derived data against a scratch folder, using mock model responses.</div>
+      <div id="selfOut"></div>
+    </div>
+
+    <div class="card">
+      <h2>Thinking-off probe</h2>
+      <div id="thinkOut"><span class="dim">Measures output tokens and seconds with thinking on vs off.</span></div>
+    </div>
+  </section>
+</main>
+
+<div id="lightbox" hidden>
+  <div class="lbBox">
+    <div class="lbHead">
+      <b id="lbTitle"></b>
+      <span class="spacer"></span>
+      <button class="btn sec" id="lbMore">More like this</button>
+      <button class="btn sec" id="lbClose">Close</button>
+    </div>
+    <div class="lbBody">
+      <img id="lbImg" alt="">
+      <div id="lbMeta"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" hidden style="position:fixed;bottom:44px;left:50%;transform:translateX(-50%);
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 16px;
+  z-index:30;box-shadow:0 4px 18px rgba(0,0,0,.22);font-size:13px;max-width:90vw"></div>
+
+<footer>
+  <span><span class="dot" id="dotConn"></span><span id="sConn">Not connected</span></span>
+  <span id="sFolder">No folder</span>
+  <span id="sCount">0 photos</span>
+  <span id="sModels" class="mono"></span>
+</footer>
+<script>
+__JS__
+</script>
+</body>
+</html>

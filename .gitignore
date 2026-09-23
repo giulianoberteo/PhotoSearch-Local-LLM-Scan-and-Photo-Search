@@ -1,0 +1,5 @@
+.photoindex/
+.build-check.mjs
+__pycache__/
+*.pyc
+.DS_Store
