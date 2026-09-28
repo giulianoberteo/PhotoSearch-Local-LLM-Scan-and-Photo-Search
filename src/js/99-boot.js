@@ -40,7 +40,19 @@ if (checkBrowser()){
         await useDirectory(h);
         toast("Reopened " + h.name + " — your index is loaded.");
       } else {
-        toast("Click \u201cReconnect last folder\u201d in Settings to reopen " + h.name + ".");
+        /* Chrome will not re-grant without a gesture. Say so once, plainly, and
+           let any action re-acquire it rather than dead-ending. */
+        const w = $("#browserWarn");
+        w.hidden = false; w.innerHTML = "";
+        w.append(el("b", null, h.name + " is not connected. "));
+        w.append(document.createTextNode(
+          "Chrome drops folder access when the page reloads. Anything you do will "
+          + "ask for it back — or press here."));
+        const b = el("button","btn");
+        b.textContent = "Reconnect " + h.name;
+        b.style.marginLeft = "10px";
+        b.onclick = async () => { if (await ensureConnected()) w.hidden = true; };
+        w.append(b);
       }
     } catch {}
   }).catch(() => {});

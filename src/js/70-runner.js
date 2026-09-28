@@ -185,6 +185,7 @@ async function preflightScan(){
 
 async function runScan(files, mode, resuming){
   if (!files.length){ toast("Nothing to do."); return; }
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the scan"))) return;
   const problem = await preflightScan();
   if (problem){
     scanUi(false);

@@ -572,6 +572,40 @@ async function withRetry(label, fn){
     + String(last && last.message || last));
 }
 
+/* Re-acquires folder permission from inside a click. Chrome grants it only in
+   response to a gesture, which a button press already is, so any action can
+   simply reconnect itself instead of failing and telling the user to go and
+   press something else first. */
+async function ensureConnected(what){
+  if (S.dirHandle) return true;
+  const h = await idbGet("lastDir");
+  if (!h){
+    toast("Choose a photo folder first (Settings).");
+    return false;
+  }
+  let perm = await h.queryPermission({ mode:"readwrite" });
+  if (perm !== "granted") perm = await h.requestPermission({ mode:"readwrite" });
+  if (perm !== "granted"){
+    toast("Chrome denied access to " + h.name + ". Pick the folder again.");
+    return false;
+  }
+  await useDirectory(h);
+  toast("Reconnected " + h.name + (what ? " — continuing with " + what : ""));
+  return true;
+}
+/* The index folder needs the same treatment when it lives outside the photos. */
+async function ensureIndexConnected(){
+  if (S.indexMode !== "custom") return true;
+  if (S.indexDirHandle) return true;
+  const h = await idbGet("lastIndexDir");
+  if (!h){ toast("Choose where to save the index (Settings)."); return false; }
+  let perm = await h.queryPermission({ mode:"readwrite" });
+  if (perm !== "granted") perm = await h.requestPermission({ mode:"readwrite" });
+  if (perm !== "granted"){ toast("Chrome denied access to " + h.name + "."); return false; }
+  S.indexDirHandle = h;
+  return true;
+}
+
 /* ================= directory picker =================
    Deliberately minimal. Earlier versions added a busy flag, a button-disable
    and a watchdog; the disable let macOS dismiss the dialog and left the button
@@ -2833,6 +2867,7 @@ async function preflightScan(){
 
 async function runScan(files, mode, resuming){
   if (!files.length){ toast("Nothing to do."); return; }
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the scan"))) return;
   const problem = await preflightScan();
   if (problem){
     scanUi(false);
@@ -3214,7 +3249,7 @@ enableFolderDrop("btnIndexDir", async h => {
 /* ================= plan UI ================= */
 let planAbort = null;
 async function refreshPlan(){
-  if (!S.dirHandle){ return; }
+  if (!S.dirHandle) return;
   const host = $("#planBox");
   if (planAbort) planAbort.abort();
   planAbort = new AbortController();
@@ -3425,7 +3460,11 @@ function showRecord(r){
 }
 
 /* ================= scan buttons ================= */
-$("#btnPlan").onclick = refreshPlan;
+$("#btnPlan").onclick = async () => {
+  if (!(await ensureIndexConnected())) return;
+  if (!(await ensureConnected("the plan"))) return;
+  await refreshPlan();
+};
 $("#btnScan").onclick = () => { const p = S.plan;
   runScan([...p.new, ...p.changed, ...p.failed], "new-and-changed"); };
 $("#btnStale").onclick = () => runScan(S.plan.stale, "refresh-stale");
@@ -3498,14 +3537,20 @@ $("#btnBackup").onclick = async () => {
   if (RUN.active){ toast("A scan is running — back up when it finishes."); return; }
   const host = $("#backupOut"); resetChecks(host);
   host.scrollIntoView({ block:"nearest" });
-  if (!S.dirHandle && !(S.indexMode === "custom" && S.indexDirHandle)){
-    checksBox(host).append(checkRow({ status:"err", title:"No folder connected",
-      detail:"A reload drops the folder permission, so the index is not open. Press "
-        + "'Reconnect last folder' above, then back up." }));
-    toast("Reconnect the folder first — the index is not open.");
+  const btn = $("#btnBackup"); btn.disabled = true; btn.textContent = "Backing up…";
+  try {
+    if (!(await ensureIndexConnected()) || !(await ensureConnected("the backup"))){
+      checksBox(host).append(checkRow({ status:"err", title:"Could not open the index",
+        detail:"Access to the folder was not granted." }));
+      btn.disabled = false; btn.textContent = "Back up now";
+      return;
+    }
+  } catch (e){
+    checksBox(host).append(checkRow({ status:"err", title:"Could not open the index",
+      detail:String(e.message || e) }));
+    btn.disabled = false; btn.textContent = "Back up now";
     return;
   }
-  const btn = $("#btnBackup"); btn.disabled = true; btn.textContent = "Backing up…";
   const st = step(host, "Backup");
   try {
     const b = await backupIndex("manual", m => st.note(m));
@@ -3523,7 +3568,12 @@ $("#btnBackup").onclick = async () => {
     btn.disabled = false; btn.textContent = "Back up now";
   }
 };
-$("#btnBackups").onclick = () => showBackups();
+$("#btnBackups").onclick = async () => {
+  if (!(await ensureIndexConnected())) return;
+  if (!(await ensureConnected("the backup list"))) return;
+  resetChecks($("#backupOut"));
+  await showBackups();
+};
 async function showBackups(){
   const host = $("#backupOut");
   try {
@@ -4712,6 +4762,59 @@ async function selfTest(){
       window.chat = realChat;
     }
 
+    /* ---- the whole flow after a reload ----
+       Reproduces the real failure: the page reloads, Chrome has dropped folder
+       permission, and the user clicks Back up. It must reconnect itself and
+       complete, not fail into a panel nobody is looking at.
+       idbGet returns a structured CLONE of the handle, so the permission stubs
+       have to go on what idbGet hands back, not on the original. */
+    {
+      const savedDir = S.dirHandle;
+      const realIdbGet = idbGet;
+      let asked = 0, verdict = "granted", granted = false;
+      /* A real handle's methods must be called on the real object, so delegate
+         explicitly rather than using Object.create (Illegal invocation). */
+      const fakeHandle = {
+        kind: "directory", name: scratch.name,
+        /* Chrome reports "prompt" until granted, then "granted" — model that,
+           so a second query does not look like a second prompt. */
+        queryPermission: async () => granted ? "granted" : "prompt",
+        requestPermission: async () => {
+          asked++;
+          if (verdict === "granted") granted = true;
+          return verdict;
+        },
+        getDirectoryHandle: (...a) => scratch.getDirectoryHandle(...a),
+        getFileHandle: (...a) => scratch.getFileHandle(...a),
+        removeEntry: (...a) => scratch.removeEntry(...a),
+        entries: () => scratch.entries()
+      };
+      idbGet = async k => (k === "lastDir" ? fakeHandle : realIdbGet(k));
+
+      S.dirHandle = null;                                   // permission dropped
+      const okc = await ensureConnected("the backup");
+      ok("a disconnected folder is re-acquired on demand", okc === true);
+      eq("permission was actually requested", asked, 1);
+      ok("the folder is connected again", !!S.dirHandle);
+
+      const b = await backupIndex("after-reload");
+      ok("the backup then completes", b.bytes > 0, (b.bytes/1024).toFixed(0) + " KB");
+      ok("and it is verified readable",
+         b.manifest.records && b.manifest.records.bad === 0);
+
+      /* refusing access must not look like success */
+      S.dirHandle = null; verdict = "denied"; asked = 0; granted = false;
+      const denied = await ensureConnected();
+      eq("a denied folder reports failure", denied, false);
+      ok("and nothing is left half-connected", S.dirHandle === null);
+
+      idbGet = realIdbGet;
+      S.dirHandle = savedDir;
+      const dirB2 = await backupsDir();
+      for (const x of await listBackups())
+        { try { await dirB2.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
     /* ---- backups ---- */
     {
       const keepCfg = { ...S.backup };
@@ -5084,7 +5187,19 @@ if (checkBrowser()){
         await useDirectory(h);
         toast("Reopened " + h.name + " — your index is loaded.");
       } else {
-        toast("Click \u201cReconnect last folder\u201d in Settings to reopen " + h.name + ".");
+        /* Chrome will not re-grant without a gesture. Say so once, plainly, and
+           let any action re-acquire it rather than dead-ending. */
+        const w = $("#browserWarn");
+        w.hidden = false; w.innerHTML = "";
+        w.append(el("b", null, h.name + " is not connected. "));
+        w.append(document.createTextNode(
+          "Chrome drops folder access when the page reloads. Anything you do will "
+          + "ask for it back — or press here."));
+        const b = el("button","btn");
+        b.textContent = "Reconnect " + h.name;
+        b.style.marginLeft = "10px";
+        b.onclick = async () => { if (await ensureConnected()) w.hidden = true; };
+        w.append(b);
       }
     } catch {}
   }).catch(() => {});

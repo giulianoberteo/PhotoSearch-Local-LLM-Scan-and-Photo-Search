@@ -493,6 +493,59 @@ async function selfTest(){
       window.chat = realChat;
     }
 
+    /* ---- the whole flow after a reload ----
+       Reproduces the real failure: the page reloads, Chrome has dropped folder
+       permission, and the user clicks Back up. It must reconnect itself and
+       complete, not fail into a panel nobody is looking at.
+       idbGet returns a structured CLONE of the handle, so the permission stubs
+       have to go on what idbGet hands back, not on the original. */
+    {
+      const savedDir = S.dirHandle;
+      const realIdbGet = idbGet;
+      let asked = 0, verdict = "granted", granted = false;
+      /* A real handle's methods must be called on the real object, so delegate
+         explicitly rather than using Object.create (Illegal invocation). */
+      const fakeHandle = {
+        kind: "directory", name: scratch.name,
+        /* Chrome reports "prompt" until granted, then "granted" — model that,
+           so a second query does not look like a second prompt. */
+        queryPermission: async () => granted ? "granted" : "prompt",
+        requestPermission: async () => {
+          asked++;
+          if (verdict === "granted") granted = true;
+          return verdict;
+        },
+        getDirectoryHandle: (...a) => scratch.getDirectoryHandle(...a),
+        getFileHandle: (...a) => scratch.getFileHandle(...a),
+        removeEntry: (...a) => scratch.removeEntry(...a),
+        entries: () => scratch.entries()
+      };
+      idbGet = async k => (k === "lastDir" ? fakeHandle : realIdbGet(k));
+
+      S.dirHandle = null;                                   // permission dropped
+      const okc = await ensureConnected("the backup");
+      ok("a disconnected folder is re-acquired on demand", okc === true);
+      eq("permission was actually requested", asked, 1);
+      ok("the folder is connected again", !!S.dirHandle);
+
+      const b = await backupIndex("after-reload");
+      ok("the backup then completes", b.bytes > 0, (b.bytes/1024).toFixed(0) + " KB");
+      ok("and it is verified readable",
+         b.manifest.records && b.manifest.records.bad === 0);
+
+      /* refusing access must not look like success */
+      S.dirHandle = null; verdict = "denied"; asked = 0; granted = false;
+      const denied = await ensureConnected();
+      eq("a denied folder reports failure", denied, false);
+      ok("and nothing is left half-connected", S.dirHandle === null);
+
+      idbGet = realIdbGet;
+      S.dirHandle = savedDir;
+      const dirB2 = await backupsDir();
+      for (const x of await listBackups())
+        { try { await dirB2.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
     /* ---- backups ---- */
     {
       const keepCfg = { ...S.backup };

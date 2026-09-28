@@ -192,6 +192,40 @@ async function withRetry(label, fn){
     + String(last && last.message || last));
 }
 
+/* Re-acquires folder permission from inside a click. Chrome grants it only in
+   response to a gesture, which a button press already is, so any action can
+   simply reconnect itself instead of failing and telling the user to go and
+   press something else first. */
+async function ensureConnected(what){
+  if (S.dirHandle) return true;
+  const h = await idbGet("lastDir");
+  if (!h){
+    toast("Choose a photo folder first (Settings).");
+    return false;
+  }
+  let perm = await h.queryPermission({ mode:"readwrite" });
+  if (perm !== "granted") perm = await h.requestPermission({ mode:"readwrite" });
+  if (perm !== "granted"){
+    toast("Chrome denied access to " + h.name + ". Pick the folder again.");
+    return false;
+  }
+  await useDirectory(h);
+  toast("Reconnected " + h.name + (what ? " — continuing with " + what : ""));
+  return true;
+}
+/* The index folder needs the same treatment when it lives outside the photos. */
+async function ensureIndexConnected(){
+  if (S.indexMode !== "custom") return true;
+  if (S.indexDirHandle) return true;
+  const h = await idbGet("lastIndexDir");
+  if (!h){ toast("Choose where to save the index (Settings)."); return false; }
+  let perm = await h.queryPermission({ mode:"readwrite" });
+  if (perm !== "granted") perm = await h.requestPermission({ mode:"readwrite" });
+  if (perm !== "granted"){ toast("Chrome denied access to " + h.name + "."); return false; }
+  S.indexDirHandle = h;
+  return true;
+}
+
 /* ================= directory picker =================
    Deliberately minimal. Earlier versions added a busy flag, a button-disable
    and a watchdog; the disable let macOS dismiss the dialog and left the button

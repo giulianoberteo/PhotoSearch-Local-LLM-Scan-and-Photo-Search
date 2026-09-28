@@ -231,7 +231,7 @@ enableFolderDrop("btnIndexDir", async h => {
 /* ================= plan UI ================= */
 let planAbort = null;
 async function refreshPlan(){
-  if (!S.dirHandle){ return; }
+  if (!S.dirHandle) return;
   const host = $("#planBox");
   if (planAbort) planAbort.abort();
   planAbort = new AbortController();
@@ -442,7 +442,11 @@ function showRecord(r){
 }
 
 /* ================= scan buttons ================= */
-$("#btnPlan").onclick = refreshPlan;
+$("#btnPlan").onclick = async () => {
+  if (!(await ensureIndexConnected())) return;
+  if (!(await ensureConnected("the plan"))) return;
+  await refreshPlan();
+};
 $("#btnScan").onclick = () => { const p = S.plan;
   runScan([...p.new, ...p.changed, ...p.failed], "new-and-changed"); };
 $("#btnStale").onclick = () => runScan(S.plan.stale, "refresh-stale");
@@ -515,14 +519,20 @@ $("#btnBackup").onclick = async () => {
   if (RUN.active){ toast("A scan is running — back up when it finishes."); return; }
   const host = $("#backupOut"); resetChecks(host);
   host.scrollIntoView({ block:"nearest" });
-  if (!S.dirHandle && !(S.indexMode === "custom" && S.indexDirHandle)){
-    checksBox(host).append(checkRow({ status:"err", title:"No folder connected",
-      detail:"A reload drops the folder permission, so the index is not open. Press "
-        + "'Reconnect last folder' above, then back up." }));
-    toast("Reconnect the folder first — the index is not open.");
+  const btn = $("#btnBackup"); btn.disabled = true; btn.textContent = "Backing up…";
+  try {
+    if (!(await ensureIndexConnected()) || !(await ensureConnected("the backup"))){
+      checksBox(host).append(checkRow({ status:"err", title:"Could not open the index",
+        detail:"Access to the folder was not granted." }));
+      btn.disabled = false; btn.textContent = "Back up now";
+      return;
+    }
+  } catch (e){
+    checksBox(host).append(checkRow({ status:"err", title:"Could not open the index",
+      detail:String(e.message || e) }));
+    btn.disabled = false; btn.textContent = "Back up now";
     return;
   }
-  const btn = $("#btnBackup"); btn.disabled = true; btn.textContent = "Backing up…";
   const st = step(host, "Backup");
   try {
     const b = await backupIndex("manual", m => st.note(m));
@@ -540,7 +550,12 @@ $("#btnBackup").onclick = async () => {
     btn.disabled = false; btn.textContent = "Back up now";
   }
 };
-$("#btnBackups").onclick = () => showBackups();
+$("#btnBackups").onclick = async () => {
+  if (!(await ensureIndexConnected())) return;
+  if (!(await ensureConnected("the backup list"))) return;
+  resetChecks($("#backupOut"));
+  await showBackups();
+};
 async function showBackups(){
   const host = $("#backupOut");
   try {
