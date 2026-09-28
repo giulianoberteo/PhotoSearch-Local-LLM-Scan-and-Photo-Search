@@ -409,8 +409,11 @@ const S = {
   models: [], nativeApi: null, connected: false,
   dirHandle: null, indexDirHandle: null, photoCount: 0,
   roles: { scan:"", embed:"", chat:"auto" },
-  scan: { concurrency:1, statConcurrency:12, maxTokens:900, temp:0.1,
+  scan: { concurrency:1, statConcurrency:12, maxTokens:2000, temp:0.1,
           estSecs:23, batchSize:25, bigPx:1024, thumbPx:384, thumbQ:0.7 },
+  /* maxTokens is a ceiling, not a target: an ordinary photo generates ~400.
+     900 truncated text-heavy images mid-JSON once the prompt asked for full
+     transcription, so it costs nothing to be generous here. */
   date: { hemisphere:"north", occasions:null, overrides:[] },
   events: { gapHours:6, km:25 },
   search: { minCosine:0.30 },
@@ -2205,14 +2208,14 @@ function correctImageType(modelType, meta, rec){
 /* ==================== 55-extract.js ==================== */
 
 /* ================= vision extraction ================= */
-async function extract(model, dataUrl, extraNote, signal){
+async function extract(model, dataUrl, extraNote, signal, maxTokens){
   const msgs = [{ role:"system", content: TPL.system },
     { role:"user", content:[
       { type:"text", text: TPL.user + (extraNote ? "\n" + extraNote : "") },
       { type:"image_url", image_url:{ url: dataUrl } }]}];
   const t0 = performance.now();
   const d = await chat({ model, messages: msgs, temperature: S.scan.temp,
-    max_tokens: S.scan.maxTokens,
+    max_tokens: maxTokens || S.scan.maxTokens,
     response_format:{ type:"json_schema",
       json_schema:{ name:"photo_record", strict:true, schema: TPL.schema } } }, signal);
   const m = d.choices[0].message;
@@ -2221,6 +2224,7 @@ async function extract(model, dataUrl, extraNote, signal){
   const payload = stripThink(rawField || reasonField);
   return { raw: payload, secs:(performance.now()-t0)/1000,
     tokens: d.usage && d.usage.completion_tokens,
+    truncated: d.choices[0].finish_reason === "length",
     reasoned: detectReasoning(payload, rawField, reasonField) };
 }
 
@@ -2681,14 +2685,27 @@ async function scanOne(f, signal){
   const exif = await readExif(file, f.name, overrideFor(f.path));
 
   let attempt = 0, note = "", out = null, lastIssues = null, lastParsed = null;
+  let attemptTokens = S.scan.maxTokens;
   while (attempt < 2){
     attempt++;
     if (signal.aborted) throw new DOMException("aborted","AbortError");
     try {
-      const r = await extract(S.roles.scan, dataUrl, note, signal);
+      const r = await extract(S.roles.scan, dataUrl, note, signal, attemptTokens);
       let parsed;
       try { parsed = JSON.parse(r.raw); }
-      catch (e){ throw new Error("JSON parse failed: " + e.message); }
+      catch (e){
+        /* Truncated output is not a bad answer, it is one that ran out of room
+           -- almost always an image dense with text. Give it more and retry,
+           rather than recording a failure. */
+        if (r.truncated && attemptTokens <= S.scan.maxTokens){
+          attemptTokens = Math.min(8000, S.scan.maxTokens * 3);
+          note = ""; attempt--;            // the extra try does not count
+          continue;
+        }
+        throw new Error("JSON parse failed"
+          + (r.truncated ? " (hit the " + attemptTokens + "-token limit)" : "")
+          + ": " + e.message);
+      }
       const v = validate(parsed);
       lastParsed = { r, parsed, v };
       if (v.issues.length && attempt === 1){
@@ -3480,6 +3497,15 @@ $("#sKeep").onchange = () => {
 $("#btnBackup").onclick = async () => {
   if (RUN.active){ toast("A scan is running — back up when it finishes."); return; }
   const host = $("#backupOut"); resetChecks(host);
+  host.scrollIntoView({ block:"nearest" });
+  if (!S.dirHandle && !(S.indexMode === "custom" && S.indexDirHandle)){
+    checksBox(host).append(checkRow({ status:"err", title:"No folder connected",
+      detail:"A reload drops the folder permission, so the index is not open. Press "
+        + "'Reconnect last folder' above, then back up." }));
+    toast("Reconnect the folder first — the index is not open.");
+    return;
+  }
+  const btn = $("#btnBackup"); btn.disabled = true; btn.textContent = "Backing up…";
   const st = step(host, "Backup");
   try {
     const b = await backupIndex("manual", m => st.note(m));
@@ -3488,8 +3514,14 @@ $("#btnBackup").onclick = async () => {
       + (r ? " · " + r.lines + " records, " + r.unique + " unique"
              + (r.bad ? ", " + r.bad + " UNREADABLE" : ", all readable") : "")
       + (b.pruned ? " · " + b.pruned + " older backup(s) removed" : ""));
+    toast("Backup complete: " + (b.bytes/1048576).toFixed(1) + " MB");
     await showBackups();
-  } catch (e){ st.err(String(e.message || e)); }
+  } catch (e){
+    st.err(String(e.message || e));
+    toast("Backup failed: " + String(e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = "Back up now";
+  }
 };
 $("#btnBackups").onclick = () => showBackups();
 async function showBackups(){
@@ -4645,6 +4677,39 @@ async function selfTest(){
          CHAT.messages.length < 2 || CHAT.messages[1].role !== "tool",
          CHAT.messages[1] && CHAT.messages[1].role);
       CHAT.messages = keepChat;
+    }
+
+    /* ---- truncated model output is retried, not recorded as a failure ---- */
+    {
+      eq("the default token ceiling is generous enough for text-heavy images",
+         S.scan.maxTokens >= 2000, true);
+      const realChat = window.chat;
+      let calls = [];
+      // first call truncates, second (with more room) succeeds
+      window.chat = async (body) => {
+        calls.push(body.max_tokens);
+        const full = JSON.stringify({ template_version:"1.1", observations:["a","b","c"],
+          image_type:"photo", scene_type:"outdoor", setting:"street",
+          people:{count:0,count_bucket:"0",age_groups:[],description:""}, animals:[],
+          objects:["sign"], activities:[], visible_text:{has_text:true,text:"LOTS"},
+          landmark:{name:null,confidence:"low"}, time_of_day:"midday", season:"summer",
+          weather:"sunny", mood:"neutral", dominant_colors:["grey"],
+          quality:{sharpness:"sharp",exposure:"ok",flags:[]}, caption:"A street sign.",
+          description:"A street sign stands by a road.", search_keywords:["sign"],
+          confidence:{overall:"high",uncertain_fields:[]} });
+        const truncate = calls.length === 1;
+        return { choices:[{ finish_reason: truncate ? "length" : "stop",
+          message:{ content:"", reasoning_content: truncate ? full.slice(0, 120) : full } }],
+          usage:{ completion_tokens: truncate ? body.max_tokens : 400 } };
+      };
+      const first = await extract("m", "data:,x", "", new AbortController().signal, 2000);
+      ok("a cut-off answer is flagged truncated", first.truncated === true);
+      const second = await extract("m", "data:,x", "", new AbortController().signal, 6000);
+      ok("the retry with more room parses", (() => {
+        try { JSON.parse(second.raw); return true; } catch { return false; } })());
+      ok("the retry asked for more tokens than the first", calls[1] > calls[0],
+         calls.join(" then "));
+      window.chat = realChat;
     }
 
     /* ---- backups ---- */

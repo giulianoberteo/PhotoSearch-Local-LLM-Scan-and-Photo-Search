@@ -37,14 +37,27 @@ async function scanOne(f, signal){
   const exif = await readExif(file, f.name, overrideFor(f.path));
 
   let attempt = 0, note = "", out = null, lastIssues = null, lastParsed = null;
+  let attemptTokens = S.scan.maxTokens;
   while (attempt < 2){
     attempt++;
     if (signal.aborted) throw new DOMException("aborted","AbortError");
     try {
-      const r = await extract(S.roles.scan, dataUrl, note, signal);
+      const r = await extract(S.roles.scan, dataUrl, note, signal, attemptTokens);
       let parsed;
       try { parsed = JSON.parse(r.raw); }
-      catch (e){ throw new Error("JSON parse failed: " + e.message); }
+      catch (e){
+        /* Truncated output is not a bad answer, it is one that ran out of room
+           -- almost always an image dense with text. Give it more and retry,
+           rather than recording a failure. */
+        if (r.truncated && attemptTokens <= S.scan.maxTokens){
+          attemptTokens = Math.min(8000, S.scan.maxTokens * 3);
+          note = ""; attempt--;            // the extra try does not count
+          continue;
+        }
+        throw new Error("JSON parse failed"
+          + (r.truncated ? " (hit the " + attemptTokens + "-token limit)" : "")
+          + ": " + e.message);
+      }
       const v = validate(parsed);
       lastParsed = { r, parsed, v };
       if (v.issues.length && attempt === 1){

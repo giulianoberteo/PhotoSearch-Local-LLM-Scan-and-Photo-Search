@@ -1,13 +1,13 @@
 
 /* ================= vision extraction ================= */
-async function extract(model, dataUrl, extraNote, signal){
+async function extract(model, dataUrl, extraNote, signal, maxTokens){
   const msgs = [{ role:"system", content: TPL.system },
     { role:"user", content:[
       { type:"text", text: TPL.user + (extraNote ? "\n" + extraNote : "") },
       { type:"image_url", image_url:{ url: dataUrl } }]}];
   const t0 = performance.now();
   const d = await chat({ model, messages: msgs, temperature: S.scan.temp,
-    max_tokens: S.scan.maxTokens,
+    max_tokens: maxTokens || S.scan.maxTokens,
     response_format:{ type:"json_schema",
       json_schema:{ name:"photo_record", strict:true, schema: TPL.schema } } }, signal);
   const m = d.choices[0].message;
@@ -16,6 +16,7 @@ async function extract(model, dataUrl, extraNote, signal){
   const payload = stripThink(rawField || reasonField);
   return { raw: payload, secs:(performance.now()-t0)/1000,
     tokens: d.usage && d.usage.completion_tokens,
+    truncated: d.choices[0].finish_reason === "length",
     reasoned: detectReasoning(payload, rawField, reasonField) };
 }
 

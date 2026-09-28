@@ -514,6 +514,15 @@ $("#sKeep").onchange = () => {
 $("#btnBackup").onclick = async () => {
   if (RUN.active){ toast("A scan is running — back up when it finishes."); return; }
   const host = $("#backupOut"); resetChecks(host);
+  host.scrollIntoView({ block:"nearest" });
+  if (!S.dirHandle && !(S.indexMode === "custom" && S.indexDirHandle)){
+    checksBox(host).append(checkRow({ status:"err", title:"No folder connected",
+      detail:"A reload drops the folder permission, so the index is not open. Press "
+        + "'Reconnect last folder' above, then back up." }));
+    toast("Reconnect the folder first — the index is not open.");
+    return;
+  }
+  const btn = $("#btnBackup"); btn.disabled = true; btn.textContent = "Backing up…";
   const st = step(host, "Backup");
   try {
     const b = await backupIndex("manual", m => st.note(m));
@@ -522,8 +531,14 @@ $("#btnBackup").onclick = async () => {
       + (r ? " · " + r.lines + " records, " + r.unique + " unique"
              + (r.bad ? ", " + r.bad + " UNREADABLE" : ", all readable") : "")
       + (b.pruned ? " · " + b.pruned + " older backup(s) removed" : ""));
+    toast("Backup complete: " + (b.bytes/1048576).toFixed(1) + " MB");
     await showBackups();
-  } catch (e){ st.err(String(e.message || e)); }
+  } catch (e){
+    st.err(String(e.message || e));
+    toast("Backup failed: " + String(e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = "Back up now";
+  }
 };
 $("#btnBackups").onclick = () => showBackups();
 async function showBackups(){

@@ -460,6 +460,39 @@ async function selfTest(){
       CHAT.messages = keepChat;
     }
 
+    /* ---- truncated model output is retried, not recorded as a failure ---- */
+    {
+      eq("the default token ceiling is generous enough for text-heavy images",
+         S.scan.maxTokens >= 2000, true);
+      const realChat = window.chat;
+      let calls = [];
+      // first call truncates, second (with more room) succeeds
+      window.chat = async (body) => {
+        calls.push(body.max_tokens);
+        const full = JSON.stringify({ template_version:"1.1", observations:["a","b","c"],
+          image_type:"photo", scene_type:"outdoor", setting:"street",
+          people:{count:0,count_bucket:"0",age_groups:[],description:""}, animals:[],
+          objects:["sign"], activities:[], visible_text:{has_text:true,text:"LOTS"},
+          landmark:{name:null,confidence:"low"}, time_of_day:"midday", season:"summer",
+          weather:"sunny", mood:"neutral", dominant_colors:["grey"],
+          quality:{sharpness:"sharp",exposure:"ok",flags:[]}, caption:"A street sign.",
+          description:"A street sign stands by a road.", search_keywords:["sign"],
+          confidence:{overall:"high",uncertain_fields:[]} });
+        const truncate = calls.length === 1;
+        return { choices:[{ finish_reason: truncate ? "length" : "stop",
+          message:{ content:"", reasoning_content: truncate ? full.slice(0, 120) : full } }],
+          usage:{ completion_tokens: truncate ? body.max_tokens : 400 } };
+      };
+      const first = await extract("m", "data:,x", "", new AbortController().signal, 2000);
+      ok("a cut-off answer is flagged truncated", first.truncated === true);
+      const second = await extract("m", "data:,x", "", new AbortController().signal, 6000);
+      ok("the retry with more room parses", (() => {
+        try { JSON.parse(second.raw); return true; } catch { return false; } })());
+      ok("the retry asked for more tokens than the first", calls[1] > calls[0],
+         calls.join(" then "));
+      window.chat = realChat;
+    }
+
     /* ---- backups ---- */
     {
       const keepCfg = { ...S.backup };

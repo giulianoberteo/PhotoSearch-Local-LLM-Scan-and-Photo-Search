@@ -29,8 +29,11 @@ const S = {
   models: [], nativeApi: null, connected: false,
   dirHandle: null, indexDirHandle: null, photoCount: 0,
   roles: { scan:"", embed:"", chat:"auto" },
-  scan: { concurrency:1, statConcurrency:12, maxTokens:900, temp:0.1,
+  scan: { concurrency:1, statConcurrency:12, maxTokens:2000, temp:0.1,
           estSecs:23, batchSize:25, bigPx:1024, thumbPx:384, thumbQ:0.7 },
+  /* maxTokens is a ceiling, not a target: an ordinary photo generates ~400.
+     900 truncated text-heavy images mid-JSON once the prompt asked for full
+     transcription, so it costs nothing to be generous here. */
   date: { hemisphere:"north", occasions:null, overrides:[] },
   events: { gapHours:6, km:25 },
   search: { minCosine:0.30 },
