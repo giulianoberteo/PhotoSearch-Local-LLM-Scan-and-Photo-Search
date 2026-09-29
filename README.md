@@ -131,6 +131,7 @@ Working software, used daily against a multi-terabyte NAS library. Rough edges r
 | [FINDINGS.md](docs/FINDINGS.md) | Measured results and hard-won LM Studio behaviour |
 | [TESTING.md](docs/TESTING.md) | The self-test, and driving it headlessly |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Where every file lives, manual backup, slow-NAS notes |
+| [ROADMAP.md](docs/ROADMAP.md) | What is missing next — people, video, timeline — and what each costs |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, code style, how to propose changes |
 
 ## License
