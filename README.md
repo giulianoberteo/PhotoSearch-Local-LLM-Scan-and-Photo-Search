@@ -130,6 +130,7 @@ Working software, used daily against a multi-terabyte NAS library. Rough edges r
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the index, search and agent actually work |
 | [FINDINGS.md](docs/FINDINGS.md) | Measured results and hard-won LM Studio behaviour |
 | [TESTING.md](docs/TESTING.md) | The self-test, and driving it headlessly |
+| [OPERATIONS.md](docs/OPERATIONS.md) | Where every file lives, manual backup, slow-NAS notes |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, code style, how to propose changes |
 
 ## License
