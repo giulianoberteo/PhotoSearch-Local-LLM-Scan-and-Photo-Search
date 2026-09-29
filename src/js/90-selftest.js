@@ -546,6 +546,26 @@ async function selfTest(){
         { try { await dirB2.removeEntry(x.name, { recursive:true }); } catch {} }
     }
 
+    /* ---- opening the index must not touch thumbs/ ----
+       thumbs/ holds one file per photo. Listing it on a real library over a
+       network share measured 75 seconds, and ensureIndex was paying that every
+       single time for a handle nothing had asked for yet. */
+    {
+      IDX.thumbs = null;
+      IDX.lastConfig = null;
+      await ensureIndex();
+      ok("ensureIndex leaves thumbs/ unopened", IDX.thumbs === null);
+      const dir = await thumbsDir();
+      ok("it opens on first use", !!dir && IDX.thumbs === dir);
+      const again = await thumbsDir();
+      ok("and is then cached", again === dir);
+      // re-opening the index must drop the cached handle, not keep a stale one
+      IDX.lastConfig = null;
+      await ensureIndex();
+      ok("re-opening the index drops the cached handle", IDX.thumbs === null);
+      await thumbsDir();                        // restore for later tests
+    }
+
     /* ---- a slow share must look slow, not stuck ---- */
     {
       // a file big enough to need several chunks

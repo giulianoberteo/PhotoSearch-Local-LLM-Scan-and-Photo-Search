@@ -47,10 +47,16 @@ async function indexParent(){
   if (!S.dirHandle) throw new Error("No photo folder selected");
   return S.dirHandle;
 }
-async function ensureIndex(){
+async function ensureIndex(onPhase){
+  const say = async m => { if (onPhase) await onPhase(m); };
   const parent = await indexParent();
+  await say("Opening .photoindex/…");
   IDX.dir = await parent.getDirectoryHandle(".photoindex", { create:true });
-  IDX.thumbs = await IDX.dir.getDirectoryHandle("thumbs", { create:true });
+  IDX.thumbs = null;
+  /* thumbs/ is NOT opened here. It holds one file per photo -- 6,568 of them on
+     a real library -- and enumerating it over a network share measured 60
+     seconds. Nothing at startup needs it, so it is opened on first use. */
+  await say("Reading config.json…");
   const cfg = await IDX.dir.getFileHandle("config.json", { create:true });
   const f = await cfg.getFile();
   let conf = {};
@@ -230,15 +236,22 @@ function vectorOf(id){
 }
 
 /* ---- thumbnails ---- */
+/* Opened lazily: see ensureIndex. Cached for the life of the index handle. */
+async function thumbsDir(){
+  if (!IDX.thumbs) IDX.thumbs = await IDX.dir.getDirectoryHandle("thumbs", { create:true });
+  return IDX.thumbs;
+}
 async function saveThumb(id, blob){
-  const fh = await IDX.thumbs.getFileHandle(id + ".jpg", { create:true });
+  const dir = await thumbsDir();
+  const fh = await dir.getFileHandle(id + ".jpg", { create:true });
   await writeBinary(fh, blob);
 }
 const thumbCache = new Map();
 async function thumbUrl(id){
   if (thumbCache.has(id)) return thumbCache.get(id);
   try {
-    const fh = await IDX.thumbs.getFileHandle(id + ".jpg");
+    const dir = await thumbsDir();
+    const fh = await dir.getFileHandle(id + ".jpg");
     const u = URL.createObjectURL(await fh.getFile());
     if (thumbCache.size > 400){          // bound the cache so long sessions do not leak
       const [k, v] = thumbCache.entries().next().value;

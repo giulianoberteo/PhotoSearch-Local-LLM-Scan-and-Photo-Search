@@ -120,7 +120,7 @@ async function runTool(name, args){
         const r = IDX.records.get(id);
         if (!r){ out.push({ id, error:"unknown id" }); continue; }
         try {
-          const fh = await IDX.thumbs.getFileHandle(id + ".jpg");
+          const fh = await (await thumbsDir()).getFileHandle(id + ".jpg");
           const durl = await blobToDataUrl(await fh.getFile());
           const d = await chat({ model:S.roles.scan, temperature:0.2, max_tokens:220,
             messages:[{ role:"user", content:[
