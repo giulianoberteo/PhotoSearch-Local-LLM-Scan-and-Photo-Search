@@ -118,6 +118,7 @@ function renderIndexWhere(){
 }
 $("#sIndexMode").onchange = async () => {
   S.indexMode = $("#sIndexMode").value;
+  S.indexChosen = true;
   saveSettings(); renderIndexWhere();
   if (S.indexMode === "custom" && !S.indexDirHandle){
     toast("Now choose where to save the DB.");
@@ -474,33 +475,6 @@ $("#btnStop").onclick = () => {
   RUN.stop = true; RUN.paused = false;
   if (RUN.abort) RUN.abort.abort();      // cancels the in-flight request at once
   toast("Stopping… progress is saved and resumable.");
-};
-
-$("#btnMoveIndex").onclick = async () => {
-  if (RUN.active){ toast("Stop the scan before moving the index."); return; }
-  const host = $("#fsOut"); resetChecks(host);
-  if (!(await ensureConnected("the move"))) return;
-  let dest;
-  try { dest = await pickDirectory(); }
-  catch (e){
-    if (e.name === "AbortError") return;
-    if (isPickerStuck(e)){ offerPickerReset(); return; }
-    toast(errText(e)); return;
-  }
-  if (!dest) return;
-  const st = step(host, "Moving the index to " + dest.name);
-  try {
-    const r = await moveIndexTo(dest, m => st.note(m));
-    st.ok(r.records + " records and " + r.vectors + " vectors now in "
-      + dest.name + "/.photoindex/ (" + (r.bytes/1048576).toFixed(1) + " MB). "
-      + "Thumbnails were left behind — they rebuild from the originals.");
-    renderIndexWhere();
-    await refreshPlan();
-    toast("Index moved to " + dest.name);
-  } catch (e){
-    st.err(errText(e));
-    toast("Move failed: " + errText(e));
-  }
 };
 
 $("#btnIndexReveal").onclick = async () => {

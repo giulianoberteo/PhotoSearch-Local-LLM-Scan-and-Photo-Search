@@ -42,6 +42,7 @@ const S = {
   /* A NAS library wants its index on local disk: every batch flush would
      otherwise cross SMB, and search should keep working when the share sleeps. */
   indexMode: "folder",            // "folder" = .photoindex beside the photos
+  indexChosen: false,             // did the user actually pick, or is this the default?
   scanOrder: "newest",            // newest | oldest | path | smallest
   /* Always keep the library ROOT as the picked folder so paths stay unique and
      one index covers everything. Scope narrows only what a scan walks. */
@@ -58,7 +59,7 @@ const LS_OLD = "photosearch.settings.v1";
 function saveSettings(){
   try { localStorage.setItem(LS, JSON.stringify({
     baseUrl:S.baseUrl, roles:S.roles, scan:S.scan, date:S.date, events:S.events,
-    search:S.search, ocr:S.ocr, indexMode:S.indexMode, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
+    search:S.search, ocr:S.ocr, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
     mock: $("#mock").checked })); } catch {}
 }
 function loadSettings(){
@@ -80,6 +81,7 @@ function loadSettings(){
     if (d.chat) S.chat = { ...S.chat, ...d.chat };
     if (d.ocr) S.ocr = { ...S.ocr, ...d.ocr };
     if (d.indexMode) S.indexMode = d.indexMode;
+    if (d.indexChosen) S.indexChosen = d.indexChosen;
     if (d.scanOrder) S.scanOrder = d.scanOrder;
     if (d.scanScope) S.scanScope = d.scanScope;
     if (d.io) S.io = { ...S.io, ...d.io };

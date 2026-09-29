@@ -163,6 +163,10 @@ async function readFullRecord(id){
 }
 /* Rewrites records.jsonl to latest-state-only and drops soft-deleted rows. */
 async function compactRecords(){
+  /* This is the only operation that REWRITES records.jsonl rather than
+     appending. If it is interrupted the file is gone, so copy it first. */
+  if (typeof backupIndex === "function" && IDX.records.size > 0)
+    await backupIndex("pre-compaction safety copy");
   const text = await readTextIfAny(IDX.dir, "records.jsonl");
   if (text == null) return { before:0, after:0 };
   const latest = new Map();

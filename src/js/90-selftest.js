@@ -729,6 +729,63 @@ async function selfTest(){
         { try { await dirP.removeEntry(x.name, { recursive:true }); } catch {} }
     }
 
+    /* ---- a new scan must not endanger an existing index ---- */
+    {
+      const before = IDX.records.size;
+      ok("there are records to protect", before > 0, String(before));
+
+      /* append-only: a scan adds lines, it never rewrites them */
+      const rfh = await IDX.dir.getFileHandle("records.jsonl");
+      const originalText = await (await rfh.getFile()).text();
+      await appendLines("records.jsonl", [{ id:"scan-sim-1", path:"sim.jpg", name:"sim.jpg" }]);
+      const afterText = await (await (await IDX.dir.getFileHandle("records.jsonl")).getFile()).text();
+      ok("existing records are untouched by a new write",
+         afterText.startsWith(originalText), "prefix preserved");
+
+      /* a truncated final line (a crash mid-write) must not lose the rest */
+      await writeFile(rfh, originalText + '{"id":"half","pa');
+      IDX.loaded = false; await loadRecords();
+      eq("a half-written line is skipped, the rest survives", IDX.records.size, before);
+
+      await writeFile(rfh, originalText);
+      IDX.loaded = false; await loadRecords();
+      eq("the index is back to where it started", IDX.records.size, before);
+
+      /* compaction rewrites in place, so it must copy first */
+      const dirC = await backupsDir();
+      for (const x of await listBackups())
+        { try { await dirC.removeEntry(x.name, { recursive:true }); } catch {} }
+      await compactRecords();
+      const copies = await listBackups();
+      ok("compaction takes a safety copy before rewriting",
+         copies.some(c => c.meta && /pre-compaction/.test(c.meta.reason)),
+         copies.map(c => c.meta && c.meta.reason).join(","));
+      for (const x of copies)
+        { try { await dirC.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
+    /* ---- the index location is never assumed ---- */
+    {
+      const keepChosen = S.indexChosen, keepMock = $("#mock").checked;
+      S.indexChosen = false; $("#mock").checked = false;
+      const realConfirm = window.confirm;
+      let askedWith = null;
+      window.confirm = m => { askedWith = m; return false; };      // user cancels
+      const problem = await preflightScan();
+      ok("an unchosen index location is confirmed, not assumed", !!askedWith);
+      ok("the prompt names where it would go", /\.photoindex/.test(askedWith || ""));
+      ok("cancelling stops the scan", typeof problem === "string" && /Choose where/.test(problem));
+      ok("and it is still not marked chosen", S.indexChosen === false);
+
+      window.confirm = () => true;                                  // user accepts
+      S.indexChosen = false;
+      await preflightScan();
+      ok("accepting records the choice so it is asked only once", S.indexChosen === true);
+
+      window.confirm = realConfirm;
+      S.indexChosen = keepChosen; $("#mock").checked = keepMock;
+    }
+
     /* ---- backups ---- */
     {
       const keepCfg = { ...S.backup };

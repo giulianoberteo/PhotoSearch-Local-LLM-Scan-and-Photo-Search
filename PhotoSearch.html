@@ -259,7 +259,6 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
           </select></div>
         <button class="btn" id="btnIndexDir">Choose where to save the DB…</button>
         <button class="btn sec" id="btnIndexReveal">What's in it?</button>
-        <button class="btn sec" id="btnMoveIndex">Move index to a fast disk…</button>
       </div>
       <div class="row" style="margin-top:10px">
         <div style="flex:1 1 240px"><label for="sScope">Scan scope (optional)</label>
@@ -423,6 +422,7 @@ const S = {
   /* A NAS library wants its index on local disk: every batch flush would
      otherwise cross SMB, and search should keep working when the share sleeps. */
   indexMode: "folder",            // "folder" = .photoindex beside the photos
+  indexChosen: false,             // did the user actually pick, or is this the default?
   scanOrder: "newest",            // newest | oldest | path | smallest
   /* Always keep the library ROOT as the picked folder so paths stay unique and
      one index covers everything. Scope narrows only what a scan walks. */
@@ -439,7 +439,7 @@ const LS_OLD = "photosearch.settings.v1";
 function saveSettings(){
   try { localStorage.setItem(LS, JSON.stringify({
     baseUrl:S.baseUrl, roles:S.roles, scan:S.scan, date:S.date, events:S.events,
-    search:S.search, ocr:S.ocr, indexMode:S.indexMode, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
+    search:S.search, ocr:S.ocr, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
     mock: $("#mock").checked })); } catch {}
 }
 function loadSettings(){
@@ -461,6 +461,7 @@ function loadSettings(){
     if (d.chat) S.chat = { ...S.chat, ...d.chat };
     if (d.ocr) S.ocr = { ...S.ocr, ...d.ocr };
     if (d.indexMode) S.indexMode = d.indexMode;
+    if (d.indexChosen) S.indexChosen = d.indexChosen;
     if (d.scanOrder) S.scanOrder = d.scanOrder;
     if (d.scanScope) S.scanScope = d.scanScope;
     if (d.io) S.io = { ...S.io, ...d.io };
@@ -1565,6 +1566,10 @@ async function readFullRecord(id){
 }
 /* Rewrites records.jsonl to latest-state-only and drops soft-deleted rows. */
 async function compactRecords(){
+  /* This is the only operation that REWRITES records.jsonl rather than
+     appending. If it is interrupted the file is gone, so copy it first. */
+  if (typeof backupIndex === "function" && IDX.records.size > 0)
+    await backupIndex("pre-compaction safety copy");
   const text = await readTextIfAny(IDX.dir, "records.jsonl");
   if (text == null) return { before:0, after:0 };
   const latest = new Map();
@@ -3026,6 +3031,28 @@ async function scanOne(f, signal){
 /* Check the things that would fail identically for every image BEFORE starting,
    so a misconfiguration produces one clear message instead of N error records. */
 async function preflightScan(){
+  /* Where the index goes is a decision, not a default. If it was never chosen,
+     confirm it rather than silently creating one beside the photos -- which on
+     a new machine, or a new folder, means starting from nothing by accident. */
+  if (!S.indexChosen && !$("#mock").checked){
+    const where = S.indexMode === "custom" && S.indexDirHandle
+      ? S.indexDirHandle.name
+      : (S.dirHandle ? S.dirHandle.name : "the photo folder");
+    const existing = IDX.records.size;
+    const ok = confirm(
+      "Where should the index be saved?\n\n"
+      + "No location has been chosen, so it will go to:\n"
+      + "    " + where + "/.photoindex/\n\n"
+      + (existing
+          ? "That index already holds " + existing + " photos; new ones are added to it.\n\n"
+          : "That folder has NO index yet, so this starts a new, empty one.\n"
+            + "If you meant to add to an existing index, cancel and choose its\n"
+            + "location under Settings first.\n\n")
+      + "Continue?");
+    if (!ok) return "Choose where to save the index under Settings, then scan.";
+    S.indexChosen = true;
+    saveSettings();
+  }
   if (!S.roles.scan && !$("#mock").checked) await autoConnect();
   if (!S.roles.scan)
     return "No scan model selected. Open Settings, press Test connection, then pick a "
@@ -3062,6 +3089,21 @@ async function runScan(files, mode, resuming){
     renderChecks($("#errBox"), [{ status:"err", title:"Scan not started", detail:problem }]);
     toast(problem);
     return;
+  }
+  /* Safety copy BEFORE writing anything. A failed scan cannot corrupt an
+     append-only log, but this also covers compaction, re-embedding and simple
+     human error -- and the existing records represent days of work. */
+  if (S.backup.enabled && IDX.records.size > 0){
+    try {
+      const pre = await backupIndex("pre-scan safety copy");
+      toast("Safety copy taken (" + (pre.bytes/1048576).toFixed(1) + " MB) before scanning.");
+    } catch (e){
+      const go = confirm("Could not take a safety copy of the existing index:\n\n"
+        + errText(e) + "\n\nThe index has " + IDX.records.size + " records. "
+        + "Scan anyway?\n\n(Records are only ever appended, so a failed scan "
+        + "cannot delete existing ones.)");
+      if (!go) return;
+    }
   }
   await ensureIndex();
   RUN.active = true; RUN.paused = false; RUN.stop = false;
@@ -3323,6 +3365,7 @@ function renderIndexWhere(){
 }
 $("#sIndexMode").onchange = async () => {
   S.indexMode = $("#sIndexMode").value;
+  S.indexChosen = true;
   saveSettings(); renderIndexWhere();
   if (S.indexMode === "custom" && !S.indexDirHandle){
     toast("Now choose where to save the DB.");
@@ -3679,33 +3722,6 @@ $("#btnStop").onclick = () => {
   RUN.stop = true; RUN.paused = false;
   if (RUN.abort) RUN.abort.abort();      // cancels the in-flight request at once
   toast("Stopping… progress is saved and resumable.");
-};
-
-$("#btnMoveIndex").onclick = async () => {
-  if (RUN.active){ toast("Stop the scan before moving the index."); return; }
-  const host = $("#fsOut"); resetChecks(host);
-  if (!(await ensureConnected("the move"))) return;
-  let dest;
-  try { dest = await pickDirectory(); }
-  catch (e){
-    if (e.name === "AbortError") return;
-    if (isPickerStuck(e)){ offerPickerReset(); return; }
-    toast(errText(e)); return;
-  }
-  if (!dest) return;
-  const st = step(host, "Moving the index to " + dest.name);
-  try {
-    const r = await moveIndexTo(dest, m => st.note(m));
-    st.ok(r.records + " records and " + r.vectors + " vectors now in "
-      + dest.name + "/.photoindex/ (" + (r.bytes/1048576).toFixed(1) + " MB). "
-      + "Thumbnails were left behind — they rebuild from the originals.");
-    renderIndexWhere();
-    await refreshPlan();
-    toast("Index moved to " + dest.name);
-  } catch (e){
-    st.err(errText(e));
-    toast("Move failed: " + errText(e));
-  }
 };
 
 $("#btnIndexReveal").onclick = async () => {
@@ -5212,6 +5228,63 @@ async function selfTest(){
       const dirP = await backupsDir();
       for (const x of await listBackups())
         { try { await dirP.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
+    /* ---- a new scan must not endanger an existing index ---- */
+    {
+      const before = IDX.records.size;
+      ok("there are records to protect", before > 0, String(before));
+
+      /* append-only: a scan adds lines, it never rewrites them */
+      const rfh = await IDX.dir.getFileHandle("records.jsonl");
+      const originalText = await (await rfh.getFile()).text();
+      await appendLines("records.jsonl", [{ id:"scan-sim-1", path:"sim.jpg", name:"sim.jpg" }]);
+      const afterText = await (await (await IDX.dir.getFileHandle("records.jsonl")).getFile()).text();
+      ok("existing records are untouched by a new write",
+         afterText.startsWith(originalText), "prefix preserved");
+
+      /* a truncated final line (a crash mid-write) must not lose the rest */
+      await writeFile(rfh, originalText + '{"id":"half","pa');
+      IDX.loaded = false; await loadRecords();
+      eq("a half-written line is skipped, the rest survives", IDX.records.size, before);
+
+      await writeFile(rfh, originalText);
+      IDX.loaded = false; await loadRecords();
+      eq("the index is back to where it started", IDX.records.size, before);
+
+      /* compaction rewrites in place, so it must copy first */
+      const dirC = await backupsDir();
+      for (const x of await listBackups())
+        { try { await dirC.removeEntry(x.name, { recursive:true }); } catch {} }
+      await compactRecords();
+      const copies = await listBackups();
+      ok("compaction takes a safety copy before rewriting",
+         copies.some(c => c.meta && /pre-compaction/.test(c.meta.reason)),
+         copies.map(c => c.meta && c.meta.reason).join(","));
+      for (const x of copies)
+        { try { await dirC.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
+    /* ---- the index location is never assumed ---- */
+    {
+      const keepChosen = S.indexChosen, keepMock = $("#mock").checked;
+      S.indexChosen = false; $("#mock").checked = false;
+      const realConfirm = window.confirm;
+      let askedWith = null;
+      window.confirm = m => { askedWith = m; return false; };      // user cancels
+      const problem = await preflightScan();
+      ok("an unchosen index location is confirmed, not assumed", !!askedWith);
+      ok("the prompt names where it would go", /\.photoindex/.test(askedWith || ""));
+      ok("cancelling stops the scan", typeof problem === "string" && /Choose where/.test(problem));
+      ok("and it is still not marked chosen", S.indexChosen === false);
+
+      window.confirm = () => true;                                  // user accepts
+      S.indexChosen = false;
+      await preflightScan();
+      ok("accepting records the choice so it is asked only once", S.indexChosen === true);
+
+      window.confirm = realConfirm;
+      S.indexChosen = keepChosen; $("#mock").checked = keepMock;
     }
 
     /* ---- backups ---- */

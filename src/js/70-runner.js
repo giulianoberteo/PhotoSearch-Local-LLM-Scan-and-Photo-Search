@@ -157,6 +157,28 @@ async function scanOne(f, signal){
 /* Check the things that would fail identically for every image BEFORE starting,
    so a misconfiguration produces one clear message instead of N error records. */
 async function preflightScan(){
+  /* Where the index goes is a decision, not a default. If it was never chosen,
+     confirm it rather than silently creating one beside the photos -- which on
+     a new machine, or a new folder, means starting from nothing by accident. */
+  if (!S.indexChosen && !$("#mock").checked){
+    const where = S.indexMode === "custom" && S.indexDirHandle
+      ? S.indexDirHandle.name
+      : (S.dirHandle ? S.dirHandle.name : "the photo folder");
+    const existing = IDX.records.size;
+    const ok = confirm(
+      "Where should the index be saved?\n\n"
+      + "No location has been chosen, so it will go to:\n"
+      + "    " + where + "/.photoindex/\n\n"
+      + (existing
+          ? "That index already holds " + existing + " photos; new ones are added to it.\n\n"
+          : "That folder has NO index yet, so this starts a new, empty one.\n"
+            + "If you meant to add to an existing index, cancel and choose its\n"
+            + "location under Settings first.\n\n")
+      + "Continue?");
+    if (!ok) return "Choose where to save the index under Settings, then scan.";
+    S.indexChosen = true;
+    saveSettings();
+  }
   if (!S.roles.scan && !$("#mock").checked) await autoConnect();
   if (!S.roles.scan)
     return "No scan model selected. Open Settings, press Test connection, then pick a "
@@ -193,6 +215,21 @@ async function runScan(files, mode, resuming){
     renderChecks($("#errBox"), [{ status:"err", title:"Scan not started", detail:problem }]);
     toast(problem);
     return;
+  }
+  /* Safety copy BEFORE writing anything. A failed scan cannot corrupt an
+     append-only log, but this also covers compaction, re-embedding and simple
+     human error -- and the existing records represent days of work. */
+  if (S.backup.enabled && IDX.records.size > 0){
+    try {
+      const pre = await backupIndex("pre-scan safety copy");
+      toast("Safety copy taken (" + (pre.bytes/1048576).toFixed(1) + " MB) before scanning.");
+    } catch (e){
+      const go = confirm("Could not take a safety copy of the existing index:\n\n"
+        + errText(e) + "\n\nThe index has " + IDX.records.size + " records. "
+        + "Scan anyway?\n\n(Records are only ever appended, so a failed scan "
+        + "cannot delete existing ones.)");
+      if (!go) return;
+    }
   }
   await ensureIndex();
   RUN.active = true; RUN.paused = false; RUN.stop = false;
