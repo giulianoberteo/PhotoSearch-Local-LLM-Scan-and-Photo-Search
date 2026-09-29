@@ -47,7 +47,11 @@ async function indexParent(){
   if (!S.dirHandle) throw new Error("No photo folder selected");
   return S.dirHandle;
 }
-async function ensureIndex(onPhase){
+async function ensureIndex(onPhase, opts){
+  /* opts.write === false: open the handles and read config, but never write.
+     Backups and plans do not need config.json refreshed, and on a slow or
+     flaky share that write is the single most likely thing to stall. */
+  opts = opts || {};
   const say = async m => { if (onPhase) await onPhase(m); };
   const parent = await indexParent();
   await say("Opening .photoindex/…");
@@ -82,6 +86,10 @@ async function ensureIndex(onPhase){
      seconds. It changes only when settings or the schema change, so compare
      before writing and skip the round trip otherwise. */
   const next = JSON.stringify({ ...conf, updated_at:undefined }, null, 2);
+  if (opts.write === false){
+    IDX.configPending = next !== IDX.lastConfig;
+    return IDX.dir;
+  }
   if (next !== IDX.lastConfig){
     await say("Writing config.json…");
     conf.updated_at = new Date().toISOString();

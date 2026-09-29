@@ -1449,7 +1449,11 @@ async function indexParent(){
   if (!S.dirHandle) throw new Error("No photo folder selected");
   return S.dirHandle;
 }
-async function ensureIndex(onPhase){
+async function ensureIndex(onPhase, opts){
+  /* opts.write === false: open the handles and read config, but never write.
+     Backups and plans do not need config.json refreshed, and on a slow or
+     flaky share that write is the single most likely thing to stall. */
+  opts = opts || {};
   const say = async m => { if (onPhase) await onPhase(m); };
   const parent = await indexParent();
   await say("Opening .photoindex/…");
@@ -1484,6 +1488,10 @@ async function ensureIndex(onPhase){
      seconds. It changes only when settings or the schema change, so compare
      before writing and skip the round trip otherwise. */
   const next = JSON.stringify({ ...conf, updated_at:undefined }, null, 2);
+  if (opts.write === false){
+    IDX.configPending = next !== IDX.lastConfig;
+    return IDX.dir;
+  }
   if (next !== IDX.lastConfig){
     await say("Writing config.json…");
     conf.updated_at = new Date().toISOString();
@@ -1828,7 +1836,7 @@ async function backupIndex(reason, onProgress){
   await say("Opening the index…");
   let lastPhase = "opening the index";
   await withDeadline("opening the index", 120000,
-    ensureIndex(async m => { lastPhase = m; await say(m); }))
+    ensureIndex(async m => { lastPhase = m; await say(m); }, { write:false }))
     .catch(e => { throw new Error(errText(e) + "  [stuck at: " + lastPhase + "]"); });
   await say("Waking the drive…");
   await wakeStorage(say);
@@ -1895,7 +1903,7 @@ const CORE_FILES = ["records.jsonl", "vectors.bin", "vectors.json", "config.json
 async function moveIndexTo(destParent, onProgress){
   const say = async m => { if (onProgress) await onProgress(m); };
   await say("Opening the current index…");
-  await ensureIndex();
+  await ensureIndex(null, { write:false });
   const from = IDX.dir;
   await say("Creating .photoindex in the new location…");
   const to = await destParent.getDirectoryHandle(".photoindex", { create:true });
@@ -1938,7 +1946,7 @@ async function moveIndexTo(destParent, onProgress){
 /* Restoring overwrites the live index, so take a safety copy of the CURRENT
    state first — otherwise a mistaken restore is unrecoverable. */
 async function restoreBackup(name, onProgress){
-  await ensureIndex();
+  await ensureIndex(null, { write:false });
   const dir = await backupsDir();
   const src = await dir.getDirectoryHandle(name);
   if (onProgress) await onProgress("Saving the current index first…");
@@ -3440,7 +3448,7 @@ async function refreshPlan(){
       await st.note("Detecting models…");
       await autoConnect();
     }
-    await ensureIndex();
+    await ensureIndex(null, { write:false });
     await st.note("Waking the drive…");
     await wakeStorage(m => st.note(m));
     if (!IDX.loaded){
@@ -5038,6 +5046,37 @@ async function selfTest(){
       ok("an object without either is still described",
          errText({}) !== "" && errText({}) !== "[object Object]", errText({}));
       eq("null does not produce blank", errText(null), "unknown error");
+    }
+
+    /* ---- a backup must not write to the index it is backing up ----
+       Rewriting config.json was the only step that ever failed, and a backup
+       has no reason to do it: it reads records and writes copies elsewhere. */
+    {
+      const realWrite = writeFile;
+      let writes = [];
+      /* Record WHAT is written: the backup legitimately writes its own
+         manifest.json into the new folder. What it must never do is write to
+         the index's own files. */
+      writeFile = async (h, t) => { writes.push(h && h.name || "?"); return realWrite(h, t); };
+
+      IDX.lastConfig = null;
+      await ensureIndex(null, { write:false });
+      eq("opening read-only writes nothing", writes.length, 0);
+      ok("but it notices config is out of date", IDX.configPending === true);
+
+      writes = [];
+      await backupIndex("read-only-check");
+      const touchedIndex = writes.filter(n => n !== "manifest.json");
+      eq("a backup writes nothing into the index itself",
+         touchedIndex.join(",") || "nothing", "nothing");
+      ok("it writes only its own manifest", writes.includes("manifest.json"),
+         writes.join(","));
+
+      writeFile = realWrite;
+      IDX.lastConfig = null;
+      const dirRO = await backupsDir();
+      for (const x of await listBackups())
+        { try { await dirRO.removeEntry(x.name, { recursive:true }); } catch {} }
     }
 
     /* ---- housekeeping failures must not abort real work ---- */

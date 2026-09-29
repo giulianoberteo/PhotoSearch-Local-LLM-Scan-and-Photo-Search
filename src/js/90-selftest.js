@@ -563,6 +563,37 @@ async function selfTest(){
       eq("null does not produce blank", errText(null), "unknown error");
     }
 
+    /* ---- a backup must not write to the index it is backing up ----
+       Rewriting config.json was the only step that ever failed, and a backup
+       has no reason to do it: it reads records and writes copies elsewhere. */
+    {
+      const realWrite = writeFile;
+      let writes = [];
+      /* Record WHAT is written: the backup legitimately writes its own
+         manifest.json into the new folder. What it must never do is write to
+         the index's own files. */
+      writeFile = async (h, t) => { writes.push(h && h.name || "?"); return realWrite(h, t); };
+
+      IDX.lastConfig = null;
+      await ensureIndex(null, { write:false });
+      eq("opening read-only writes nothing", writes.length, 0);
+      ok("but it notices config is out of date", IDX.configPending === true);
+
+      writes = [];
+      await backupIndex("read-only-check");
+      const touchedIndex = writes.filter(n => n !== "manifest.json");
+      eq("a backup writes nothing into the index itself",
+         touchedIndex.join(",") || "nothing", "nothing");
+      ok("it writes only its own manifest", writes.includes("manifest.json"),
+         writes.join(","));
+
+      writeFile = realWrite;
+      IDX.lastConfig = null;
+      const dirRO = await backupsDir();
+      for (const x of await listBackups())
+        { try { await dirRO.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
     /* ---- housekeeping failures must not abort real work ---- */
     {
       const realWrite = writeFile;

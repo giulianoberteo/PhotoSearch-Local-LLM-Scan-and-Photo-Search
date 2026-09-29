@@ -130,7 +130,7 @@ async function backupIndex(reason, onProgress){
   await say("Opening the index…");
   let lastPhase = "opening the index";
   await withDeadline("opening the index", 120000,
-    ensureIndex(async m => { lastPhase = m; await say(m); }))
+    ensureIndex(async m => { lastPhase = m; await say(m); }, { write:false }))
     .catch(e => { throw new Error(errText(e) + "  [stuck at: " + lastPhase + "]"); });
   await say("Waking the drive…");
   await wakeStorage(say);
@@ -197,7 +197,7 @@ const CORE_FILES = ["records.jsonl", "vectors.bin", "vectors.json", "config.json
 async function moveIndexTo(destParent, onProgress){
   const say = async m => { if (onProgress) await onProgress(m); };
   await say("Opening the current index…");
-  await ensureIndex();
+  await ensureIndex(null, { write:false });
   const from = IDX.dir;
   await say("Creating .photoindex in the new location…");
   const to = await destParent.getDirectoryHandle(".photoindex", { create:true });
@@ -240,7 +240,7 @@ async function moveIndexTo(destParent, onProgress){
 /* Restoring overwrites the live index, so take a safety copy of the CURRENT
    state first — otherwise a mistaken restore is unrecoverable. */
 async function restoreBackup(name, onProgress){
-  await ensureIndex();
+  await ensureIndex(null, { write:false });
   const dir = await backupsDir();
   const src = await dir.getDirectoryHandle(name);
   if (onProgress) await onProgress("Saving the current index first…");

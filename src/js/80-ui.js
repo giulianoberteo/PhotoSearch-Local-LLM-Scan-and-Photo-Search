@@ -243,7 +243,7 @@ async function refreshPlan(){
       await st.note("Detecting models…");
       await autoConnect();
     }
-    await ensureIndex();
+    await ensureIndex(null, { write:false });
     await st.note("Waking the drive…");
     await wakeStorage(m => st.note(m));
     if (!IDX.loaded){
