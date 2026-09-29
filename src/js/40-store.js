@@ -4,7 +4,7 @@ const IDX = {
   dir:null, thumbs:null,
   records:new Map(),          // light records only: raw JSON + embeddings live on disk
   vec:{ dim:0, ids:[], rows:null, index:new Map() },
-  loaded:false, checkpoint:null
+  loaded:false, checkpoint:null, lastConfig:null
 };
 /* Heavy fields are stripped before a record enters memory, so a 50k-photo
    library costs kilobytes per record rather than tens of kilobytes. */
@@ -72,8 +72,15 @@ async function ensureIndex(){
     conf.photo_root = S.dirHandle.name;
   }
   conf.index_mode = S.indexMode;
-  conf.updated_at = new Date().toISOString();
-  await writeFile(cfg, JSON.stringify(conf, null, 2));
+  /* Writing config.json is not free: on a slow share a tiny write measured 24
+     seconds. It changes only when settings or the schema change, so compare
+     before writing and skip the round trip otherwise. */
+  const next = JSON.stringify({ ...conf, updated_at:undefined }, null, 2);
+  if (next !== IDX.lastConfig){
+    conf.updated_at = new Date().toISOString();
+    await writeFile(cfg, JSON.stringify(conf, null, 2));
+    IDX.lastConfig = next;
+  }
   return IDX.dir;
 }
 

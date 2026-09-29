@@ -10,6 +10,30 @@ async function backupsDir(){
   return IDX.dir.getDirectoryHandle("backups", { create:true });
 }
 
+/* Every await here can stall on a network share. Without a deadline the UI sits
+   on one label forever with no way to tell which step is stuck. */
+async function withDeadline(label, ms, promise){
+  let timer;
+  const bomb = new Promise((_, rej) => {
+    timer = setTimeout(() => rej(new Error(label + " did not finish within "
+      + Math.round(ms / 1000) + "s — the share may be slow or asleep")), ms);
+  });
+  try { return await Promise.race([promise, bomb]); }
+  finally { clearTimeout(timer); }
+}
+
+/* An interrupted createWritable leaves a .crswap file behind. They are dead
+   weight and can confuse a later write to the same name. */
+async function sweepSwapFiles(dir){
+  const stale = [];
+  try {
+    for await (const [name, h] of dir.entries())
+      if (h.kind === "file" && name.endsWith(".crswap")) stale.push(name);
+    for (const n of stale) { try { await dir.removeEntry(n); } catch {} }
+  } catch {}
+  return stale.length;
+}
+
 /* Copies a file without loading it into memory: a File is a Blob, and the
    writable stream accepts one directly. */
 async function copyInto(srcDir, destDir, name){
@@ -70,17 +94,29 @@ async function verifyRecordsFile(fileHandle){
 }
 
 async function backupIndex(reason, onProgress){
-  await ensureIndex();
+  const say = async m => { if (onProgress) await onProgress(m); };
+  await say("Opening the index…");
+  await withDeadline("opening the index", 30000, ensureIndex());
+  await say("Opening backups/…");
+  const dir = await withDeadline("opening backups/", 30000, backupsDir());
+  await sweepSwapFiles(dir);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dir = await backupsDir();
-  const dest = await dir.getDirectoryHandle(stamp, { create:true });
+  await say("Creating " + stamp + "…");
+  const dest = await withDeadline("creating the backup folder", 30000,
+    dir.getDirectoryHandle(stamp, { create:true }));
   const copied = [];
   for (const name of BACKUP_FILES){
-    if (onProgress) await onProgress("Copying " + name + "…");
-    const r = await copyInto(IDX.dir, dest, name);
+    let sizeHint = "";
+    try {
+      const f = await (await IDX.dir.getFileHandle(name)).getFile();
+      sizeHint = " (" + (f.size / 1048576).toFixed(1) + " MB)";
+    } catch {}
+    await say("Copying " + name + sizeHint + "…");
+    const r = await withDeadline("copying " + name, 600000,
+      copyInto(IDX.dir, dest, name));
     if (r) copied.push(r);
   }
-  if (onProgress) await onProgress("Verifying…");
+  await say("Verifying…");
   let check = null;
   try { check = await verifyRecordsFile(await dest.getFileHandle("records.jsonl")); }
   catch {}
@@ -100,6 +136,57 @@ async function backupIndex(reason, onProgress){
   const pruned = await pruneBackups(S.backup.keep);
   return { stamp, manifest, pruned,
     bytes: copied.reduce((a, c) => a + c.bytes, 0) };
+}
+
+/* ---- relocating the index ----
+   The index belongs on fast local storage even when the photos do not. These
+   five files are the whole library; thumbnails are excluded because there are
+   thousands of them and per-file latency on a slow share makes copying them
+   take hours. They can be rebuilt from the originals without any model calls. */
+const CORE_FILES = ["records.jsonl", "vectors.bin", "vectors.json", "config.json",
+                    "runs.jsonl", "state.json"];
+
+async function moveIndexTo(destParent, onProgress){
+  const say = async m => { if (onProgress) await onProgress(m); };
+  await say("Opening the current index…");
+  await ensureIndex();
+  const from = IDX.dir;
+  await say("Creating .photoindex in the new location…");
+  const to = await destParent.getDirectoryHandle(".photoindex", { create:true });
+  const moved = [];
+  for (const name of CORE_FILES){
+    let hint = "";
+    try {
+      const f = await (await from.getFileHandle(name)).getFile();
+      hint = " (" + (f.size / 1048576).toFixed(1) + " MB)";
+    } catch { continue; }                       // not every file always exists
+    await say("Copying " + name + hint + "…");
+    const r = await withDeadline("copying " + name, 900000, copyInto(from, to, name));
+    if (r) moved.push(r);
+  }
+  // the cached place-name data is small and tedious to re-fetch
+  try {
+    const gFrom = await from.getDirectoryHandle("geo");
+    const gTo = await to.getDirectoryHandle("geo", { create:true });
+    for (const n of ["cities.bin", "names.txt", "meta.json"]){
+      await say("Copying geo/" + n + "…");
+      await copyInto(gFrom, gTo, n);
+    }
+  } catch {}
+  await say("Switching over…");
+  S.indexMode = "custom";
+  S.indexDirHandle = destParent;
+  try { await idbSet("lastIndexDir", destParent); } catch {}
+  saveSettings();
+  IDX.lastConfig = null;
+  IDX.loaded = false;
+  await ensureIndex();
+  await loadRecords();
+  await loadVectors();
+  await loadCheckpoint();
+  rebuildDerived();
+  return { files: moved, records: IDX.records.size, vectors: IDX.vec.ids.length,
+           bytes: moved.reduce((a, f) => a + f.bytes, 0) };
 }
 
 /* Restoring overwrites the live index, so take a safety copy of the CURRENT

@@ -546,6 +546,74 @@ async function selfTest(){
         { try { await dirB2.removeEntry(x.name, { recursive:true }); } catch {} }
     }
 
+    /* ---- the index can be moved to faster storage ---- */
+    {
+      const keepMode = S.indexMode, keepIdx = S.indexDirHandle;
+      const before = IDX.records.size;
+      const fast = await root.getDirectoryHandle("fastdisk", { create:true });
+      await rmAll(fast);
+      const phases = [];
+      const r = await moveIndexTo(fast, m => phases.push(m));
+      eq("every record survives the move", r.records, before);
+      ok("it reports what it copied", r.files.length >= 1,
+         r.files.map(f => f.name).join(", "));
+      ok("each step is named", phases.some(m => /Copying records\.jsonl/.test(m)),
+         phases.join(" | "));
+      eq("the app now uses the new location", S.indexMode, "custom");
+      ok("and the new location really holds the records",
+         !!(await (await fast.getDirectoryHandle(".photoindex"))
+              .getFileHandle("records.jsonl")));
+      /* ensureIndex creates an empty thumbs/ at the destination, so assert it
+         is EMPTY rather than absent: none of the 6,000-odd files were copied. */
+      let thumbCount = 0;
+      try {
+        const td = await (await fast.getDirectoryHandle(".photoindex"))
+          .getDirectoryHandle("thumbs");
+        for await (const [] of td.entries()) thumbCount++;
+      } catch {}
+      eq("no thumbnails are copied — they rebuild from the originals", thumbCount, 0);
+
+      S.indexMode = keepMode; S.indexDirHandle = keepIdx;
+      IDX.lastConfig = null; IDX.loaded = false;
+      await ensureIndex(); await loadRecords(); await loadVectors();
+      eq("switching back finds the original index again", IDX.records.size, before);
+      await rmAll(fast);
+    }
+
+    /* ---- config.json is not rewritten for nothing ---- */
+    {
+      IDX.lastConfig = null;
+      await ensureIndex();
+      const first = IDX.lastConfig;
+      ok("the first call writes it", !!first);
+      await ensureIndex();
+      ok("a second call with no changes writes nothing new",
+         IDX.lastConfig === first, first ? first.length + " chars, unchanged" : "none");
+    }
+
+    /* ---- a backup must report where it is, and never hang ---- */
+    {
+      const phases = [];
+      await backupIndex("phase-test", m => { phases.push(m); });
+      ok("each step is named", phases.length >= 5, phases.join(" | "));
+      ok("it says which file it is copying",
+         phases.some(m => /Copying records\.jsonl/.test(m)), phases.join(" | "));
+      ok("and reports the size so a slow copy looks slow, not stuck",
+         phases.some(m => /MB/.test(m)), phases.join(" | "));
+
+      /* a stalled step must fail with a named cause, not sit there */
+      let failed = null;
+      try {
+        await withDeadline("a stuck step", 60, new Promise(() => {}));
+      } catch (e){ failed = e.message; }
+      ok("a stalled step times out and says which one",
+         !!failed && /a stuck step/.test(failed), failed);
+
+      const dirP = await backupsDir();
+      for (const x of await listBackups())
+        { try { await dirP.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
     /* ---- backups ---- */
     {
       const keepCfg = { ...S.backup };

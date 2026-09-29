@@ -474,6 +474,33 @@ $("#btnStop").onclick = () => {
   toast("Stopping… progress is saved and resumable.");
 };
 
+$("#btnMoveIndex").onclick = async () => {
+  if (RUN.active){ toast("Stop the scan before moving the index."); return; }
+  const host = $("#fsOut"); resetChecks(host);
+  if (!(await ensureConnected("the move"))) return;
+  let dest;
+  try { dest = await pickDirectory(); }
+  catch (e){
+    if (e.name === "AbortError") return;
+    if (isPickerStuck(e)){ offerPickerReset(); return; }
+    toast(String(e.message || e)); return;
+  }
+  if (!dest) return;
+  const st = step(host, "Moving the index to " + dest.name);
+  try {
+    const r = await moveIndexTo(dest, m => st.note(m));
+    st.ok(r.records + " records and " + r.vectors + " vectors now in "
+      + dest.name + "/.photoindex/ (" + (r.bytes/1048576).toFixed(1) + " MB). "
+      + "Thumbnails were left behind — they rebuild from the originals.");
+    renderIndexWhere();
+    await refreshPlan();
+    toast("Index moved to " + dest.name);
+  } catch (e){
+    st.err(String(e.message || e));
+    toast("Move failed: " + String(e.message || e));
+  }
+};
+
 $("#btnIndexReveal").onclick = async () => {
   const host = $("#fsOut"); resetChecks(host);
   const st = step(host, "Index contents");
