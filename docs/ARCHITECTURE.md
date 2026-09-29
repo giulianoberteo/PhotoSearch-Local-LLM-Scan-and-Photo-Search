@@ -10,7 +10,8 @@ PhotoSearch.html
 ├── planner                      walk · identity matching · new/changed/stale/missing
 ├── scan runner                  queue · retries · checkpoint · backup
 ├── search                       BM25 + cosine + reciprocal rank fusion
-└── chat agent                   tool-calling loop over the index
+├── chat agent                   tool-calling loop over the index
+└── fault proxy (test-only)      slow · hanging · failing · short-writing storage
 ```
 
 ## The index
@@ -133,11 +134,30 @@ nodes, so a caption containing markup stays inert. There is a test asserting exa
 - a failure keeps its `cause`, so callers can tell a deleted folder from an unreachable
   share — the two need opposite responses, and a `DOMException` loses its name when wrapped
 
+## Storage is assumed to be slow and unreliable
+
+Not as an edge case — as the normal case. The index lives on an SMB share where a single
+round trip measured 24 seconds when the drives were asleep, and a directory listing 75.
+
+- **Speed is measured, not guessed.** Opening `.photoindex/` and reading `config.json` are
+  timed as they happen, so the probe costs nothing extra, and a listing is timed once on
+  connect. The result is shown to the user in Settings.
+- **Every deadline is sized from that measurement** (`ioDeadline`), between a floor and a
+  cap. The alternative was a guessed constant, raised from 30s to 120s to 120s again, each
+  time after it fired on storage that was merely slow rather than broken.
+- **One wrapper for every index operation.** `indexOp(label, fn)` supplies the deadline,
+  the progress reporting and the error naming. A failure always says both what was
+  attempted and how far it got — `opening the index … [stuck at: Reading config.json…]` —
+  because the backup that failed four times reported the least of anything in the app.
+- **Writes are verified by length.** `appendLines` and `appendVectors` both re-read the
+  file and refuse to report success unless it grew by exactly what was written.
+
 ## Known gaps
 
 - **Thumbnails have no rebuild path.** They are written only during a scan and excluded
   from backups; a missing `thumbs/<id>.jpg` renders as a blank tile and can only be
   recovered by re-scanning that photo. Nothing else depends on them.
-- **Tests run against OPFS**, which is fast and never fails. The conditions that actually
-  break this app — 75-second directory listings, operations that never return — are not yet
-  reproducible in the suite. A fault-injecting handle proxy is designed but not built.
+- **The fault-injection suite is simulation.** `95-faultfs.js` reproduces latency, hangs,
+  failing and short writes, and the assertions were verified by removing the fixes and
+  watching them go red. It is still OPFS underneath: it models the failures observed on
+  the real share rather than the share itself.

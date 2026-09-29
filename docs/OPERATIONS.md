@@ -176,11 +176,29 @@ The last row is the problem. It is not specific to the app — a plain `ls` from
 line hangs the same way. Directory operations on this share intermittently stop responding,
 and nothing in the browser can work around that.
 
-**Practical consequences:**
+**What the app now does about it:**
 
-- The in-app backup may fail. Use the shell command in §2 instead.
-- **Refresh plan** may be slow or stall. Retry when the NAS is responsive.
-- Scanning worked fine for 68 hours, because it is mostly model time with occasional writes.
+- **It measures your storage on connect** and says what it found, in Settings under the
+  index location: *"storage: 24000 ms per operation (very slow — likely a sleeping network
+  share); deadlines 180s"*. Every time limit is then sized from that measurement rather
+  than from a fixed number — which is why the backup used to give up after 30 seconds on a
+  share that needs 24 just to wake.
+- **Nothing sits on a label any more.** If an operation does stall, it fails with both what
+  it was attempting and how far it got: *"opening the index did not finish within 180s
+  [stuck at: Reading config.json…]"*. That names the step, which is the difference between
+  a report and a shrug.
+- **Opening the index never touches `thumbs/`** — the 75-second row above. That folder is
+  opened only when a thumbnail is actually displayed.
+- **Writes are checked, not assumed.** After appending records the file is re-read and its
+  length compared; a write that came back short is reported instead of being treated as
+  saved.
+
+**Still true:**
+
+- If the share genuinely stops responding, nothing in a browser can fix that. The shell
+  command in §2 is the fallback, and it always works.
+- Scanning is mostly model time with occasional writes, which is why it ran for 68 hours
+  without trouble while single operations were failing.
 
 The index stays on the NAS. There is no "move the index elsewhere" command in the app —
 it was removed. If you ever want the index somewhere faster, set **Where to save the

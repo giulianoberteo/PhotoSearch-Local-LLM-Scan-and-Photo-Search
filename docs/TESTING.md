@@ -7,7 +7,7 @@ in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it 
 responses and an [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
 scratch folder, so your real photos and index are never touched.
 
-**264 assertions** covering:
+**293 assertions** covering:
 
 - pure logic — Easter/occasion dates, singularisation, validation caps, enum checks
 - `image_type` correction from filename, EXIF, dimensions and caption
@@ -22,6 +22,7 @@ scratch folder, so your real photos and index are never touched.
 - UI invariants — nothing marked `hidden` is actually visible
 - storage invariants — the vectors bin is always exactly as long as its id list claims,
   a torn final row is healed, and an unforced checkpoint save is throttled, not written
+- **storage that misbehaves** — slow, hanging, failing and short writes (see below)
 
 A real HEIC decode is skipped unless you supply a sample:
 
@@ -50,6 +51,61 @@ and the suite cannot create its scratch folder.
 
 **`--dump-dom` does not work** for this. It fires at load, before any async work, and
 `--virtual-time-budget` stalls indefinitely on IndexedDB and OPFS. Drive it over CDP.
+
+## Testing against storage that misbehaves
+
+Every other test here runs against OPFS, which is fast, local and never fails. The
+conditions that actually broke this app are the opposite, and until `src/js/95-faultfs.js`
+existed none of them were reproducible: three defects shipped that no number of green
+assertions could have caught.
+
+`faultFS(handle, opts)` wraps a directory handle in a Proxy that can be told to misbehave.
+Everything it returns is wrapped too, so one call at the entry point covers the whole tree:
+
+```js
+const stats = {};
+S.indexDirHandle = faultFS(dir, {
+  latencyMs: 250,                  // added to every operation
+  slowPaths: { "thumbs": 75000 },  // the measured 75-second listing
+  hangPaths: [".photoindex"],      // never resolves, like the real share
+  failWrites: 0.1,                 // fraction of writes that throw
+  shortWrites: 0.5,                // fraction of each write silently dropped
+  stats                            // ops, failures, and every path touched
+});
+```
+
+Handles enter the app at four points, so wrapping is contained: `useDirectory` and three
+`S.indexDirHandle` assignments. Nothing in the app calls `faultFS` — it is test-only.
+
+`shortWrites` is the nastiest of the five, and the reason `appendLines` checks the
+resulting file length: a write that reports success having stored half its data raises no
+error anywhere, so the caller carries on believing those records are safe.
+
+For a share that drops a connection and then recovers — the case retries exist for — use
+the supplied rng:
+
+```js
+faultFS(dir, { failWrites: 1, rng: failFirstWrites(2) })   // first two writes fail
+```
+
+**A hang is deliberately unrecoverable.** `hangPaths` awaits a promise that never settles,
+exactly as the real share behaves. Anything that must survive it has to impose its own
+deadline, which is the point of asserting against it — so set `S.io.deadlineCapMs` low
+(a few hundred ms) for the duration of such a test, and restore it afterwards. Never let a
+hang happen inside `exclusive()`: that lock serialises every index write, and a wedged
+chain would stall the rest of the suite.
+
+### Prove the test can fail
+
+A test that cannot fail is decorative. Both fault-injection guarantees were verified by
+removing the fix and confirming the suite goes red:
+
+| mutation | caught by |
+|---|---|
+| `ensureIndex` opens `thumbs/` eagerly again | 3 assertions, incl. *opening the index never touches thumbs/* |
+| `appendLines` stops checking the resulting length | *a write that silently lands short is caught* |
+
+Do this for any new assertion that guards a defect which has actually shipped.
 
 ### A modal dialog wedges the whole suite
 

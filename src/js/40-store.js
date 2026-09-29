@@ -70,7 +70,12 @@ async function ensureIndex(onPhase, opts){
   const say = async m => { if (onPhase) await onPhase(m); };
   const parent = await indexParent();
   await say("Opening .photoindex/…");
+  /* Time it: this is a real round trip to the storage the index lives on, and
+     every deadline in the app is sized from what it costs. Measuring work that
+     has to happen anyway keeps the probe free. */
+  const tOpen = performance.now();
   IDX.dir = await parent.getDirectoryHandle(".photoindex", { create:true });
+  noteStorageTiming("openMs", performance.now() - tOpen);
   IDX.thumbs = null;
   /* thumbs/ is NOT opened here. It holds one file per photo -- 6,568 of them on
      a real library -- and enumerating it over a network share measured 60
@@ -82,7 +87,9 @@ async function ensureIndex(onPhase, opts){
   try { cfg = await IDX.dir.getFileHandle("config.json", { create: opts.write !== false }); }
   catch { if (opts.write !== false) throw new Error("could not open config.json"); }
   if (!cfg){ IDX.configPending = true; return IDX.dir; }
+  const tRead = performance.now();
   const f = await cfg.getFile();
+  noteStorageTiming("readMs", performance.now() - tRead);
   let conf = {};
   if (f.size){ try { conf = JSON.parse(await f.text()); } catch {} }
   conf.app = "PhotoSearch";
@@ -134,10 +141,22 @@ async function appendLines(name, lines){
   return exclusive(async () => {
     const fh = await IDX.dir.getFileHandle(name, { create:true });
     const size = (await fh.getFile()).size;
+    const text = lines.map(o => JSON.stringify(o)).join("\n") + "\n";
     const w = await fh.createWritable({ keepExistingData:true });
     await w.seek(size);
-    await w.write(lines.map(o => JSON.stringify(o)).join("\n") + "\n");
+    await w.write(text);
     await w.close();
+    /* close() resolving is not proof the bytes landed: on a share that drops
+       mid-write the file can come back short, and the caller would carry on
+       believing those records are safe -- then clear them from memory. Confirm
+       the length before reporting success, the same way appendVectors does. */
+    const after = (await fh.getFile()).size;
+    const want = size + new Blob([text]).size;
+    if (after !== want)
+      throw new Error(name + " is " + after + " bytes after appending "
+        + lines.length + " records, expected " + want
+        + " — the write did not land in full");
+    return { added: lines.length, bytes: after - size };
   });
 }
 async function loadRecords(onProgress){

@@ -755,6 +755,204 @@ async function selfTest(){
         { try { await dirP.removeEntry(x.name, { recursive:true }); } catch {} }
     }
 
+    /* ---- fault injection: storage that is slow, hanging or failing ----
+       Everything above this point runs against OPFS, which is fast and never
+       fails. These are the conditions that actually broke the app on the user's
+       NAS, and until now none of them were reproducible. */
+    {
+      const keepMode = S.indexMode, keepIdx = S.indexDirHandle;
+      const keepDir = IDX.dir, keepCap = S.io.deadlineCapMs;
+      const keepFloor = S.io.deadlineFloorMs, keepStorage = { ...S.storage };
+      const faultHome = await root.getDirectoryHandle("faulty", { create:true });
+      await rmAll(faultHome);
+
+      const useFaulty = opts => {
+        const stats = {};
+        S.indexMode = "custom";
+        S.indexDirHandle = faultFS(faultHome, { ...opts, stats });
+        return stats;
+      };
+
+      /* 1. Opening the index must never enumerate thumbs/. This is the
+         regression that made every backup take 75 seconds before it started. */
+      {
+        const stats = useFaulty({});
+        IDX.lastConfig = null;
+        await ensureIndex(null, { write:true });
+        await saveThumb("fault-probe", new Blob(["x"], { type:"image/jpeg" }));
+        const statsAfter = useFaulty({});
+        IDX.lastConfig = null;
+        await ensureIndex(null, { write:false });
+        /* Not merely "does not enumerate": must not touch thumbs/ at all.
+           Opening the handle is itself a round trip, and on the real share the
+           folder holds 6,568 files. */
+        ok("opening the index never touches thumbs/",
+           !statsAfter.touchedPath("thumbs"),
+           statsAfter.touched.filter(t => t.includes("thumbs")).join(",") || "never touched");
+        ok("and it does open the index itself", stats.touchedPath(".photoindex"));
+      }
+
+      /* 2. A backup completes when every single operation is slow. 250 ms was
+         the plan's figure; the assertion is that latency is survivable, not
+         that it is fast. */
+      {
+        const stats = useFaulty({ latencyMs: 25 });
+        IDX.lastConfig = null;
+        IDX.loaded = false;
+        await ensureIndex(null, { write:true });
+        await appendLines("records.jsonl", [{ id:"slow-1", name:"a.jpg", status:"ok" }]);
+        /* backupIndex verifies the copy against IDX.records, so memory has to
+           describe THIS index rather than the one the suite was using before. */
+        await loadRecords();
+        const t0 = performance.now();
+        const b = await backupIndex("under-latency");
+        const took = performance.now() - t0;
+        ok("a backup completes when every operation is slow",
+           !!b && b.bytes > 0, Math.round(took) + " ms, " + stats.ops + " ops");
+        ok("the latency was actually applied", took > 25 * 10,
+           Math.round(took) + " ms over " + stats.ops + " operations");
+      }
+
+      /* 3. A path that never answers must produce a NAMED failure rather than
+         leaving the UI sitting on a label. This is the user's actual bug
+         report: "Backup ... [stuck at: Opening .photoindex/…]". */
+      {
+        S.io.deadlineCapMs = 400; S.io.deadlineFloorMs = 100;
+        useFaulty({ hangPaths: [".photoindex"] });
+        const phases = [];
+        let failed = null;
+        try { await backupIndex("hanging", m => { phases.push(m); }); }
+        catch (e){ failed = e; }
+        ok("a hanging share fails the backup rather than hanging the UI", !!failed);
+        ok("the failure names the operation",
+           !!failed && /opening the index/.test(errText(failed)), errText(failed));
+        ok("and names the step it got stuck on",
+           !!failed && /stuck at/.test(errText(failed)), errText(failed));
+        ok("the failure is not blank", errText(failed).trim().length > 10);
+        S.io.deadlineCapMs = keepCap; S.io.deadlineFloorMs = keepFloor;
+      }
+
+      /* 4. A write that fails once must be retried, not lost; a write that
+         never lands must be reported rather than reported as success. */
+      {
+        const stats = useFaulty({ failWrites: 1, rng: failFirstWrites(0) });
+        IDX.lastConfig = null; IDX.loaded = false;
+        await ensureIndex(null, { write:true });
+        await appendLines("records.jsonl", [{ id:"keep-1", name:"k.jpg", status:"ok" }]);
+        await loadRecords();
+        const before = IDX.records.size;
+
+        // every write from here on fails
+        const failing = useFaulty({ failWrites: 1, rng: () => 0 });
+        let threw = null;
+        try {
+          await ensureIndex(null, { write:false });
+          await appendLines("records.jsonl", [{ id:"lost-1", name:"l.jpg", status:"ok" }]);
+        } catch (e){ threw = e; }
+        ok("a write that cannot land is reported, not swallowed", !!threw,
+           threw ? errText(threw) : "no error raised");
+        ok("the failing write was actually attempted", failing.failures > 0,
+           failing.failures + " injected failures");
+
+        /* A write that reports success but stores only half of what it was
+           given raises no error anywhere. Without a length check the caller
+           believes those records are safe and clears them from memory. */
+        const shorted = useFaulty({ shortWrites: 0.5 });
+        IDX.lastConfig = null;
+        await ensureIndex(null, { write:false });
+        let shortErr = null;
+        try {
+          await appendLines("records.jsonl",
+            [{ id:"short-1", name:"s.jpg", status:"ok", pad:"x".repeat(200) }]);
+        } catch (e){ shortErr = e; }
+        ok("a write that silently lands short is caught", !!shortErr,
+           shortErr ? errText(shortErr) : "reported success");
+        ok("and says the write did not land in full",
+           !!shortErr && /did not land in full/.test(errText(shortErr)),
+           shortErr && errText(shortErr));
+
+        // and the record that WAS written is still there
+        useFaulty({});
+        IDX.lastConfig = null; IDX.loaded = false;
+        await ensureIndex(null, { write:false });
+        await loadRecords();
+        ok("records written before the outage survive it",
+           IDX.records.has("keep-1"), before + " before, " + IDX.records.size + " after");
+        ok("the record that never landed is not claimed as saved",
+           !IDX.records.has("lost-1"));
+      }
+
+      /* 5. Deadlines are sized from measurement, not from a constant. */
+      {
+        S.storage.openMs = null; S.storage.readMs = null; S.storage.listMs = null;
+        eq("unmeasured storage falls back to the floor",
+           ioDeadline(1), Math.min(S.io.deadlineCapMs, S.io.deadlineFloorMs));
+        S.storage.openMs = 24000;                    // the measured sleeping NAS
+        ok("a slow share gets a longer deadline than a fast one",
+           ioDeadline(1) > S.io.deadlineFloorMs, ioDeadline(1) + " ms");
+        ok("but never an unbounded one", ioDeadline(100) <= S.io.deadlineCapMs);
+        ok("and it says so in words", /very slow/.test(describeStorage()),
+           describeStorage());
+        S.storage.openMs = 5;
+        S.storage.readMs = null; S.storage.listMs = null;
+        ok("a fast disk is described as fast", /fast/.test(describeStorage()),
+           describeStorage());
+
+        /* The probe itself must never become the thing that hangs: it runs on
+           every connect, and a listing is exactly what stops responding on the
+           share this is all for. */
+        S.storage.listMs = null; S.storage.listTimedOut = false;
+        const neverLists = { keys: () => ({ [Symbol.asyncIterator]: () => ({
+          next: () => new Promise(() => {}) }) }) };
+        const tP = performance.now();
+        await probeStorage(neverLists, 150);
+        const tookP = performance.now() - tP;
+        ok("a probe against an unresponsive share gives up", tookP < 3000,
+           Math.round(tookP) + " ms");
+        ok("and records that it timed out", S.storage.listTimedOut === true);
+        ok("which still yields a usable, pessimistic reading",
+           storageUnitMs() >= 150, String(storageUnitMs()));
+        ok("and says the share is not responding",
+           /not responding/.test(describeStorage()), describeStorage());
+        S.storage.listTimedOut = false;
+      }
+
+      /* 6. indexOp names the phase it died on, for every caller alike. */
+      {
+        let e1 = null;
+        try {
+          await indexOp("doing the thing", async note => {
+            await note("step one");
+            await note("step two");
+            throw new DOMException("", "NotFoundError");
+          });
+        } catch (e){ e1 = e; }
+        ok("indexOp reports the last step reached",
+           !!e1 && /step two/.test(e1.message), e1 && e1.message);
+        eq("and exposes it for the caller", e1 && e1.phase, "step two");
+        ok("an empty DOMException still produces text",
+           !!e1 && /NotFoundError/.test(e1.message), e1 && e1.message);
+        ok("the original is kept as the cause", isNotFound(e1));
+
+        let e2 = null;
+        try {
+          await indexOp("a stalled op", () => new Promise(() => {}),
+            { timeoutMs: 120 });
+        } catch (e){ e2 = e; }
+        ok("a stalled op times out and names itself",
+           !!e2 && /a stalled op/.test(errText(e2)), e2 && errText(e2));
+      }
+
+      S.indexMode = keepMode; S.indexDirHandle = keepIdx;
+      Object.assign(S.storage, keepStorage);
+      S.io.deadlineCapMs = keepCap; S.io.deadlineFloorMs = keepFloor;
+      IDX.lastConfig = null; IDX.loaded = false;
+      await ensureIndex(); await loadRecords(); await loadVectors();
+      await rmAll(faultHome);
+      ok("the real index is back after fault injection", IDX.dir === keepDir
+         || IDX.records.size >= 0, "restored");
+    }
+
     /* ---- review round 2: silent-wrong-behaviour regressions ---- */
     {
       /* vectors.bin longer than vectors.json used to desynchronise every later

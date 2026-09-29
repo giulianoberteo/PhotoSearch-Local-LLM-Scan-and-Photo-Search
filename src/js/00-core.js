@@ -48,7 +48,12 @@ const S = {
      one index covers everything. Scope narrows only what a scan walks. */
   scanScope: "",                  // "" = whole library, else "Sicily/" etc.
   subfolders: [],
-  io: { retries:3, retryMs:400 },
+  /* deadlineFactor multiplies the MEASURED cost of a round trip; cap is the
+     ceiling, and the floor stops a fast local disk producing deadlines so
+     tight that a momentary stall looks like a failure. */
+  io: { retries:3, retryMs:400, deadlineFactor:40, deadlineFloorMs:8000,
+        deadlineCapMs:180000 },
+  storage: { openMs:null, readMs:null, listMs:null, at:0, listTimedOut:false },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null
 };
@@ -224,6 +229,119 @@ async function withRetry(label, fn){
     + (tries === 1 ? " try: " : " tries: ") + errText(last));
   err.cause = last;
   throw err;
+}
+
+/* Every await against a network share can stall. Without a deadline the UI sits
+   on one label forever with no way to tell which step is stuck. */
+async function withDeadline(label, ms, promise){
+  let timer;
+  const bomb = new Promise((_, rej) => {
+    timer = setTimeout(() => rej(new Error(label + " did not finish within "
+      + Math.round(ms / 1000) + "s — the share may be slow or asleep")), ms);
+  });
+  try { return await Promise.race([promise, bomb]); }
+  finally { clearTimeout(timer); }
+}
+
+/* ---- storage speed ----
+   Deadlines used to be guessed constants: 30s, then 120s, then 120s again, each
+   raised after it fired on a share that was merely slow rather than broken. A
+   guess cannot be right for both a local SSD and a sleeping NAS, where a single
+   round trip measured 24 seconds. So measure one, and size the rest from it.
+
+   The measurement is taken from work the app has to do anyway -- opening
+   .photoindex/ and reading config.json -- so it costs nothing extra. */
+function noteStorageTiming(kind, ms){
+  if (!(ms >= 0)) return;
+  S.storage[kind] = ms;
+  S.storage.at = Date.now();
+}
+
+/* A directory listing is the operation that actually hurts on this share, so
+   probe with one. Deliberately lists the index folder, never thumbs/.
+
+   The probe must never become the thing that hangs: a listing on this share is
+   exactly what sometimes never returns, and this runs on every connect. Give up
+   at the budget and treat "it did not finish in 15s" as the measurement it is --
+   that is far more informative than no reading at all. */
+async function probeStorage(dir, budgetMs){
+  if (!dir) return S.storage;
+  const budget = budgetMs || 15000;
+  const t0 = performance.now();
+  const listing = (async () => {
+    let n = 0;
+    for await (const _ of dir.keys()){ if (++n >= 25) break; }
+    return "done";
+  })();
+  let outcome;
+  try {
+    outcome = await Promise.race([
+      listing.catch(() => "failed"),
+      new Promise(r => setTimeout(() => r("timeout"), budget))
+    ]);
+  } catch { outcome = "failed"; }
+  if (outcome === "failed") return S.storage;
+  S.storage.listTimedOut = outcome === "timeout";
+  noteStorageTiming("listMs", outcome === "timeout" ? budget : performance.now() - t0);
+  return S.storage;
+}
+
+/* The slowest thing measured so far, as a unit of "one round trip here". */
+function storageUnitMs(){
+  const seen = [S.storage.openMs, S.storage.readMs, S.storage.listMs]
+    .filter(v => typeof v === "number" && v >= 0);
+  return seen.length ? Math.max(...seen) : null;
+}
+
+function ioDeadline(units, floorMs){
+  const unit = storageUnitMs();
+  const floor = floorMs || S.io.deadlineFloorMs;
+  /* Unmeasured storage gets the floor: assuming it is fast is the mistake that
+     produced a 30-second backup deadline on a share needing 24s just to wake. */
+  const want = unit == null ? floor
+    : Math.max(floor, unit * (units || 1) * S.io.deadlineFactor);
+  return Math.min(S.io.deadlineCapMs, want);
+}
+
+function describeStorage(){
+  const unit = storageUnitMs();
+  if (unit == null) return "storage speed not measured yet";
+  const how = S.storage.listTimedOut ? "not responding — listing did not finish"
+            : unit > 3000 ? "very slow — likely a sleeping network share"
+            : unit > 300  ? "slow — a network share"
+            : "fast";
+  return "storage: " + (S.storage.listTimedOut ? "over " : "")
+       + Math.round(unit) + " ms per operation (" + how
+       + "); deadlines " + Math.round(ioDeadline(1) / 1000) + "s";
+}
+
+/* ---- one way to run an index operation ----
+   The scan, the backup and the plan each grew their own mixture of deadline,
+   retry and progress reporting, and they disagreed: some reported every step,
+   some sat on a single label, and the one that failed most often reported the
+   least. indexOp gives all of them the same contract -- a deadline sized from
+   measured storage speed, and a failure that always names the step it died on. */
+async function indexOp(label, fn, opts){
+  const o = opts || {};
+  let phase = label;
+  const say = async m => {
+    phase = m;
+    if (o.onPhase) await o.onPhase(m);
+  };
+  const ms = o.timeoutMs || ioDeadline(o.cost || 1, o.floorMs);
+  try {
+    return await withDeadline(label, ms, fn(say));
+  } catch (e){
+    if (e && e.name === "AbortError") throw e;
+    /* "[stuck at: …]" is the difference between a bug report and a shrug: the
+       label says what was attempted, the phase says how far it got. */
+    const err = new Error(errText(e)
+      + (phase && phase !== label ? "  [stuck at: " + phase + "]" : ""));
+    err.cause = e;
+    err.phase = phase;
+    err.op = label;
+    throw err;
+  }
 }
 
 /* Re-acquires folder permission from inside a click. Chrome grants it only in

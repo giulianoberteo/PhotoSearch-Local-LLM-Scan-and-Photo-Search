@@ -250,7 +250,36 @@ disk is the truth, and the id list must be reconciled to it in **both** directio
 
 ---
 
-## 9. Index size
+## 9. A guessed deadline is always wrong somewhere
+
+The backup's time limit went 30s → 120s → 120s again, raised each time after it fired on
+storage that was slow rather than broken. No constant can be right for both a local SSD
+and a sleeping SMB share, where these were measured on the same hardware:
+
+| operation | local SSD | NAS awake | NAS asleep |
+|---|---:|---:|---:|
+| open a directory handle | < 1 ms | ~50 ms | **24 s** |
+| read a small file | < 1 ms | ~90 ms | ~900 ms |
+| list a 6,568-file folder | ~15 ms | **75.6 s** | 75.6 s+ |
+
+That is four orders of magnitude on the first row. A limit generous enough for the third
+column is no limit at all for the first, and one tuned for the first fails constantly in
+the third.
+
+**Measure instead.** Opening `.photoindex/` and reading `config.json` happen on every
+index open, so timing them costs nothing, and the slowest observed round trip becomes the
+unit that every deadline is expressed in. Unmeasured storage gets the floor rather than an
+optimistic guess — assuming it is fast is precisely the mistake that produced a 30-second
+deadline on a share needing 24 seconds to wake up.
+
+**And report the step, not just the failure.** `"Backup failed"` is unactionable;
+`"opening the index did not finish within 180s  [stuck at: Reading config.json…]"` names
+the operation that hung. The backup that failed four times in a row reported the least of
+anything in the app, which is why it took four attempts to find four different causes.
+
+---
+
+## 10. Index size
 
 Measured on real photos, then projected:
 

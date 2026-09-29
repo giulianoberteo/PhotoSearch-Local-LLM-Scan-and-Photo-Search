@@ -34,6 +34,7 @@ ORDER = [
     "85-chat.js",     # tool-calling agent
     "87-chatui.js",   # chat rendering, lightbox
     "90-selftest.js", # in-browser test suite
+    "95-faultfs.js",  # test-only: slow/hanging/failing filesystem proxy
     "99-boot.js",     # error surfacing, boot
 ]
 

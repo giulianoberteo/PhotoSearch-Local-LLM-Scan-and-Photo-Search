@@ -10,18 +10,6 @@ async function backupsDir(){
   return IDX.dir.getDirectoryHandle("backups", { create:true });
 }
 
-/* Every await here can stall on a network share. Without a deadline the UI sits
-   on one label forever with no way to tell which step is stuck. */
-async function withDeadline(label, ms, promise){
-  let timer;
-  const bomb = new Promise((_, rej) => {
-    timer = setTimeout(() => rej(new Error(label + " did not finish within "
-      + Math.round(ms / 1000) + "s — the share may be slow or asleep")), ms);
-  });
-  try { return await Promise.race([promise, bomb]); }
-  finally { clearTimeout(timer); }
-}
-
 /* An interrupted createWritable leaves a .crswap file behind. They are dead
    weight and can confuse a later write to the same name. */
 async function sweepSwapFiles(dir){
@@ -100,7 +88,7 @@ async function listBackups(){
 }
 
 async function pruneBackups(keep){
-  const all = await withDeadline("listing backups", 120000, listBackups());
+  const all = await indexOp("listing backups", () => listBackups(), { cost: 8 });
   const dir = await backupsDir();
   let removed = 0;
   for (const b of all.slice(Math.max(1, keep))){
@@ -131,19 +119,20 @@ async function backupIndex(reason, onProgress){
      sleeping share needs ~24s just to answer, and copies run at a few hundred
      KB/s. They exist to turn a hang into a message, not to police speed. */
   await say("Opening the index…");
-  let lastPhase = "opening the index";
-  await withDeadline("opening the index", 120000,
-    ensureIndex(async m => { lastPhase = m; await say(m); }, { write:false }))
-    .catch(e => { throw new Error(errText(e) + "  [stuck at: " + lastPhase + "]"); });
+  await indexOp("opening the index",
+    note => ensureIndex(note, { write:false }), { onPhase: say, cost: 4 });
   await say("Waking the drive…");
   await wakeStorage(say);
+  /* Now that the index has been opened, storage speed is measured rather than
+     guessed, so everything below gets a deadline sized to this share. */
   await say("Opening backups/…");
-  const dir = await withDeadline("opening backups/", 120000, backupsDir());
+  const dir = await indexOp("opening backups/", () => backupsDir(),
+    { onPhase: say, cost: 4 });
   await sweepSwapFiles(dir);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   await say("Creating " + stamp + "…");
-  const dest = await withDeadline("creating the backup folder", 120000,
-    dir.getDirectoryHandle(stamp, { create:true }));
+  const dest = await indexOp("creating the backup folder",
+    () => dir.getDirectoryHandle(stamp, { create:true }), { onPhase: say, cost: 4 });
 
   const copied = [];
   let doneBytes = 0, totalBytes = 0;
@@ -154,8 +143,11 @@ async function backupIndex(reason, onProgress){
   const started = performance.now();
   for (const name of BACKUP_FILES){
     const before = doneBytes;
-    const r = await withDeadline("copying " + name, 1800000,
-      copyInto(IDX.dir, dest, name, async (n, got, size) => {
+    /* A copy is bounded by size, not by one round trip: 29 MB at the measured
+       430 KB/s is over a minute of legitimate work. Give it room, and let the
+       progress line rather than the deadline be what shows it is alive. */
+    const r = await indexOp("copying " + name,
+      () => copyInto(IDX.dir, dest, name, async (n, got, size) => {
         doneBytes = before + got;
         const pct = totalBytes ? Math.round(doneBytes / totalBytes * 100) : 0;
         const secs = (performance.now() - started) / 1000;
@@ -164,7 +156,7 @@ async function backupIndex(reason, onProgress){
         await say("Copying " + n + " — " + pct + "% of "
           + (totalBytes/1048576).toFixed(0) + " MB, "
           + Math.round(rate) + " KB/s, about " + fmtDur(left) + " left");
-      }));
+      }), { onPhase: say, timeoutMs: 1800000 });
     if (r){ copied.push(r); doneBytes = before + r.bytes; }
   }
   await say("Verifying…");

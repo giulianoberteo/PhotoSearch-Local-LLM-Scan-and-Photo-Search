@@ -101,6 +101,17 @@ async function useDirectory(handle){
   } catch (e){ st.warn(errText(e)); }
   try { await idbSet("lastDir", handle); $("#btnReconnect").disabled = false; } catch {}
   renderIndexWhere();
+  /* Measure this storage once, on connect, and say what was found. Every
+     deadline afterwards is sized from it rather than from a guessed constant,
+     and the user gets told plainly when their share is the slow part. */
+  const sp = step(host, "Storage speed");
+  try {
+    await ensureIndex(null, { write:false });
+    await probeStorage(IDX.dir);
+    const unit = storageUnitMs();
+    (unit != null && unit > 3000 ? sp.warn : sp.ok)(describeStorage());
+    renderIndexWhere();
+  } catch (e){ sp.warn(errText(e)); }
   await fillScopes();
   IDX.loaded = false;
   await refreshPlan();
@@ -110,11 +121,14 @@ function renderIndexWhere(){
   const where = S.indexMode === "custom"
     ? (S.indexDirHandle ? S.indexDirHandle.name : null)
     : (S.dirHandle ? S.dirHandle.name : null);
-  n.textContent = where
+  const base = where
     ? "Saving the index to " + where + "/.photoindex/ — hidden in Finder, "
       + "press Cmd+Shift+. to see it."
     : (S.indexMode === "custom" ? "Choose where to save the DB."
                                 : "The index will sit beside the photos.");
+  n.textContent = where && storageUnitMs() != null
+    ? base + "  " + describeStorage() + "."
+    : base;
 }
 $("#sIndexMode").onchange = async () => {
   S.indexMode = $("#sIndexMode").value;
