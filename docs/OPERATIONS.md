@@ -129,6 +129,11 @@ For each photo:
 
 Written to disk every 25 photos, along with a checkpoint.
 
+**Before the first photo**, pressing Scan takes a safety copy of the existing index — on a
+29 MB `records.jsonl` over this share that is a couple of minutes on its own. The progress
+card now appears immediately and names each step of it, so the wait is visible rather than
+looking like a button that did nothing. Stop works during that phase too.
+
 **Speed: ~21.5 seconds per photo.** Your 6,621-photo scan took 68 hours. Concurrency does
 not help — LM Studio processes one request at a time.
 

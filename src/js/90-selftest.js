@@ -1515,6 +1515,41 @@ async function selfTest(){
        && probe.textContent.includes("<img src=x"));
     ok("markdown renderer still formats", probe.querySelector("strong") !== null);
 
+    /* ---- pressing Scan must show something at once ----
+       The pre-scan safety copy of a real index is ~50 MB over a share, and it
+       ran with the progress card hidden and no rows on screen: for minutes,
+       pressing Scan was indistinguishable from pressing nothing. */
+    {
+      const realBackup = backupIndex;
+      const keepEnabled = S.backup.enabled;
+      let sawProgress = null, cardVisible = null, claimed = null, reported = [];
+      backupIndex = async (reason, onProgress) => {
+        sawProgress = typeof onProgress;
+        cardVisible = $("#progCard").hidden === false;
+        claimed = RUN.active === true;
+        if (onProgress) await onProgress("Copying records.jsonl — 50% of 29 MB");
+        return { stamp:"stub", manifest:{}, pruned:0, bytes: 1024 };
+      };
+      try {
+        S.backup.enabled = true;
+        S.dirHandle = scratch; S.scanScope = "";
+        IDX.loaded = false; await ensureIndex(); await loadRecords();
+        ok("there are records, so a safety copy is due", IDX.records.size > 0);
+        const pl = await buildPlan();
+        const victim = pl.ok[0] || pl.new[0] || pl.stale[0];
+        ok("a file is available to scan", !!victim);
+        if (victim) await runScan([victim], "full-rescan");
+        eq("the safety copy is given a progress callback", sawProgress, "function");
+        ok("the progress card is already visible while it runs", cardVisible === true);
+        ok("and the run is claimed before the slow part, so Scan cannot be double-pressed",
+           claimed === true);
+      } finally {
+        backupIndex = realBackup;
+        S.backup.enabled = keepEnabled;
+        RUN.active = false;
+      }
+    }
+
     /* ---- rebuilding thumbnails ----
        Thumbnails are excluded from every backup on the grounds that they can be
        remade. That claim was false for months: nothing regenerated them, and a

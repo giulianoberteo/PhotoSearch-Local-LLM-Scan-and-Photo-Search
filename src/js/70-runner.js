@@ -9,6 +9,7 @@ const RUN = {
 let wakeLock = null;
 
 async function acquireWakeLock(){
+  if (wakeLock) return;                 // idempotent: it is acquired on two paths now
   try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request("screen"); }
   catch { wakeLock = null; }
 }
@@ -233,10 +234,43 @@ async function preflightScan(){
 
 async function runScan(files, mode, resuming){
   if (!files.length){ toast("Nothing to do."); return; }
-  if (!(await ensureIndexConnected()) || !(await ensureConnected("the scan"))) return;
+
+  /* Everything between pressing Scan and the first photo can take MINUTES on a
+     share: the safety copy alone is ~50 MB at a few hundred KB/s, then it is
+     verified by re-reading it. All of that used to happen with the progress card
+     still hidden and not a single row on screen, so pressing Scan looked exactly
+     like pressing nothing -- for minutes, on the one action the user least wants
+     to be unsure about. Claim the run and start reporting before any of it. */
+  RUN.active = true; RUN.paused = false; RUN.stop = false;
+  RUN.abort = new AbortController();
+  RUN.done = 0; RUN.total = files.length; RUN.errors = []; RUN.times = [];
+  RUN.tokens = []; RUN.errorCount = 0; RUN.streak = 0; RUN.streakMsg = null;
+  RUN.started = Date.now(); RUN.mode = mode;
+  RUN.batch = []; RUN.vecBatch = []; RUN.pending = new Set();
+  scanUi(true);
+  $("#progCard").hidden = false;
+  $("#progStats").textContent = "Preparing…";
+  $("#progEta").textContent = "";
+  const prep = step($("#errBox"), "Preparing to scan");
+  /* The safety copy can run for minutes; the screen must not sleep through it. */
+  await acquireWakeLock();
+  /* Any path that gives up from here must hand the UI back, or the buttons stay
+     dead and the app looks wedged. */
+  const abandon = (why, how) => {
+    RUN.active = false;
+    releaseWakeLock();
+    scanUi(false);
+    if (why) prep[how || "err"](why);
+    else prep.ok("cancelled");
+    return null;
+  };
+
+  await prep.note("Checking the folder and the model…");
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the scan")))
+    return abandon("Could not reconnect the folder.", "warn");
   const problem = await preflightScan();
   if (problem){
-    scanUi(false);
+    abandon(null, null);
     $("#progCard").hidden = false;
     renderChecks($("#errBox"), [{ status:"err", title:"Scan not started", detail:problem }]);
     toast(problem);
@@ -247,24 +281,31 @@ async function runScan(files, mode, resuming){
      human error -- and the existing records represent days of work. */
   if (S.backup.enabled && IDX.records.size > 0){
     try {
-      const pre = await backupIndex("pre-scan safety copy");
+      await prep.note("Safety copy of " + IDX.records.size + " records before scanning…");
+      const pre = await backupIndex("pre-scan safety copy",
+        async m => { await prep.note("Safety copy — " + m); });
+      await prep.note("Safety copy taken ("
+        + (pre.bytes / 1048576).toFixed(1) + " MB). Starting…");
       toast("Safety copy taken (" + (pre.bytes/1048576).toFixed(1) + " MB) before scanning.");
     } catch (e){
+      prep.warn("Safety copy failed: " + errText(e));
       const go = confirm("Could not take a safety copy of the existing index:\n\n"
         + errText(e) + "\n\nThe index has " + IDX.records.size + " records. "
         + "Scan anyway?\n\n(Records are only ever appended, so a failed scan "
         + "cannot delete existing ones.)");
-      if (!go) return;
+      if (!go) return abandon("Cancelled — no safety copy.", "warn");
     }
   }
+  await prep.note("Opening the index…");
   await ensureIndex();
-  RUN.active = true; RUN.paused = false; RUN.stop = false;
-  RUN.abort = new AbortController();
-  RUN.done = 0; RUN.total = files.length; RUN.errors = []; RUN.times = []; RUN.tokens = [];
-  RUN.streak = 0; RUN.streakMsg = null; RUN.errorCount = 0;
-  RUN.started = Date.now(); RUN.mode = mode;
+  /* Stop is live during preparation, so honour it rather than resetting the flag
+     and scanning anyway -- which is what re-initialising here used to do. */
+  if (RUN.stop) return abandon("Stopped before scanning began.", "warn");
+  prep.ok(files.length + " to scan.");
+  /* RUN was already claimed above; only what depends on the prepared index is
+     set here. Deliberately NOT re-touching active/stop/abort. */
+  RUN.started = Date.now();
   RUN.runId = resuming && IDX.checkpoint ? IDX.checkpoint.run_id : "run-" + Date.now();
-  RUN.batch = []; RUN.vecBatch = [];
   const queue = files.slice();
   RUN.pending = new Set(queue.map(f => f.path));
   await acquireWakeLock();

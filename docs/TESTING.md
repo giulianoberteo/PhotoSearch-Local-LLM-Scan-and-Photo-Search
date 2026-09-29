@@ -7,7 +7,7 @@ in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it 
 responses and an [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
 scratch folder, so your real photos and index are never touched.
 
-**313 assertions** covering:
+**318 assertions** covering:
 
 - pure logic — Easter/occasion dates, singularisation, validation caps, enum checks
 - `image_type` correction from filename, EXIF, dimensions and caption
@@ -107,6 +107,8 @@ removing the fix and confirming the suite goes red:
 |---|---|
 | `ensureIndex` opens `thumbs/` eagerly again | 3 assertions, incl. *opening the index never touches thumbs/* |
 | `appendLines` stops checking the resulting length | *a write that silently lands short is caught* |
+| the pre-scan safety copy goes back to running silently | *the safety copy is given a progress callback*, *the progress card is already visible while it runs* |
+| the thumbnail rebuild stops calling `saveThumb` | *nothing is missing afterwards* + a read-back throw |
 
 Do this for any new assertion that guards a defect which has actually shipped.
 
