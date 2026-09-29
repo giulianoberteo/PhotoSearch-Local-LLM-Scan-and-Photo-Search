@@ -60,10 +60,17 @@ async function scopedRoot(){
   if (!scope) return { handle: S.dirHandle, prefix: "" };
   let h = S.dirHandle;
   try {
-    for (const part of scope.split("/")) h = await h.getDirectoryHandle(part);
-  } catch {
-    /* The scoped folder was renamed or deleted. Fall back to the whole library
-       rather than failing the plan outright. */
+    for (const part of scope.split("/"))
+      h = await withRetry("opening " + part, () => h.getDirectoryHandle(part));
+  } catch (e){
+    /* Only a genuinely absent folder justifies widening the scope. Treating a
+       transient share failure the same way silently turns "scan 400 photos in
+       Sicily" into "walk 50,000", and re-enables missing-judgement across the
+       whole library. */
+    const gone = isNotFound(e);
+    if (!gone)
+      throw new Error("could not open the scan scope '" + scope + "': " + errText(e)
+        + ". The scope is unchanged; try again when the share is responding.");
     S.scanScope = "";
     const sel = document.getElementById("sScope");
     if (sel) sel.value = "";
@@ -136,6 +143,10 @@ async function buildPlan(onTick, signal){
   for (const [id, r] of IDX.records){
     usedIds.add(id);
     if (r.deleted) continue;
+    /* Records outside the scanned scope were not looked at, so they must not be
+       matched, relinked or judged. inScope existed but was never applied to the
+       matchers, so a scoped scan could steal a record from another folder. */
+    if (!inScope(r)) continue;
     /* A stored path is only meaningful relative to the folder it was scanned
        from: pick two different subfolders and both photos are "IMG_1.jpg".
        So path matching is qualified by that root; identity handles the rest.
@@ -206,7 +217,7 @@ async function buildPlan(onTick, signal){
     looseFiles.set(k, (looseFiles.get(k) || []).concat(f));
   }
   for (const [id, r] of IDX.records){
-    if (r.deleted || claimed.has(id)) continue;
+    if (r.deleted || claimed.has(id) || !inScope(r)) continue;
     if (presentPaths.has(r.path) && (!r.library_root || r.library_root === rootName)) continue;
     const k = looseOf(r);
     looseRecs.set(k, (looseRecs.get(k) || []).concat(r));
@@ -247,7 +258,7 @@ async function buildPlan(onTick, signal){
     if (!r || r.deleted){ f.id = f.id && r ? f.id : newId(f.path); plan.new.push(f); seen.add(f.id); continue; }
     seen.add(f.id);
     if (r.fingerprint !== f.fp) plan.changed.push(f);
-    else if (r.status === "error") plan.failed.push(f);
+    else if (r.status === "error" || r.status === "partial") plan.failed.push(f);
     else if (r.schema_hash !== sh || r.prompt_hash !== ph || (vm && r.vision_model !== vm)) plan.stale.push(f);
     else plan.ok.push(f);
   }

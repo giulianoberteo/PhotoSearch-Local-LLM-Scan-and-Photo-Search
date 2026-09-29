@@ -29,6 +29,13 @@ ws.onmessage = e => {
   if (m.method === "Runtime.exceptionThrown")
     logs.push("EXCEPTION: " + (m.params.exceptionDetails.exception?.description
       || m.params.exceptionDetails.text));
+  /* confirm()/alert() are synchronous modals: unhandled, they block the
+     renderer main thread forever and the run looks like an infinite loop
+     rather than a prompt. Accept them and record that one appeared. */
+  if (m.method === "Page.javascriptDialogOpening"){
+    logs.push("DIALOG (" + m.params.type + "): " + m.params.message.split("\n")[0]);
+    send("Page.handleJavaScriptDialog", { accept: true });
+  }
 };
 const send = (method, params) => new Promise(res => {
   const myId = ++id;

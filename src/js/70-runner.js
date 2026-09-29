@@ -37,7 +37,7 @@ async function scanOne(f, signal){
   const exif = await readExif(file, f.name, overrideFor(f.path));
 
   let attempt = 0, note = "", out = null, lastIssues = null, lastParsed = null;
-  let attemptTokens = S.scan.maxTokens;
+  let attemptTokens = S.scan.maxTokens, tokenBumpUsed = false;
   while (attempt < 2){
     attempt++;
     if (signal.aborted) throw new DOMException("aborted","AbortError");
@@ -49,8 +49,14 @@ async function scanOne(f, signal){
         /* Truncated output is not a bad answer, it is one that ran out of room
            -- almost always an image dense with text. Give it more and retry,
            rather than recording a failure. */
-        if (r.truncated && attemptTokens <= S.scan.maxTokens){
-          attemptTokens = Math.min(8000, S.scan.maxTokens * 3);
+        /* Bound this explicitly: the old guard compared against the configured
+           ceiling rather than the value it was about to set, so a maxTokens of
+           8000+ looped forever on one image, and above 8000 it silently LOWERED
+           the budget. */
+        const bumped = Math.min(12000, Math.max(attemptTokens * 3, 3000));
+        if (r.truncated && !tokenBumpUsed && bumped > attemptTokens){
+          attemptTokens = bumped;
+          tokenBumpUsed = true;
           note = ""; attempt--;            // the extra try does not count
           continue;
         }
@@ -60,8 +66,14 @@ async function scanOne(f, signal){
       }
       const v = validate(parsed);
       lastParsed = { r, parsed, v };
-      if (v.issues.length && attempt === 1){
-        note = "Your previous answer had these problems, fix them exactly: " + v.issues.join("; ");
+      /* Only retry for problems the normaliser cannot fix. Over-generating
+         objects or writing a long caption is repaired silently, and retrying
+         those doubled the cost of a multi-day scan for nothing. */
+      const worthRetrying = v.issues.filter(i =>
+        /not in enum|reserved field|fewer than 3/.test(i));
+      if (worthRetrying.length && attempt === 1){
+        note = "Your previous answer had these problems, fix them exactly: "
+          + worthRetrying.join("; ");
         lastIssues = v.issues;
         continue;
       }
@@ -74,8 +86,14 @@ async function scanOne(f, signal){
       note = "Your previous answer failed to parse. Return ONE valid JSON object only.";
     }
   }
-  // Spec: if the retry still fails, keep whatever did parse and flag it partial.
-  if (!out && lastParsed) out = lastParsed;
+  /* Keep what parsed, but do not lose WHY the second attempt failed: the real
+     cause (HTTP 500, connection reset) used to be dropped in favour of the
+     first attempt's validation issues, producing a library of plausible
+     "partial" records during an outage. */
+  if (!out && lastParsed){
+    out = lastParsed;
+    if (lastIssues && lastIssues.length) out.retryError = lastIssues.join("; ");
+  }
   if (!out) throw new Error((lastIssues || ["unknown extraction failure"]).join("; "));
 
   await saveThumb(f.id, img.thumb);
@@ -93,7 +111,9 @@ async function scanOne(f, signal){
     try {
       const big = await processImage(file, f.kind, { bigPx:S.ocr.px });
       const ocrUrl = await blobToDataUrl(big.big);
-      const o = await ocrPass(S.roles.scan, ocrUrl, signal);
+      let o = await ocrPass(S.roles.scan, ocrUrl, signal);
+      if ((o.truncated || o.parseError) && S.ocr.maxTokens < 8000)
+        o = await ocrPass(S.roles.scan, ocrUrl, signal, Math.min(8000, S.ocr.maxTokens * 2));
       const joined = o.lines.join("\n");
       // Keep whichever pass actually read more; never regress.
       if (joined.length > (norm.visible_text.text || "").length){
@@ -101,7 +121,8 @@ async function scanOne(f, signal){
         norm.visible_text = { has_text:true, text:joined };
         textSource = "ocr-pass";
       }
-      ocrCost = { secs:o.secs, tokens:o.tokens, lines:o.lines.length };
+      ocrCost = { secs:o.secs, tokens:o.tokens, lines:o.lines.length,
+        truncated: !!o.truncated, parse_error: o.parseError || null };
     } catch (e){
       if (e.name === "AbortError") throw e;
       ocrCost = { error:errText(e) };
@@ -134,7 +155,8 @@ async function scanOne(f, signal){
     secs: out.r.secs, out_tokens: out.r.tokens, reasoned: out.r.reasoned,
     attempts: attempt,
     status: out.v.issues.length ? "partial" : "ok",
-    issues: out.v.issues
+    issues: out.v.issues,
+    retry_error: out.retryError || null
   };
   if (fix.changed) rec.issues = [...rec.issues, "image_type corrected from '" + norm.image_type
     + "' to '" + fix.type + "' via " + fix.source];
@@ -160,7 +182,11 @@ async function preflightScan(){
   /* Where the index goes is a decision, not a default. If it was never chosen,
      confirm it rather than silently creating one beside the photos -- which on
      a new machine, or a new folder, means starting from nothing by accident. */
-  if (!S.indexChosen && !$("#mock").checked){
+  /* Ask again whenever the index would be BRAND NEW, not just the first time
+     ever. The latch meant that after answering once for library A, pointing at
+     folder B silently created an empty index there and never asked. */
+  const freshIndex = IDX.records.size === 0;
+  if ((!S.indexChosen || freshIndex) && !$("#mock").checked){
     const where = S.indexMode === "custom" && S.indexDirHandle
       ? S.indexDirHandle.name
       : (S.dirHandle ? S.dirHandle.name : "the photo folder");
@@ -290,8 +316,14 @@ async function runScan(files, mode, resuming){
         if (RUN.errorCount < 20 || RUN.errorCount % 25 === 0) renderErrors();
         // If the first handful all fail the same way, the cause is configuration,
         // not the images. Stop rather than burning through the whole library.
-        RUN.streak = (RUN.streak && RUN.streakMsg === msg) ? RUN.streak + 1 : 1;
-        RUN.streakMsg = msg;
+        /* Compare the SHAPE of the failure, not the text: every message embeds
+           the filename, so "read IMG_1.jpg failed" never matched "read
+           IMG_2.jpg failed" and the breaker could not fire for exactly the
+           errors that indicate a mount or configuration problem. */
+        const shape = msg.replace(/\b[\w .()'-]+\.(jpe?g|png|heic|heif|tiff?|webp|gif|bmp|avif)\b/gi, "<file>")
+                         .replace(/\d+/g, "#").slice(0, 120);
+        RUN.streak = (RUN.streak && RUN.streakMsg === shape) ? RUN.streak + 1 : 1;
+        RUN.streakMsg = shape;
         if (RUN.streak >= 5){
           RUN.stop = true;
           if (RUN.abort) RUN.abort.abort();
@@ -307,7 +339,15 @@ async function runScan(files, mode, resuming){
   try {
     await Promise.all(Array.from({ length: conc }, loop));
   } finally {
-    await flushBatch(queue);
+    /* A throw here used to skip clearCheckpoint, RUN.active = false, the wake
+       lock release and scanUi(false) -- leaving every button disabled and the
+       tab nagging on close, for the rest of the document's life. */
+    let flushError = null;
+    try { await flushBatch(queue, true); } catch (e){ flushError = errText(e); }
+    if (flushError){
+      RUN.writeError = flushError;
+      try { renderErrors(); } catch {}
+    }
     const secs = (Date.now() - RUN.started) / 1000;
     try {
       await appendLines("runs.jsonl", [{
@@ -318,11 +358,14 @@ async function runScan(files, mode, resuming){
         vision_model:S.roles.scan, embed_model:S.roles.embed || null,
         schema_hash:SCHEMA_HASH(), prompt_hash:PROMPT_HASH(),
         stopped: RUN.stop, remaining: queue.length }]);
-    } catch {}
-    if (!queue.length) await clearCheckpoint();
+    } catch (e){ console.warn("runs.jsonl could not be written:", errText(e)); }
+    /* Only clear the checkpoint if everything really reached disk. */
+    if (!queue.length && !flushError && !RUN.batch.length) await clearCheckpoint();
     /* Back up AFTER the run, never during: a copy taken mid-write would be a
        torn snapshot. Failure here must not fail the scan. */
-    if (S.backup.enabled && RUN.done >= S.backup.minNewRecords){
+    /* A pre-scan copy was already taken; a second full copy of a 29MB index
+       after retrying three photos is not worth minutes on a slow share. */
+    if (S.backup.enabled && RUN.done >= Math.max(S.backup.minNewRecords, 25)){
       try {
         const b = await backupIndex(mode);
         toast("Backed up " + (b.bytes/1048576).toFixed(1) + " MB"
@@ -334,6 +377,8 @@ async function runScan(files, mode, resuming){
     scanUi(false);
     updateProgress();
     rebuildDerived();
+    if (flushError) toast("Scan ended but the last records could NOT be saved: "
+      + flushError + " — they will be found again by the next plan.");
     toast((RUN.stop ? "Stopped" : "Finished") + ": " + RUN.done + "/" + RUN.total
       + " in " + fmtDur(secs) + (RUN.errors.length ? ", " + RUN.errors.length + " errors" : "")
       + (queue.length ? " — " + queue.length + " left, resumable" : ""));
@@ -343,7 +388,7 @@ async function runScan(files, mode, resuming){
 
 /* Flush = records + vectors + checkpoint, in that order. If the tab dies
    between them the checkpoint is merely stale, never ahead of the data. */
-async function flushBatch(queue){
+async function flushBatch(queue, force){
   /* Both batches are put back if the write fails. They used to be cleared
      first, so a failed write silently dropped up to 25 finished photos (and
      every embedding) with only a console warning. */
@@ -378,7 +423,7 @@ async function flushBatch(queue){
       updated_at:new Date().toISOString(),
       pending: queue.map(f => f.path), done:RUN.done, total:RUN.total,
       vision_model:S.roles.scan, schema_hash:SCHEMA_HASH(), prompt_hash:PROMPT_HASH()
-    });
+    }, force);
   }
 }
 

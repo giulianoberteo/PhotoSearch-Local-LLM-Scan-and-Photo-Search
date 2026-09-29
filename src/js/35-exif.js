@@ -4,14 +4,23 @@
    processing time in every date field, with no camera tags at all. So we record
    WHERE the date came from and how much to trust it, try the filename too, and
    let an explicit override win over everything. */
-let exifr = null, exifrTried = false;
+let exifr = null, exifrFails = 0, exifrNextTry = 0;
+/* A one-shot latch meant a single CDN blip -- a sleeping laptop, a dropped
+   wifi -- silently degraded EVERY remaining photo to mtime dates with no
+   camera and no GPS, and those records are never marked stale so they would
+   never be re-scanned. Retry with backoff instead of giving up for the session. */
 async function loadExifr(){
-  if (exifrTried) return exifr;
-  exifrTried = true;
+  if (exifr) return exifr;
+  if (Date.now() < exifrNextTry) return null;
   try {
     const m = await import("https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.esm.mjs");
     exifr = m.default || m;
-  } catch { exifr = null; }
+    exifrFails = 0;
+  } catch {
+    exifrFails++;
+    exifrNextTry = Date.now() + Math.min(300000, 5000 * Math.pow(2, exifrFails));
+    exifr = null;
+  }
   return exifr;
 }
 
@@ -77,6 +86,10 @@ async function readExif(file, name, override){
     out.date_taken = new Date(file.lastModified).toISOString();
     out.date_source = "mtime";
   }
+  /* Distinguish "this file genuinely has no EXIF" from "the EXIF reader was
+     unavailable". Without it, a CDN outage is indistinguishable from a library
+     of photos that never had metadata. */
+  if (!lib) out.exif_unavailable = true;
   out.date_alternatives.mtime = new Date(file.lastModified).toISOString();
   out.date_confidence = dateConfidence(out.date_source, !!out.camera);
 

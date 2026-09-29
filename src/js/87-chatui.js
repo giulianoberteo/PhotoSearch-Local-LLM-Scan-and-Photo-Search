@@ -52,6 +52,7 @@ function bubble(role){
 }
 
 function renderGrid(host, recs, title){
+  for (const r of recs) thumbPin(r.id);      // keep these alive while displayed
   if (!recs.length) return;
   const wrap = el("div");
   wrap.append(Object.assign(el("div","hint"),
@@ -87,9 +88,13 @@ function renderTrace(host, trace){
     box.append(el("div","hint", t.name + "(" + JSON.stringify(t.args) + ")"));
     const how = (t.result && t.result.how) || [];
     if (how.length) box.append(el("div","hint", "→ " + how.join(" · ")));
-    const n = t.result && (t.result.count != null ? t.result.count
-      : (t.result.entities || t.result.events || t.result.answers || []).length);
-    box.append(el("div","hint", "→ " + (n != null ? n + " result(s)" : "done")));
+    if (t.result && t.result.error){
+      box.append(el("div","err", "→ failed: " + t.result.error));
+    } else {
+      const n = t.result && (t.result.count != null ? t.result.count
+        : (t.result.entities || t.result.events || t.result.answers || []).length);
+      box.append(el("div","hint", "→ " + (n != null ? n + " result(s)" : "done")));
+    }
     d.append(box);
   }
 }
@@ -117,7 +122,8 @@ async function openLightbox(r){
   add("description", r.description);
   add("when", (r.when_phrase || "") + (r.date_suspect
     ? "  — date is suspect (no camera tags; probably an export time)" : ""));
-  add("date source", r.date_source + ", confidence " + r.date_confidence);
+  add("date source", r.date_source
+    ? r.date_source + ", confidence " + (r.date_confidence || "unknown") : null);
   add("where", r.place ? r.place + " (" + r.place_km + " km)" : (r.gps ? "GPS only" : null));
   add("camera", r.camera);
   add("type", r.image_type + (r.image_type_source && r.image_type_source !== "model"
@@ -129,7 +135,7 @@ async function openLightbox(r){
     ? r.people.count_bucket + (r.people.description ? " — " + r.people.description : "") : null);
   add("text in image", r.visible_text && r.visible_text.has_text ? r.visible_text.text : null);
   add("colours", (r.dominant_colors || []).join(", "));
-  add("file", r.path + "  ·  " + r.width + "x" + r.height);
+  add("file", r.path + (r.width && r.height ? "  ·  " + r.width + "x" + r.height : ""));
   meta.append(dl);
 
   const more = $("#lbMore");
@@ -152,8 +158,10 @@ async function openLightbox(r){
       // HEIC/TIFF cannot be shown directly by the browser: use the stored thumbnail.
       const u = await thumbUrl(r.id);
       if (u) img.src = u;
-      if (f) meta.prepend(Object.assign(el("div","hint"),
-        { textContent:"Showing the 512px thumbnail — the browser cannot display this format directly." }));
+      meta.prepend(Object.assign(el("div","hint"), { textContent: f
+        ? "Showing the stored thumbnail — the browser cannot display this format directly."
+        : "The original is not reachable (the folder is not connected), so this is the "
+          + "stored thumbnail." + (u ? "" : " No thumbnail is stored either.") }));
     }
   } catch (e){
     const u = await thumbUrl(r.id);
@@ -186,10 +194,13 @@ function deIdify(text){
 }
 /* Choose what to show: what the answer named, else this turn's results, else
    the previous turn's set so a follow-up keeps its pictures. */
-function gridFor(answer, turnPhotos){
+function gridFor(answer, turnPhotos, searchedThisTurn){
   const named = mentionedIds(answer).map(id => IDX.records.get(id)).filter(Boolean);
   if (named.length) return { recs: named, why: "the " + named.length + " photo(s) in this answer" };
   if (turnPhotos.length) return { recs: turnPhotos.slice(0, 24), why: null };
+  /* Never show the previous question's photos under an answer that searched
+     and found nothing -- users read the pictures, not the caption above them. */
+  if (searchedThisTurn) return { recs: [], why: null };
   if (CHAT.lastPhotos && CHAT.lastPhotos.length)
     return { recs: CHAT.lastPhotos.slice(0, 24), why: "still showing the previous results" };
   return { recs: [], why: null };
@@ -207,7 +218,26 @@ async function sendChat(){
   const inp = $("#chatInput");
   const q = inp.value.trim();
   if (!q || CHAT.busy) return;
-  if (!IDX.records.size){ toast("No index loaded — pick a folder and scan first."); return; }
+  /* Chat is the front door and was the only major action that did not
+     reconnect. After a reload the index is simply not open -- telling the user
+     to "scan first" was both a dead end and untrue. */
+  if (!IDX.records.size){
+    const u0 = bubble("assistant");
+    renderMarkdown("Opening your index…", u0.body);
+    try {
+      if (await ensureIndexConnected() && await ensureConnected("your question")){
+        await ensureIndex(null, { write:false });
+        await loadRecords(); await loadVectors(); rebuildDerived();
+      }
+    } catch (e){ renderMarkdown("**Could not open the index:** " + errText(e), u0.body); return; }
+    u0.box.remove();
+    if (!IDX.records.size){
+      const u1 = bubble("assistant");
+      renderMarkdown("That index has no photos in it yet. Scan a folder first, "
+        + "or check you opened the right one in Settings.", u1.body);
+      return;
+    }
+  }
   inp.value = "";
   CHAT.busy = true;
   CHAT.abort = new AbortController();
@@ -228,13 +258,16 @@ async function sendChat(){
     const { answer, trace, photos } = await askAgent(q, ui);
     renderMarkdown(deIdify(answer) || "(no answer)", textHost);
     renderTrace(extras, trace);
-    const { recs: shown, why } = gridFor(answer, photos);
+    const searched = trace.some(t => /search_photos|filter_photos|find_similar/.test(t.name));
+    const { recs: shown, why } = gridFor(answer, photos, searched);
     if (shown.length){ renderGrid(extras, shown, why); CHAT.lastPhotos = shown; }
     else if (trace.length) extras.append(el("div","hint","No photos matched."));
     CHAT.turns.push({ q, answer, ids:shown.map(p => p.id), at:new Date().toISOString() });
   } catch (e){
     if (e.name === "AbortError") renderMarkdown(acc + "\n\n_(stopped)_", textHost);
-    else renderMarkdown("**Error:** " + String(e.message || e), textHost);
+    /* Keep whatever streamed: discarding a partial answer on a late failure
+       loses the only useful part. errText because DOMException.message is empty. */
+    else renderMarkdown((acc ? deIdify(acc) + "\n\n" : "") + "**Error:** " + errText(e), textHost);
   } finally {
     CHAT.busy = false;
     $("#chatSend").disabled = false; $("#chatStop").hidden = true;
@@ -260,5 +293,5 @@ $("#chatSave").onclick = async () => {
     await writeFile(await dir.getFileHandle(name, { create:true }),
       JSON.stringify({ saved_at:new Date().toISOString(), turns:CHAT.turns }, null, 1));
     toast("Saved to .photoindex/chats/" + name);
-  } catch (e){ toast("Could not save: " + String(e.message || e)); }
+  } catch (e){ toast("Could not save: " + errText(e)); }
 };

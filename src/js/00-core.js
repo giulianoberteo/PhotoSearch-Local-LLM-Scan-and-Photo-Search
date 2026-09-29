@@ -36,7 +36,7 @@ const S = {
      transcription, so it costs nothing to be generous here. */
   date: { hemisphere:"north", occasions:null, overrides:[] },
   events: { gapHours:6, km:25 },
-  search: { minCosine:0.30 },
+  search: { minCosine:0.30, minKeywordShare:0.25 },
   chat: { historyChars:24000, toolResultChars:8000 },
   ocr: { enabled:true, px:1600, maxTokens:3000, embedChars:1200, minChars:40 },
   /* A NAS library wants its index on local disk: every batch flush would
@@ -59,7 +59,7 @@ const LS_OLD = "photosearch.settings.v1";
 function saveSettings(){
   try { localStorage.setItem(LS, JSON.stringify({
     baseUrl:S.baseUrl, roles:S.roles, scan:S.scan, date:S.date, events:S.events,
-    search:S.search, ocr:S.ocr, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
+    search:S.search, ocr:S.ocr, backup:S.backup, chat:S.chat, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
     mock: $("#mock").checked })); } catch {}
 }
 function loadSettings(){
@@ -193,18 +193,37 @@ function toast(msg){
 
 /* A mounted SMB share drops reads under load. One failure should not become a
    permanent error record in the middle of a multi-day scan. */
+/* A DOMException carries its identity in its NAME, not its message, and that
+   name is lost the instant it is re-wrapped in a plain Error. Callers that
+   must tell "this folder is gone" from "the share is down" therefore have to
+   walk the cause chain rather than pattern-match the text. */
+function isNotFound(e){
+  for (let x = e, depth = 0; x && depth < 5; x = x.cause, depth++)
+    if (x.name === "NotFoundError") return true;
+  return false;
+}
+
 async function withRetry(label, fn){
-  let last;
+  let last, tries = 0;
   for (let i = 0; i < S.io.retries; i++){
+    tries++;
     try { return await fn(); }
     catch (e){
       if (e && e.name === "AbortError") throw e;
       last = e;
-      await new Promise(r => setTimeout(r, S.io.retryMs * (i + 1)));
+      /* An entry that does not exist will not appear by waiting. Retrying it
+         spent three backoffs per absent file for nothing. */
+      if (isNotFound(e)) break;
+      if (i < S.io.retries - 1)
+        await new Promise(r => setTimeout(r, S.io.retryMs * (i + 1)));
     }
   }
-  throw new Error(label + " failed after " + S.io.retries + " tries: "
-    + String(last && last.message || last));
+  /* Keep the original as the cause: errText() alone flattens a DOMException to
+     prose, after which no caller can recover which failure it was. */
+  const err = new Error(label + " failed after " + tries
+    + (tries === 1 ? " try: " : " tries: ") + errText(last));
+  err.cause = last;
+  throw err;
 }
 
 /* Re-acquires folder permission from inside a click. Chrome grants it only in
@@ -448,7 +467,19 @@ function fillRoles(){
       + ". Check Model roles in Settings.");
 }
 function syncRoles(){
-  S.roles = { scan:$("#mScan").value, embed:$("#mEmbed").value, chat:$("#mChat").value };
+  const picked = { scan:$("#mScan").value, embed:$("#mEmbed").value, chat:$("#mChat").value };
+  /* Do not persist a role the UI merely failed to offer. /v1/models lists only
+     LOADED models in some LM Studio builds, so an unloaded embedding model
+     would be replaced by "None" and SAVED -- permanently degrading search with
+     only a boot-time toast to explain it. */
+  for (const k of ["scan","embed","chat"]){
+    if (!picked[k] && S.roles[k] && !S.models.some(m => m.id === S.roles[k])){
+      S.rolesUnavailable = S.rolesUnavailable || {};
+      S.rolesUnavailable[k] = S.roles[k];
+      picked[k] = S.roles[k];                 // keep the choice, flag it
+    }
+  }
+  S.roles = picked;
   saveSettings();
   const loaded = S.models.filter(m => m.state === "loaded").map(m => m.id);
   $("#sModels").textContent = S.roles.scan

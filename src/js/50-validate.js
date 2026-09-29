@@ -26,7 +26,11 @@ function capText(rec){
   return rec;
 }
 const KEEP_PLURAL = new Set(["glasses","sunglasses","jeans","shorts","scissors","headphones",
-  "stairs","trousers","binoculars","pyjamas","clothes","fireworks"]);
+  "stairs","trousers","binoculars","pyjamas","clothes","fireworks",
+  /* singular nouns that merely end in s -- "lens" became "len", "gas" became
+     "ga", and the stored term then differed from the search term */
+  "lens","gas","canvas","bus","iris","atlas","compass","glass","grass","dress",
+  "cactus","virus","campus","chess","cross","press","class","brass","moss"]);
 const SYNONYMS = { auto:"car", automobile:"car", "cell phone":"phone", "mobile phone":"phone",
   sofa:"couch", "bicycle":"bike", "photograph":"photo", "canine":"dog", "feline":"cat" };
 
@@ -53,8 +57,19 @@ function normList(v, cap, sing){
 const clampWords = (s, n) => (s || "").trim().split(/\s+/).filter(Boolean).slice(0, n).join(" ");
 const stripThink = s => (s || "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 
+/* Fields the record owns. The model must never be able to set them: validate
+   spreads the parsed object, and scanOne spreads the result LAST, so a stray
+   "id" or "path" key would overwrite the record's identity. */
+const RESERVED = new Set(["id","path","name","kind","library_root","content_tag",
+  "fingerprint","size","mtime","width","height","decoder","scanned_at","status",
+  "issues","secs","out_tokens","deleted","vision_model","embed_model",
+  "schema_hash","prompt_hash","date_taken","gps","camera","when","place"]);
+
 function validate(r){
   const issues = [], n = { ...r };
+  for (const k of RESERVED){
+    if (k in n){ delete n[k]; issues.push("model returned a reserved field: " + k); }
+  }
   n.template_version = TPL.version;
   for (const [f, cap] of Object.entries(CAPS))
     if ((r[f] || []).length > cap) issues.push(f + " over cap (" + r[f].length + ">" + cap + ")");
@@ -78,10 +93,17 @@ function validate(r){
   const p = r.people || {};
   const pw = (p.description || "").trim().split(/\s+/).filter(Boolean).length;
   if (pw > 25) issues.push("people.description >25 words");
-  n.people = { count: p.count == null ? null : p.count, count_bucket: p.count_bucket || "0",
+  /* "count: 5" with a missing bucket used to become bucket "0" -- "no people" --
+     which is what search and filters actually use. */
+  const bucketFor = c => c == null ? "0"
+    : c <= 0 ? "0" : c === 1 ? "1" : c === 2 ? "2"
+    : c <= 5 ? "3-5" : c <= 10 ? "6-10" : "10+";
+  n.people = { count: p.count == null ? null : p.count,
+               count_bucket: p.count_bucket || bucketFor(p.count),
                age_groups: normList(p.age_groups, 4, false), description: clampWords(p.description, 25) };
   n.animals = (r.animals || []).slice(0,5).map(a => ({
-    type: singular(String(a && a.type || "").toLowerCase()), count: Number(a && a.count) || 1 }));
+    type: singular(String(a && a.type || "").toLowerCase()),
+    count: Number.isFinite(Number(a && a.count)) ? Number(a.count) : 1 }));
   for (const f of ["image_type","scene_type","time_of_day","season","weather","mood"]){
     const allowed = TPL.enums[f];
     if (allowed && !allowed.includes(r[f])) issues.push(f + "='" + r[f] + "' not in enum");
@@ -114,7 +136,7 @@ const CAPTION_TYPE = [
   [/\b(movie poster|film poster|album cover|book cover|concert poster|vintage poster)\b/i, "artwork"],
   [/\b(illustration|digital art|cartoon drawing|painting of|drawing of|comic panel)\b/i, "artwork"],
   [/\b(receipt|invoice|till slip|boarding pass|ticket stub)\b/i, "receipt"],
-  [/\b(floor plan|blueprint|schematic|technical drawing|scanned document|certificate|form)\b/i, "document"],
+  [/\b(floor plan|blueprint|schematic|technical drawing|scanned document|certificate|application form|order form)\b/i, "document"],
   [/\b(meme|image macro)\b/i, "meme"],
 ];
 function typeFromWords(rec){
@@ -127,15 +149,16 @@ function typeFromWords(rec){
 function correctImageType(modelType, meta, rec){
   const name = meta.name || "";
   const dims = meta.width + "x" + meta.height;
-  // 1. An explicit screenshot filename is the strongest signal there is.
-  if (SCREENSHOT_NAME.test(name))
-    return { type:"screenshot", source:"filename", changed: modelType !== "screenshot" };
-  // 2. Camera tags mean a real capture. Trust that over anything the model wrote.
+  /* Camera tags come FIRST: the filename pattern matches bare "capture" and
+     "snip", so "Video Capture 2019.jpg" from a real camera was being retyped as
+     a screenshot -- contradicting the very rule below it. */
   if (meta.camera){
     if (modelType === "screenshot" || modelType === "document")
       return { type:"photo", source:"exif-camera", changed:true };
     return { type:modelType, source:"model", changed:false };
   }
+  if (SCREENSHOT_NAME.test(name))
+    return { type:"screenshot", source:"filename", changed: modelType !== "screenshot" };
   // 3. Exact screen dimensions on a lossless format.
   if (SCREEN_SIZES.has(dims) && /\.(png|bmp|webp)$/i.test(name))
     return { type:"screenshot", source:"dimensions", changed: modelType !== "screenshot" };

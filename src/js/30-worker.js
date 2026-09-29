@@ -27,7 +27,7 @@ const LIB = {
   heif: "https://cdn.jsdelivr.net/npm/libheif-js@1.18.2/libheif-wasm/libheif-bundle.js",
   utif: "https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js"
 };
-let heifDec = null, heifErr = null, heifTried = false, utifTried = false;
+let heifDec = null, heifErr = null, heifFails = 0, heifNextTry = 0, utifTried = false;
 
 function loadOnce(url){
   try { importScripts(url); return true; } catch(e){ return false; }
@@ -36,8 +36,11 @@ function loadOnce(url){
    namespace: you must call it and await the module before constructing.
    Both shapes are handled so a future version cannot silently break this. */
 async function initHeif(){
-  if (heifTried) return heifDec;
-  heifTried = true;
+  /* Retry with backoff rather than latching off for the session: one failed
+     CDN fetch used to turn every remaining .heic in a multi-day scan into an
+     error record. */
+  if (heifDec) return heifDec;
+  if (Date.now() < heifNextTry) return null;
   try {
     if (!loadOnce(LIB.heif)) throw new Error("could not load the decoder (offline?)");
     if (typeof libheif === "undefined") throw new Error("decoder did not register itself");
@@ -48,7 +51,9 @@ async function initHeif(){
       throw new Error("unexpected decoder API: no HeifDecoder constructor");
     heifDec = new ns.HeifDecoder();
   } catch (e){
-    heifErr = String(e && e.message || e);
+    heifErr = String(e && e.message || e) || (e && e.name) || "unknown";
+    heifFails++;
+    heifNextTry = Date.now() + Math.min(300000, 5000 * Math.pow(2, heifFails));
     heifDec = null;
   }
   return heifDec;
@@ -116,11 +121,12 @@ self.onmessage = async e => {
   }
 };`;
 
-let WORKER = null, wSeq = 0;
+let WORKER = null, WORKER_URL = null, wSeq = 0;
 const wJobs = new Map();
 function imgWorker(){
   if (WORKER) return WORKER;
-  WORKER = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type:"text/javascript" })));
+  WORKER_URL = URL.createObjectURL(new Blob([WORKER_SRC], { type:"text/javascript" }));
+  WORKER = new Worker(WORKER_URL);
   WORKER.onmessage = e => {
     const j = wJobs.get(e.data.id);
     if (!j) return;
@@ -129,9 +135,14 @@ function imgWorker(){
     e.data.ok ? j.res(e.data) : j.rej(new Error(e.data.error));
   };
   WORKER.onerror = e => {
-    for (const [, j] of wJobs){ clearTimeout(j.timer); j.rej(new Error("worker crashed: " + e.message)); }
+    /* ErrorEvent.message is routinely empty for worker failures, and the old
+       worker kept running with its blob URL leaked. */
+    const why = (e && e.message) || (e && e.filename) || "no detail available";
+    for (const [, j] of wJobs){ clearTimeout(j.timer); j.rej(new Error("image worker crashed: " + why)); }
     wJobs.clear();
-    WORKER = null;
+    try { WORKER.terminate(); } catch {}
+    try { if (WORKER_URL) URL.revokeObjectURL(WORKER_URL); } catch {}
+    WORKER = null; WORKER_URL = null;
   };
   return WORKER;
 }

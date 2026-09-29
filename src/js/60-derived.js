@@ -28,13 +28,18 @@ function addEntity(type, value, id){
   const key = type + ":" + value;
   let e = DERIVED.entities.get(key);
   if (!e){ e = { type, value, count:0, ids:[] }; DERIVED.entities.set(key, e); }
-  e.count++;
-  if (e.ids.length < 5000) e.ids.push(id);
+  e.count++;   /* ids were accumulated here and never read by anything --
+                  up to 5,000 strings per entity of pure heap. */
 }
 
 /* Events: consecutive photos in time, split on a gap or a jump in distance. */
 function buildEvents(records, gapHours, km){
-  const dated = records.filter(r => r.date_taken && !r.deleted && r.status !== "error")
+  /* One unparseable date used to poison the whole chain: NaN > gapHours is
+     false, so no split happened AND lastT became NaN, merging every later photo
+     into a single enormous "event". */
+  const dated = records
+    .filter(r => r.date_taken && !r.deleted && r.status !== "error" && !r.probe)
+    .filter(r => !isNaN(new Date(r.date_taken).getTime()))
     .sort((a,b) => a.date_taken < b.date_taken ? -1 : 1);
   const events = [];
   let cur = null;
@@ -76,7 +81,10 @@ function rebuildDerived(){
   DERIVED.entities = new Map();
   DERIVED.postings = new Map();
   DERIVED.docLen = new Map();
-  const recs = [...IDX.records.values()].filter(r => !r.deleted && r.status !== "error");
+  /* The write-test probe row is not a photo: it inflated the library count fed
+     to the model, and could be returned as a "similar photo". */
+  const recs = [...IDX.records.values()]
+    .filter(r => !r.deleted && r.status !== "error" && !r.probe);
   for (const r of recs){
     for (const o of r.objects || []) addEntity("object", o, r.id);
     for (const a of r.activities || []) addEntity("activity", a, r.id);
@@ -116,8 +124,12 @@ function rebuildDerived(){
     textChars: recs.reduce((a,r) => a + (r.text_chars || 0), 0),
     withGps: recs.filter(r => r.gps).length,
     dateSuspect: recs.filter(r => r.date_suspect).length,
-    range: recs.length ? [recs.reduce((a,r) => r.date_taken < a ? r.date_taken : a, "9999"),
-                          recs.reduce((a,r) => r.date_taken > a ? r.date_taken : a, "0")] : null
+    /* Sentinels used to leak into the system prompt as a library running
+       "from 9999 to 0" whenever no record carried a date. */
+    range: (() => {
+      const ds = recs.map(r => r.date_taken).filter(Boolean).sort();
+      return ds.length ? [ds[0], ds[ds.length - 1]] : null;
+    })()
   };
   return DERIVED.stats;
 }

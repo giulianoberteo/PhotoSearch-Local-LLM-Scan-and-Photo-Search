@@ -18,8 +18,23 @@ function lighten(rec){
 /* All index writes go through one queue: appendLines reads the file size and
    then seeks to it, so two concurrent appends would target the same offset. */
 let ioChain = Promise.resolve();
+/* A stalled write must not wedge the queue permanently. Without a bound, one
+   hung SMB operation blocks every later append forever while the UI still
+   reports progress. */
+const IO_TIMEOUT_MS = 180000;
 function exclusive(fn){
-  const run = ioChain.then(fn, fn);
+  const guarded = async () => {
+    let timer;
+    try {
+      return await Promise.race([
+        fn(),
+        new Promise((_, rej) => { timer = setTimeout(
+          () => rej(new Error("index write did not complete within "
+            + (IO_TIMEOUT_MS / 1000) + "s")), IO_TIMEOUT_MS); })
+      ]);
+    } finally { clearTimeout(timer); }
+  };
+  const run = ioChain.then(guarded, guarded);
   ioChain = run.then(() => {}, () => {});
   return run;
 }
@@ -61,7 +76,12 @@ async function ensureIndex(onPhase, opts){
      a real library -- and enumerating it over a network share measured 60
      seconds. Nothing at startup needs it, so it is opened on first use. */
   await say("Reading config.json…");
-  const cfg = await IDX.dir.getFileHandle("config.json", { create:true });
+  /* create:true would leave a 0-byte config.json behind on a read-only open,
+     which then gets backed up as valid and can overwrite a good one on restore. */
+  let cfg = null;
+  try { cfg = await IDX.dir.getFileHandle("config.json", { create: opts.write !== false }); }
+  catch { if (opts.write !== false) throw new Error("could not open config.json"); }
+  if (!cfg){ IDX.configPending = true; return IDX.dir; }
   const f = await cfg.getFile();
   let conf = {};
   if (f.size){ try { conf = JSON.parse(await f.text()); } catch {} }
@@ -121,18 +141,30 @@ async function appendLines(name, lines){
   });
 }
 async function loadRecords(onProgress){
-  IDX.records = new Map();
+  /* Build into a scratch map: a read that fails half way used to leave
+     IDX.records holding a PREFIX of the library, which buildPlan then read as
+     "the rest of these photos are new" -- a full re-scan of paid-for work. */
+  const built = new Map();
   let fh;
   try { fh = await IDX.dir.getFileHandle("records.jsonl"); }
-  catch { IDX.loaded = true; return 0; }
+  catch {
+    /* No log here means this index is EMPTY, not "keep whatever was loaded
+       before". Switching index location used to leave the previous location's
+       records in memory, so the new index planned against photos it had never
+       seen -- and the next flush wrote those foreign records INTO it. */
+    IDX.records = new Map();
+    IDX.loaded = true;
+    return 0;
+  }
   const file = await fh.getFile();
   const total = file.size || 1;
   const rd = file.stream().pipeThrough(new TextDecoderStream()).getReader();
   let buf = "", read = 0, lines = 0, bad = 0;
+  IDX.loaded = false;
   const take = ln => {
     if (!ln.trim()) return;
     lines++;
-    try { const r = JSON.parse(ln); if (r && r.id) IDX.records.set(r.id, lighten(r)); }
+    try { const r = JSON.parse(ln); if (r && r.id) built.set(r.id, lighten(r)); }
     catch { bad++; }
   };
   for(;;){
@@ -141,9 +173,10 @@ async function loadRecords(onProgress){
     read += value.length; buf += value;
     const parts = buf.split("\n"); buf = parts.pop();
     for (const ln of parts) take(ln);
-    if (onProgress) onProgress(Math.min(99, Math.round(read/total*100)), IDX.records.size);
+    if (onProgress) onProgress(Math.min(99, Math.round(read/total*100)), built.size);
   }
   take(buf);
+  IDX.records = built;                 // swap in only on a complete read
   IDX.loaded = true;
   if (onProgress) onProgress(100, IDX.records.size);
   if (bad) console.warn("records.jsonl: " + bad + " unparseable lines skipped");
@@ -222,13 +255,30 @@ async function loadVectors(){
   let buf;
   try { buf = await (await (await IDX.dir.getFileHandle("vectors.bin")).getFile()).arrayBuffer(); }
   catch { return 0; }
-  const rows = new Float32Array(buf);
-  const expect = meta.dim * meta.ids.length;
-  if (rows.length < expect){
-    console.warn("vectors.bin truncated; ignoring the tail");
-    meta.ids = meta.ids.slice(0, Math.floor(rows.length / meta.dim));
+  /* The row count on disk is the truth; the id list must be made to agree with
+     it in BOTH directions. Only the short case used to be handled, and a longer
+     bin (the normal result of dying between the two writes) then desynchronised
+     every subsequent vector: fresh rows are placed by buffer length but indexed
+     by ids.length, so each new photo would map to another photo's embedding. */
+  if (buf.byteLength % 4 !== 0){
+    console.warn("vectors.bin has a torn final row; discarding it");
+    buf = buf.slice(0, buf.byteLength - (buf.byteLength % 4));
   }
-  IDX.vec.dim = meta.dim; IDX.vec.ids = meta.ids; IDX.vec.rows = rows;
+  let rows = new Float32Array(buf);
+  const rowsOnDisk = Math.floor(rows.length / meta.dim);
+  if (rows.length % meta.dim !== 0) rows = rows.subarray(0, rowsOnDisk * meta.dim);
+  if (rowsOnDisk !== meta.ids.length){
+    console.warn("vectors: " + rowsOnDisk + " rows on disk vs " + meta.ids.length
+      + " ids; realigning to the shorter of the two");
+    IDX.vecRealigned = { rows: rowsOnDisk, ids: meta.ids.length };
+    const keep = Math.min(rowsOnDisk, meta.ids.length);
+    meta.ids = meta.ids.slice(0, keep);
+    rows = rows.subarray(0, keep * meta.dim);
+  }
+  IDX.vec.dim = meta.dim; IDX.vec.ids = meta.ids;
+  /* Copy out of the subarray so later appends grow a buffer we own. */
+  IDX.vec.rows = rows.length === new Float32Array(buf).length ? rows : new Float32Array(rows);
+  IDX.vec.model = meta.model || null;
   meta.ids.forEach((id, i) => IDX.vec.index.set(id, i));
   return meta.ids.length;
 }
@@ -251,13 +301,20 @@ async function appendVectors(pairs){
     const next = new Float32Array(old.length + fresh.length * dim);
     next.set(old, 0);
     fresh.forEach((p, i) => {
-      next.set(p.vec, old.length + i * dim);
-      IDX.vec.index.set(p.id, IDX.vec.ids.length);
+      /* Place by the LOGICAL row (ids.length), not by buffer length. If the two
+         ever disagree the physical and logical rows must not drift further. */
+      const row = IDX.vec.ids.length;
+      next.set(p.vec, row * dim);
+      IDX.vec.index.set(p.id, row);
       IDX.vec.ids.push(p.id);
     });
     IDX.vec.rows = next;
   }
   IDX.vec.dim = dim;
+  if (IDX.vec.rows.length !== IDX.vec.ids.length * dim)
+    throw new Error("vector index is inconsistent ("
+      + (IDX.vec.rows.length / dim) + " rows vs " + IDX.vec.ids.length
+      + " ids); reload the index before scanning further");
   await exclusive(async () => {
     const vfh = await IDX.dir.getFileHandle("vectors.bin", { create:true });
     const onDisk = (await vfh.getFile()).size;
@@ -273,6 +330,12 @@ async function appendVectors(pairs){
       await w.write(IDX.vec.rows.buffer.slice(onDisk, wanted));
       await w.close();
     }
+    /* Confirm the bin really reached the expected length before recording the
+       ids that describe it, so the manifest is never ahead of the data. */
+    const finalSize = (await vfh.getFile()).size;
+    if (finalSize !== wanted)
+      throw new Error("vectors.bin is " + finalSize + " bytes, expected " + wanted
+        + " — not recording ids that the file does not contain");
     const jf = await IDX.dir.getFileHandle("vectors.json", { create:true });
     const jw = await jf.createWritable();
     await jw.write(JSON.stringify({ dim, model:S.roles.embed, ids:IDX.vec.ids }));
@@ -297,6 +360,10 @@ async function saveThumb(id, blob){
   await writeBinary(fh, blob);
 }
 const thumbCache = new Map();
+/* Object URLs were evicted while <img> elements in earlier chat bubbles still
+   pointed at them, turning older grids into broken images. Pinned ids are kept. */
+const thumbPinned = new Set();
+function thumbPin(id){ thumbPinned.add(id); }
 async function thumbUrl(id){
   if (thumbCache.has(id)) return thumbCache.get(id);
   try {
@@ -304,8 +371,11 @@ async function thumbUrl(id){
     const fh = await dir.getFileHandle(id + ".jpg");
     const u = URL.createObjectURL(await fh.getFile());
     if (thumbCache.size > 400){          // bound the cache so long sessions do not leak
-      const [k, v] = thumbCache.entries().next().value;
-      URL.revokeObjectURL(v); thumbCache.delete(k);
+      for (const [k, v] of thumbCache){
+        if (thumbPinned.has(k)) continue;          // still on screen
+        URL.revokeObjectURL(v); thumbCache.delete(k);
+        break;
+      }
     }
     thumbCache.set(id, u);
     return u;
@@ -315,8 +385,16 @@ async function thumbUrl(id){
 /* ---- resume checkpoint ----
    Written on every batch flush, so an interrupted scan restarts from the exact
    remaining queue instead of re-walking or re-scanning what is already done. */
-async function saveCheckpoint(cp){
+let lastCheckpointAt = 0;
+async function saveCheckpoint(cp, force){
   IDX.checkpoint = cp;
+  /* This was O(remaining) per batch -- at 50k photos, roughly 3GB of writes
+     over the run, and the most frequent write in the system. The plan finds
+     anything unflushed anyway, so the checkpoint is an optimisation: writing it
+     every 30 seconds is ample. */
+  const now = Date.now();
+  if (!force && now - lastCheckpointAt < 30000) return;
+  lastCheckpointAt = now;
   await writeFile(await IDX.dir.getFileHandle("state.json", { create:true }),
     JSON.stringify(cp));
 }

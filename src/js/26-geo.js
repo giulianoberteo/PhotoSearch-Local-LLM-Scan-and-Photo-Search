@@ -16,7 +16,10 @@ async function geoCached(){
     const txt = await (await (await g.getFileHandle("names.txt")).getFile()).text();
     const coords = new Float32Array(buf);
     const lines = txt.split("\n");
+    /* "<" let an interrupted refresh pair NEW coordinates with an OLD name
+       file, shifting every place name by the row difference with no warning. */
     if (coords.length / 2 !== meta.count || lines.length < meta.count) return false;
+    if (meta.stamp && meta.stamp !== (lines.length + ":" + coords.length)) return false;
     GEO.lat = new Float32Array(meta.count);
     GEO.lon = new Float32Array(meta.count);
     GEO.names = new Array(meta.count);
@@ -84,7 +87,8 @@ async function geoFetchAndCache(onProgress){
   await writeBinary(await g.getFileHandle("cities.bin", { create:true }), coords.buffer);
   await writeFile(await g.getFileHandle("names.txt", { create:true }), names.join("\n"));
   await writeFile(await g.getFileHandle("meta.json", { create:true }),
-    JSON.stringify({ source:GEO_SRC, count:n, fetched_at:new Date().toISOString() }, null, 2));
+    JSON.stringify({ source:GEO_SRC, count:n, fetched_at:new Date().toISOString(),
+      stamp: names.length + ":" + coords.length }, null, 2));
   say("Building the lookup index…");
   await new Promise(r2 => setTimeout(r2, 0));
   return geoCached();
@@ -94,7 +98,9 @@ async function geoFetchAndCache(onProgress){
 function buildGeoGrid(){
   const g = new Map();
   for (let i = 0; i < GEO.count; i++){
-    const k = (Math.floor(GEO.lat[i]) + 90) * 360 + (Math.floor(GEO.lon[i]) + 180);
+    let lo = Math.floor(GEO.lon[i]);
+    if (lo >= 180) lo -= 360;                 // 180.0 collided with the -180 cell
+    const k = (Math.floor(GEO.lat[i]) + 90) * 360 + (lo + 180);
     let a = g.get(k);
     if (!a){ a = []; g.set(k, a); }
     a.push(i);
@@ -110,7 +116,7 @@ function haversineKm(la1, lo1, la2, lo2){
 function nearestPlace(lat, lon){
   if (GEO.state !== "ready" || !GEO.grid) return null;
   const bLa = Math.floor(lat), bLo = Math.floor(lon);
-  let best = -1, bestKm = Infinity;
+  let best = -1, bestKm = Infinity, foundAt = null;
   for (let ring = 0; ring <= 8; ring++){
     for (let dLa = -ring; dLa <= ring; dLa++){
       for (let dLo = -ring; dLo <= ring; dLo++){
@@ -127,8 +133,13 @@ function nearestPlace(lat, lon){
         }
       }
     }
-    // One extra ring beyond the first hit guards against a nearer city just over a cell edge.
-    if (best >= 0 && ring >= 1) break;
+    /* Genuinely search ONE MORE ring after the first hit: a corner of ring N
+       can be further away than the near edge of ring N+1, so stopping at the
+       hit ring could return the second-nearest place. */
+    if (best >= 0){
+      if (foundAt == null) foundAt = ring;
+      else if (ring > foundAt) break;
+    }
   }
   if (best < 0) return null;
   return { name: GEO.names[best], country: GEO.cc[best], km: Math.round(bestKm * 10) / 10 };

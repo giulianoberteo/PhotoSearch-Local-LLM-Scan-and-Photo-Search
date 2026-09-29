@@ -7,6 +7,9 @@ const T = { pass:0, fail:0, lines:[] };
 function ok(name, cond, detail){
   if (cond){ T.pass++; T.lines.push("PASS  " + name + (detail ? "  — " + detail : "")); }
   else { T.fail++; T.lines.push("FAIL  " + name + (detail ? "  — " + detail : "")); }
+  // Streamed so a hang can be located: the last line printed is the last
+  // assertion that completed, and the hang is in the code after it.
+  console.log((cond ? "PASS  " : "FAIL  ") + name);
   return !!cond;
 }
 function eq(name, got, want){
@@ -569,6 +572,21 @@ async function selfTest(){
       ok("an object without either is still described",
          errText({}) !== "" && errText({}) !== "[object Object]", errText({}));
       eq("null does not produce blank", errText(null), "unknown error");
+
+      /* withRetry used to flatten its cause into prose, so "this folder is
+         gone" became indistinguishable from "the share is down" -- and a
+         deleted scan scope hard-failed the whole plan instead of widening. */
+      let wrapped = null;
+      try {
+        await withRetry("opening Gone",
+          () => Promise.reject(new DOMException("no entry", "NotFoundError")));
+      } catch (e){ wrapped = e; }
+      ok("a wrapped failure keeps its cause", !!(wrapped && wrapped.cause));
+      ok("a missing entry is recognisable through the wrapper", isNotFound(wrapped));
+      ok("a share outage is not mistaken for a missing entry",
+         !isNotFound(new Error("connection reset")));
+      ok("a missing entry is not retried three times",
+         / 1 try: /.test(wrapped.message), wrapped.message);
     }
 
     /* ---- a backup must not write to the index it is backing up ----
@@ -735,6 +753,83 @@ async function selfTest(){
       const dirP = await backupsDir();
       for (const x of await listBackups())
         { try { await dirP.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
+    /* ---- review round 2: silent-wrong-behaviour regressions ---- */
+    {
+      /* vectors.bin longer than vectors.json used to desynchronise every later
+         vector, mapping photos to other photos' embeddings. */
+      const dim = IDX.vec.dim || 64;
+      const vfh = await IDX.dir.getFileHandle("vectors.bin", { create:true });
+      const before = IDX.vec.ids.length;
+      const extra = new Float32Array((before + 2) * dim).fill(0.25);
+      const w = await vfh.createWritable(); await w.write(extra.buffer); await w.close();
+      await loadVectors();
+      eq("a longer bin is realigned to the id list, not left skewed",
+         IDX.vec.rows.length / IDX.vec.dim, IDX.vec.ids.length);
+      ok("and the mismatch is recorded so it can be reported", !!IDX.vecRealigned);
+      IDX.vecRealigned = null;
+
+      /* a torn final row must not throw out of loadVectors */
+      const torn = new Uint8Array((before * dim * 4) + 3);
+      const w2 = await vfh.createWritable(); await w2.write(torn.buffer); await w2.close();
+      let threw = false;
+      try { await loadVectors(); } catch { threw = true; }
+      ok("a torn final row degrades instead of throwing", !threw);
+
+      /* the model must not be able to set a record's identity */
+      const v = validate({ id:"HIJACKED", path:"../evil", size:1,
+        observations:["a","b","c"], caption:"x" });
+      ok("reserved fields are stripped from model output",
+         v.norm.id === undefined && v.norm.path === undefined);
+      ok("and the attempt is recorded", v.issues.some(i => /reserved field/.test(i)));
+
+      /* a stated people count must set a matching bucket */
+      const vp = validate({ observations:["a","b","c"], people:{ count:5 } });
+      eq("a count of 5 does not become bucket 0", vp.norm.people.count_bucket, "3-5");
+
+      /* words that merely end in s must survive */
+      eq("lens is not mangled", singular("lens"), "lens");
+      eq("trees is still singularised", singular("trees"), "tree");
+
+      /* a camera photo whose name contains "capture" is still a photo */
+      eq("camera EXIF outranks a filename containing capture",
+         correctImageType("photo", { name:"Video Capture 2019.jpg", width:4000, height:3000,
+           camera:"Canon EOS R3" }).type, "photo");
+
+      /* one bad date must not merge every event */
+      const evRecs = [
+        { id:"a", date_taken:"2020-01-01T10:00:00Z" },
+        { id:"b", date_taken:"not a date" },
+        { id:"c", date_taken:"2021-06-01T10:00:00Z" },
+        { id:"d", date_taken:"2022-06-01T10:00:00Z" }];
+      const evs = buildEvents(evRecs, 6, 25);
+      eq("an unparseable date is skipped, not allowed to merge everything",
+         evs.length, 3);
+
+      /* the date range must never report sentinels */
+      const st2 = rebuildDerived();
+      ok("the reported date range is real or absent",
+         !st2.range || (st2.range[0] !== "9999" && st2.range[1] !== "0"),
+         JSON.stringify(st2.range));
+
+      /* BM25 must not answer a nonsense query with confident junk */
+      const junk = await searchPhotos({ query:"zzzz yyyy xxxx wwww", limit:10 });
+      eq("a query with no real terms returns nothing", junk.results.length, 0);
+
+      /* a backup that fails verification must be removed, not left listed */
+      const realVerify = verifyRecordsFile;
+      verifyRecordsFile = async () => ({ lines:1, bad:1, unique:1 });
+      let rejected = false;
+      try { await backupIndex("should-fail"); } catch { rejected = true; }
+      verifyRecordsFile = realVerify;
+      ok("a backup that fails verification is rejected", rejected);
+      const left = await listBackups();
+      ok("and is not left behind to displace a good one",
+         !left.some(b => b.meta && b.meta.reason === "should-fail"),
+         left.map(b => b.meta && b.meta.reason).join(","));
+      const dB = await backupsDir();
+      for (const x of left) { try { await dB.removeEntry(x.name, { recursive:true }); } catch {} }
     }
 
     /* ---- data-loss regressions found by review ---- */
@@ -956,7 +1051,7 @@ async function selfTest(){
       // simulate a crash: records written but the checkpoint never updated
       await saveCheckpoint({ run_id:"crash", mode:"new-and-changed",
         pending:["one.png","two.jpg","gone-from-disk.png"],
-        done:1, total:4, updated_at:new Date().toISOString() });
+        done:1, total:4, updated_at:new Date().toISOString() }, true);
       IDX.checkpoint = null; await loadCheckpoint();
       ok("checkpoint survives a reload", !!IDX.checkpoint);
       const planC = await buildPlan();
@@ -993,12 +1088,19 @@ async function selfTest(){
     /* ---- vectors append rather than rewrite ---- */
     {
       const vfh = await IDX.dir.getFileHandle("vectors.bin", { create:true });
-      const sizeBefore = (await vfh.getFile()).size;
+      const dim = IDX.vec.dim || 64;
+      const idsBefore = IDX.vec.ids.length;
       await appendVectors([{ id:"synthetic-vec-1",
-        vec: Float32Array.from(Array(IDX.vec.dim || 64).fill(0.5)) }]);
+        vec: Float32Array.from(Array(dim).fill(0.5)) }]);
       const sizeAfter = (await vfh.getFile()).size;
-      eq("one new vector grows the file by exactly one row",
-         sizeAfter - sizeBefore, (IDX.vec.dim || 64) * 4);
+      /* Assert the absolute invariant rather than a delta. An earlier test
+         leaves a deliberately torn final row on disk and the append HEALS it,
+         so the file legitimately grows by less than one whole row. What must
+         always hold is that the bin is exactly as long as the ids claim. */
+      eq("one new vector adds exactly one logical row",
+         IDX.vec.ids.length, idsBefore + 1);
+      eq("the file is exactly as long as the id list claims",
+         sizeAfter, IDX.vec.ids.length * dim * 4);
       ok("the new vector reads back", !!vectorOf("synthetic-vec-1"));
       const v = vectorOf("synthetic-vec-1");
       ok("its values survived the append", Math.abs(v[0] - 0.5) < 1e-6, String(v[0]));
@@ -1074,11 +1176,23 @@ async function selfTest(){
     eq("missing record soft-deleted", plan.missing.length, 0);
 
     /* ---- checkpoint / resume ---- */
+    /* force: saveCheckpoint throttles to one write per 30s, so an unforced
+       save here silently did nothing and the assertion read a stale file. */
     await saveCheckpoint({ run_id:"x", mode:"m", pending:["one.png"], done:1, total:2,
-      updated_at:new Date().toISOString() });
+      updated_at:new Date().toISOString() }, true);
     IDX.checkpoint = null;
     await loadCheckpoint();
     ok("checkpoint survives a reload", IDX.checkpoint && IDX.checkpoint.pending.length === 1);
+
+    /* The throttle is deliberate -- it was 3GB of writes over a 50k-photo run
+       -- so pin it, including the fact that memory moves ahead of disk. */
+    await saveCheckpoint({ run_id:"throttled", mode:"m", pending:["two.jpg"],
+      done:1, total:2, updated_at:new Date().toISOString() });
+    eq("an unforced save still updates memory", IDX.checkpoint.run_id, "throttled");
+    IDX.checkpoint = null;
+    await loadCheckpoint();
+    eq("but is not written inside the 30s window", IDX.checkpoint.run_id, "x");
+
     await clearCheckpoint();
     await loadCheckpoint();
     ok("finished checkpoint clears", IDX.checkpoint === null);

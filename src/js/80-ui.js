@@ -232,7 +232,17 @@ enableFolderDrop("btnIndexDir", async h => {
 /* ================= plan UI ================= */
 let planAbort = null;
 async function refreshPlan(){
-  if (!S.dirHandle) return;
+  if (!S.dirHandle){
+    /* This used to be a silent no-op, while six callers toasted success first
+       and left the old numbers on screen. */
+    const host = $("#planBox");
+    if (host){
+      resetChecks(host);
+      checksBox(host).append(checkRow({ status:"warn", title:"No folder connected",
+        detail:"Press Choose folder, or Reconnect, in Settings." }));
+    }
+    return;
+  }
   const host = $("#planBox");
   if (planAbort) planAbort.abort();
   planAbort = new AbortController();
@@ -260,6 +270,7 @@ async function refreshPlan(){
       p.moved = [];          // they keep whatever category they were classified into
     }
     rebuildDerived();
+    S.planStale = false;
     st.ok(p.total + " images · " + IDX.records.size + " records");
     if (IDX.rootMismatch && !S.scanScope)
       checksBox($("#planBox")).append(checkRow({ status:"warn",
@@ -271,6 +282,11 @@ async function refreshPlan(){
   } catch (e){
     if (e.name === "AbortError") return;
     st.err(errText(e));
+    /* A failed refresh must invalidate the plan, not leave live buttons
+       pointing at dead file handles. */
+    S.planStale = true;
+    ["btnScan","btnStale","btnFull","btnRetry","btnMissing"]
+      .forEach(id => { const n = $("#" + id); if (n) n.disabled = true; });
   }
 }
 function renderPlan(p){
@@ -296,6 +312,20 @@ function renderPlan(p){
   if (c.skippedDirs) bits.push(c.skippedDirs + " hidden folders skipped");
   bits.push(p.scope ? ("scope: " + p.scope + " — index holds " + p.indexTotal
     + " photos from the whole library") : "scope: whole library");
+  if (RUN.vecError)
+    box.append(Object.assign(el("div","note"), { textContent:
+      "Some embeddings could not be saved (" + RUN.vecError + "). Those photos are "
+      + "searchable by keyword only until you run Re-embed." }));
+  if (IDX.vecRealigned)
+    box.append(Object.assign(el("div","note"), { textContent:
+      "The vector index was realigned on load (" + IDX.vecRealigned.rows + " rows vs "
+      + IDX.vecRealigned.ids + " ids), which means an interrupted write. Run Re-embed "
+      + "to be certain every photo has the right embedding." }));
+  if (S.rolesUnavailable && Object.keys(S.rolesUnavailable).length)
+    box.append(Object.assign(el("div","note"), { textContent:
+      "LM Studio is not currently offering: "
+      + Object.values(S.rolesUnavailable).join(", ")
+      + ". Your choice has been kept — load the model, then press Test connection." }));
   if (DERIVED.stats && DERIVED.stats.photos && !DERIVED.stats.embedded)
     box.append(Object.assign(el("div","note"), { textContent:
       "No embeddings yet: search will be keyword-only. Pick an embedding model under "
@@ -450,17 +480,32 @@ $("#btnPlan").onclick = async () => {
   if (!(await ensureConnected("the plan"))) return;
   await refreshPlan();
 };
-$("#btnScan").onclick = () => { const p = S.plan;
+/* The buttons are only ever ENABLED by renderPlan, but refreshPlan's catch
+   never disabled them again -- so after a failed refresh they stayed live
+   pointing at a stale plan full of dead file handles. */
+function planOrRefuse(){
+  if (!S.plan){ toast("Press Refresh plan first."); return null; }
+  if (S.planStale){
+    toast("The plan is out of date — refreshing it first.");
+    refreshPlan();
+    return null;
+  }
+  return S.plan;
+}
+$("#btnScan").onclick = () => { const p = planOrRefuse(); if (!p) return;
   runScan([...p.new, ...p.changed, ...p.failed], "new-and-changed"); };
-$("#btnStale").onclick = () => runScan(S.plan.stale, "refresh-stale");
-$("#btnFull").onclick = () => { const p = S.plan;
+$("#btnStale").onclick = () => { const p = planOrRefuse(); if (!p) return;
+  runScan(p.stale, "refresh-stale"); };
+$("#btnFull").onclick = () => { const p = planOrRefuse(); if (!p) return;
   runScan([...p.new, ...p.changed, ...p.failed, ...p.stale, ...p.ok], "full-rescan"); };
-$("#btnRetry").onclick = () => runScan(S.plan.failed, "retry-failed");
+$("#btnRetry").onclick = () => { const p = planOrRefuse(); if (!p) return;
+  runScan(p.failed, "retry-failed"); };
 $("#btnMissing").onclick = async () => {
   try { const n = await markMissing(S.plan); toast(n + " records marked missing."); await refreshPlan(); }
   catch (e){ toast(errText(e)); }
 };
 $("#btnCompact").onclick = async () => {
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("compaction"))) return;
   if (RUN.active){ toast("Stop the scan before compacting."); return; }
   try { await ensureIndex(); const r = await compactRecords();
     toast("Compacted records.jsonl: " + r.before + " lines to " + r.after + ".");
@@ -479,6 +524,7 @@ $("#btnStop").onclick = () => {
 };
 
 $("#btnIndexReveal").onclick = async () => {
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the index listing"))) return;
   const host = $("#fsOut"); resetChecks(host);
   const st = step(host, "Index contents");
   try {
@@ -605,6 +651,7 @@ async function showBackups(){
 
 /* ================= geonames button ================= */
 $("#btnGeo").onclick = async () => {
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("place names"))) return;
   const host = $("#geoOut"); resetChecks(host);
   const st = step(host, "Place names");
   try {
@@ -622,13 +669,14 @@ $("#btnGeo").onclick = async () => {
 /* ================= settings wiring ================= */
 ["mScan","mEmbed","mChat"].forEach(id => $("#" + id).onchange = syncRoles);
 function syncScan(){
+  const beforeEvents = { ...S.events }, beforeHemi = S.date.hemisphere;
   const num = (id, def, lo, hi) => {
     const v = parseFloat($("#" + id).value);
     return isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def;
   };
   S.scan.concurrency     = num("sConc", 1, 1, 4);
   S.scan.statConcurrency = num("sStat", 12, 1, 32);
-  S.scan.maxTokens       = num("sMaxTok", 900, 200, 4000);
+  S.scan.maxTokens       = num("sMaxTok", 2000, 200, 12000);
   S.scan.temp            = num("sTemp", 0.1, 0, 1);
   S.events.gapHours      = num("sGap", 6, 0.25, 168);
   S.events.km            = num("sKm", 25, 1, 5000);
@@ -636,7 +684,11 @@ function syncScan(){
   S.date.hemisphere      = $("#sHemi").value;
   S.ocr.enabled          = $("#sOcr").checked;
   saveSettings();
-  if (IDX.records.size) rebuildDerived();
+  /* Only these three change derived data. Rebuilding the whole inverted index
+     because concurrency moved from 1 to 2 freezes the tab for seconds. */
+  if (IDX.records.size && (S.events.gapHours !== beforeEvents.gapHours
+      || S.events.km !== beforeEvents.km || S.date.hemisphere !== beforeHemi))
+    rebuildDerived();
 }
 ["sConc","sStat","sMaxTok","sTemp","sGap","sKm","sHemi","sMinCos","sOcr"]
   .forEach(id => $("#" + id).onchange = syncScan);

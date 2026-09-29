@@ -1,7 +1,7 @@
 
 /* ================= chat agent ================= */
 const CHAT = { messages:[], turns:[], toolMode:"unknown", busy:false, abort:null,
-  lastPhotos:[] };
+  lastPhotos:[], toolModeModel:null };
 
 const TOOLS = [
   { type:"function", function:{ name:"search_photos",
@@ -61,7 +61,7 @@ async function runTool(name, args){
   args = args || {};
   switch (name){
     case "search_photos": {
-      const r = await searchPhotos(args);
+      const r = await searchPhotos({ ...args, signal: CHAT.abort && CHAT.abort.signal });
       return { how:r.used, count:r.results.length,
         results:r.results.map(x => compact(x.rec, x.score)) };
     }
@@ -114,6 +114,8 @@ async function runTool(name, args){
         embedding_model:S.roles.embed || null, vision_model:S.roles.scan };
     }
     case "look_at_photos": {
+      if (!S.roles.scan)
+        return { error:"no vision model is selected, so photos cannot be looked at again" };
       const ids = (args.photo_ids || []).slice(0, 6);
       const out = [];
       for (const id of ids){
@@ -143,18 +145,22 @@ async function runTool(name, args){
    orphaned from the assistant turn that requested it. */
 function trimHistory(){
   const budget = S.chat.historyChars;
+  /* Tool-call arguments live outside .content and used to count as zero, so a
+     turn could blow the budget while appearing to be within it. */
+  const size = m => (m.content || "").length
+    + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
   let total = 0;
-  for (const m of CHAT.messages) total += (m.content || "").length;
+  for (const m of CHAT.messages) total += size(m);
   if (total <= budget) return;
   const sys = CHAT.messages[0];
   let rest = CHAT.messages.slice(1);
   while (rest.length > 2 && total > budget){
     const dropped = rest.shift();
-    total -= (dropped.content || "").length;
+    total -= size(dropped);
     // never start the window on a tool reply whose request has gone
     while (rest.length && rest[0].role === "tool"){
       const t = rest.shift();
-      total -= (t.content || "").length;
+      total -= size(t);
     }
   }
   CHAT.messages = [sys, ...rest];
@@ -254,8 +260,14 @@ async function askAgent(question, ui){
 
   const trace = [];
   const seen = new Map();                            // id -> record, for the grid
+  const seenRank = new Map();                        // id -> best rank seen
   let rounds = 0, answer = "";
 
+  /* The "this model cannot call tools" verdict belongs to the MODEL, not to the
+     page: it used to persist after switching to a tool-capable one. */
+  if (CHAT.toolModeModel && CHAT.toolModeModel !== model){
+    CHAT.toolMode = "unknown"; CHAT.toolModeModel = null;
+  }
   const useTools = CHAT.toolMode !== "none";
   while (rounds < 6){
     rounds++;
@@ -269,7 +281,7 @@ async function askAgent(question, ui){
       if (e.name === "AbortError") throw e;
       // A model without tool support usually rejects the request outright.
       if (useTools && /tool|function/i.test(String(e.message))){
-        CHAT.toolMode = "none";
+        CHAT.toolMode = "none"; CHAT.toolModeModel = model;
         ui.onMode("none");
         return fallbackAnswer(question, ui, model);
       }
@@ -286,8 +298,14 @@ async function askAgent(question, ui){
         try { result = await runTool(tc.function.name, args); }
         catch (e){ result = { error:String(e.message || e) }; }
         trace.push({ name:tc.function.name, args, result });
-        for (const row of (result.results || []))
-          if (row.id && IDX.records.has(row.id)) seen.set(row.id, IDX.records.get(row.id));
+        /* Keep the BEST rank a photo achieved in any call, so the grid is
+           ordered by relevance rather than by which tool happened to run first. */
+        (result.results || []).forEach((row, i) => {
+          if (!row.id || !IDX.records.has(row.id)) return;
+          const prev = seenRank.get(row.id);
+          if (prev == null || i < prev) seenRank.set(row.id, i);
+          seen.set(row.id, IDX.records.get(row.id));
+        });
         CHAT.messages.push({ role:"tool", tool_call_id:tc.id,
           content: JSON.stringify(result).slice(0, S.chat.toolResultChars) });
       }
@@ -302,7 +320,20 @@ async function askAgent(question, ui){
     answer = res.content || answer;
     break;
   }
-  return { answer, trace, photos:[...seen.values()] };
+  /* If the loop exits still mid-tool-call, the history ends on a tool message
+     with no assistant reply -- which many OpenAI-compatible servers reject
+     outright on the next question. Close the turn properly and say so. */
+  const last = CHAT.messages[CHAT.messages.length - 1];
+  if (last && last.role === "tool"){
+    answer = (answer || "").trim() ||
+      "I ran out of search rounds before finishing. The photos found so far are below — "
+      + "ask again more specifically and I will narrow it down.";
+    CHAT.messages.push({ role:"assistant", content:answer });
+  }
+  const ordered = [...seen.entries()]
+    .sort((a, b) => (seenRank.get(a[0]) ?? 1e9) - (seenRank.get(b[0]) ?? 1e9))
+    .map(([, rec]) => rec);
+  return { answer, trace, photos: ordered };
 }
 
 /* Models without tool calling still work: retrieve first, then answer. */

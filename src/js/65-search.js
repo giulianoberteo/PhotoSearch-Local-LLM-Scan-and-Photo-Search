@@ -69,6 +69,22 @@ function bm25Scores(queryTerms, allowed){
   return scores;
 }
 
+/* Document norms never change, so computing them on every query doubled the
+   inner loop for nothing: at 100k x 768 that is ~150M redundant operations per
+   search, on the UI thread. */
+function vectorNorms(){
+  const n = IDX.vec.ids.length, dim = IDX.vec.dim;
+  if (IDX.vec.norms && IDX.vec.norms.length === n) return IDX.vec.norms;
+  const norms = new Float32Array(n);
+  for (let r = 0; r < n; r++){
+    const off = r * dim;
+    let dn = 0;
+    for (let i = 0; i < dim; i++){ const v = IDX.vec.rows[off + i]; dn += v * v; }
+    norms[r] = Math.sqrt(dn) || 1;
+  }
+  IDX.vec.norms = norms;
+  return norms;
+}
 function cosineScores(vec, allowed){
   const out = new Map();
   if (!vec || !IDX.vec.rows || !IDX.vec.dim) return out;
@@ -76,16 +92,14 @@ function cosineScores(vec, allowed){
   let qn = 0;
   for (let i = 0; i < dim; i++) qn += vec[i] * vec[i];
   qn = Math.sqrt(qn) || 1;
+  const norms = vectorNorms();
   for (let r = 0; r < IDX.vec.ids.length; r++){
     const id = IDX.vec.ids[r];
     if (allowed && !allowed.has(id)) continue;
     const off = r * dim;
-    let dot = 0, dn = 0;
-    for (let i = 0; i < dim; i++){
-      const v = IDX.vec.rows[off + i];
-      dot += v * vec[i]; dn += v * v;
-    }
-    out.set(id, dot / ((Math.sqrt(dn) || 1) * qn));
+    let dot = 0;
+    for (let i = 0; i < dim; i++) dot += IDX.vec.rows[off + i] * vec[i];
+    out.set(id, dot / (norms[r] * qn));
   }
   return out;
 }
@@ -140,12 +154,43 @@ async function searchPhotos(args){
     return { used, results: recs.slice(0, limit).map(r => ({ rec:r, score:null })) };
   }
   const terms = tokenise(bare);
-  const kw = bm25Scores(terms, pool);
-  used.push("BM25 over " + pool.size + " candidates");
+  let kw = bm25Scores(terms, pool);
+  /* The cosine half got a floor with a comment about exactly this hazard; the
+     keyword half had none. BM25 is OR-semantics, so one incidental word match
+     put a photo in a confidently ranked list. Require a real share of the
+     query's terms, and drop the long tail of one-weak-term matches. */
+  if (kw.size && terms.length){
+    const need = terms.length >= 4 ? 2 : 1;
+    const df = new Map();
+    for (const t of new Set(terms)){
+      const post = DERIVED.postings.get(t);
+      if (post) for (const [id] of post) df.set(id, (df.get(id) || 0) + 1);
+    }
+    const best = Math.max(...kw.values());
+    const cut = best * S.search.minKeywordShare;
+    const kept = new Map();
+    for (const [id, sc] of kw)
+      if ((df.get(id) || 0) >= need && sc >= cut) kept.set(id, sc);
+    used.push("BM25: " + kw.size + " matched, " + kept.size + " met "
+      + need + "+ query term(s) and " + Math.round(S.search.minKeywordShare * 100)
+      + "% of the top score");
+    kw = kept;
+  } else used.push("BM25 over " + pool.size + " candidates");
   let vecMap = new Map();
   if (S.roles.embed && IDX.vec.ids.length){
     try {
-      const qv = Float32Array.from(await embed(S.roles.embed, bare));
+      /* Vectors made by a different model are meaningless against this query,
+         and a different dimension silently produces NaN scores that read as
+         "nothing was similar enough". Say which it is. */
+      if (IDX.vec.model && S.roles.embed && IDX.vec.model !== S.roles.embed){
+        used.push("embeddings were built with " + IDX.vec.model + " but "
+          + S.roles.embed + " is selected — skipping semantic search until you re-embed");
+        throw new Error("embedding model mismatch");
+      }
+      const qv = Float32Array.from(await embed(S.roles.embed, bare, args.signal, 45000));
+      if (IDX.vec.dim && qv.length !== IDX.vec.dim)
+        throw new Error("this model returns " + qv.length + "-dim vectors but the index "
+          + "holds " + IDX.vec.dim + "-dim — re-embed before searching");
       const raw = cosineScores(qv, pool);
       /* Cosine similarity is never zero, so without a floor a nonsense query
          still returns a confidently ranked list of irrelevant photos. Anything
@@ -173,7 +218,7 @@ async function searchPhotos(args){
 function findSimilar(id, limit){
   const v = vectorOf(id);
   const allowed = new Set([...IDX.records.values()]
-    .filter(r => !r.deleted && r.status !== "error" && r.id !== id).map(r => r.id));
+    .filter(r => !r.deleted && r.status !== "error" && !r.probe && r.id !== id).map(r => r.id));
   if (v){
     const m = cosineScores(v, allowed);
     return [...m.entries()].sort((a,b) => b[1]-a[1]).slice(0, limit)

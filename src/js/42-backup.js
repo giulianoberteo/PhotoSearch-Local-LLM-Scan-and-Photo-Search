@@ -100,7 +100,7 @@ async function listBackups(){
 }
 
 async function pruneBackups(keep){
-  const all = await listBackups();
+  const all = await withDeadline("listing backups", 120000, listBackups());
   const dir = await backupsDir();
   let removed = 0;
   for (const b of all.slice(Math.max(1, keep))){
@@ -182,8 +182,24 @@ async function backupIndex(reason, onProgress){
   };
   await writeFile(await dest.getFileHandle("manifest.json", { create:true }),
     JSON.stringify(manifest, null, 2));
+  /* Verification used to be decorative: a backup with unreadable records, or
+     with no records.jsonl at all, still returned success -- and because the
+     folder carried the newest timestamp, pruning then evicted a GOOD backup to
+     keep it. Fail loudly and remove the wreckage instead. */
   const bad = copied.filter(c => !c.ok).map(c => c.name);
-  if (bad.length) throw new Error("backup incomplete: " + bad.join(", "));
+  const missingCore = !copied.some(c => c.name === "records.jsonl");
+  const unreadable = check && check.bad > 0;
+  const shortfall = check && IDX.records.size > 0
+    && check.unique < IDX.records.size * 0.99;
+  if (bad.length || missingCore || unreadable || shortfall){
+    const why = bad.length ? "incomplete copies: " + bad.join(", ")
+      : missingCore ? "records.jsonl was not copied"
+      : unreadable ? check.bad + " unreadable lines"
+      : "only " + check.unique + " of " + IDX.records.size + " records were copied";
+    try { await dir.removeEntry(stamp, { recursive:true }); } catch {}
+    throw new Error("backup failed verification (" + why + ") and was removed, "
+      + "so it cannot displace a good one");
+  }
   const pruned = await pruneBackups(S.backup.keep);
   return { stamp, manifest, pruned,
     bytes: copied.reduce((a, c) => a + c.bytes, 0) };
@@ -224,7 +240,14 @@ async function moveIndexTo(destParent, onProgress){
       await copyInto(gFrom, gTo, n);
     }
   } catch {}
+  /* Never switch to a destination that did not copy cleanly. */
+  const bad2 = moved.filter(m => !m.ok).map(m => m.name);
+  if (bad2.length)
+    throw new Error("these did not copy completely: " + bad2.join(", ")
+      + " — the index has NOT been moved");
   await say("Switching over…");
+  for (const [, u] of thumbCache) { try { URL.revokeObjectURL(u); } catch {} }
+  thumbCache.clear();
   S.indexMode = "custom";
   S.indexDirHandle = destParent;
   try { await idbSet("lastIndexDir", destParent); } catch {}
@@ -243,15 +266,33 @@ async function moveIndexTo(destParent, onProgress){
 /* Restoring overwrites the live index, so take a safety copy of the CURRENT
    state first — otherwise a mistaken restore is unrecoverable. */
 async function restoreBackup(name, onProgress){
+  const say = async m => { if (onProgress) await onProgress(m); };
   await ensureIndex(null, { write:false });
   const dir = await backupsDir();
   const src = await dir.getDirectoryHandle(name);
-  if (onProgress) await onProgress("Saving the current index first…");
+  /* Verify the SOURCE before it overwrites live data. Restoring an unreadable
+     backup over a working index is the worst outcome available here. */
+  await say("Checking the backup…");
+  let srcCheck;
+  try { srcCheck = await verifyRecordsFile(await src.getFileHandle("records.jsonl")); }
+  catch (e){ throw new Error("that backup has no readable records.jsonl (" + errText(e)
+    + ") — refusing to restore it over the live index"); }
+  if (!srcCheck.lines || srcCheck.bad)
+    throw new Error("that backup has " + srcCheck.bad + " unreadable lines of "
+      + srcCheck.lines + " — refusing to restore it");
+  await say("Saving the current index first…");
   await backupIndex("pre-restore safety copy", onProgress);
   for (const f of BACKUP_FILES){
-    if (onProgress) await onProgress("Restoring " + f + "…");
-    await copyInto(src, IDX.dir, f);
+    await say("Restoring " + f + "…");
+    const r = await withDeadline("restoring " + f, 1800000, copyInto(src, IDX.dir, f,
+      async (n, got, size) => say("Restoring " + n + " — "
+        + Math.round(got / Math.max(1, size) * 100) + "%")));
+    if (r && !r.ok) throw new Error("restore of " + f + " did not complete");
   }
+  IDX.lastConfig = null;              // the restored config must be re-read
+  IDX.thumbs = null;
+  for (const [, u] of thumbCache) { try { URL.revokeObjectURL(u); } catch {} }
+  thumbCache.clear();
   IDX.loaded = false;
   await loadRecords();
   await loadVectors();
