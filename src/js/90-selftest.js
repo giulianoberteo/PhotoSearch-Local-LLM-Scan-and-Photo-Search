@@ -546,6 +546,38 @@ async function selfTest(){
         { try { await dirB2.removeEntry(x.name, { recursive:true }); } catch {} }
     }
 
+    /* ---- an error must never render as nothing ----
+       A DOMException with an empty .message showed as a blank line, leaving the
+       last progress label on screen under a failure icon and no way to tell
+       what had gone wrong. */
+    {
+      eq("an empty DOMException still says something",
+         errText(new DOMException("", "NotFoundError")), "NotFoundError");
+      eq("a named error keeps both parts",
+         errText(new DOMException("no entry", "NotFoundError")),
+         "NotFoundError: no entry");
+      eq("a plain Error uses its message",
+         errText(new Error("plain failure")), "plain failure");
+      ok("an object without either is still described",
+         errText({}) !== "" && errText({}) !== "[object Object]", errText({}));
+      eq("null does not produce blank", errText(null), "unknown error");
+    }
+
+    /* ---- housekeeping failures must not abort real work ---- */
+    {
+      const realWrite = writeFile;
+      IDX.lastConfig = null;
+      IDX.configWriteError = null;
+      writeFile = async () => { throw new DOMException("", "NoModificationAllowedError"); };
+      let threw = null;
+      try { await ensureIndex(); } catch (e){ threw = errText(e); }
+      ok("a config.json write failure does not abort ensureIndex", threw === null, threw);
+      ok("but it is recorded", !!IDX.configWriteError, IDX.configWriteError);
+      writeFile = realWrite;
+      IDX.lastConfig = null; IDX.configWriteError = null;
+      await ensureIndex();
+    }
+
     /* ---- opening the index must not touch thumbs/ ----
        thumbs/ holds one file per photo. Listing it on a real library over a
        network share measured 75 seconds, and ensureIndex was paying that every

@@ -128,7 +128,10 @@ async function backupIndex(reason, onProgress){
      sleeping share needs ~24s just to answer, and copies run at a few hundred
      KB/s. They exist to turn a hang into a message, not to police speed. */
   await say("Opening the index…");
-  await withDeadline("opening the index", 120000, ensureIndex(say));
+  let lastPhase = "opening the index";
+  await withDeadline("opening the index", 120000,
+    ensureIndex(async m => { lastPhase = m; await say(m); }))
+    .catch(e => { throw new Error(errText(e) + "  [stuck at: " + lastPhase + "]"); });
   await say("Waking the drive…");
   await wakeStorage(say);
   await say("Opening backups/…");

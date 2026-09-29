@@ -76,7 +76,7 @@ $("#btnThink").onclick = async () => {
       st[mode === "off" && !leaked ? "ok" : "warn"](
         tok + " output tokens, " + secs.toFixed(1) + "s, reasoning "
         + (leaked ? "present" : "absent"));
-    } catch (e){ st.err(String(e.message || e)); }
+    } catch (e){ st.err(errText(e)); }
   }
   const on = runs.find(r => r.mode === "on"), off = runs.find(r => r.mode === "off");
   if (on && off && on.tok && off.tok)
@@ -98,7 +98,7 @@ async function useDirectory(handle){
     let p = await handle.queryPermission({ mode:"readwrite" });
     if (p !== "granted") p = await handle.requestPermission({ mode:"readwrite" });
     p === "granted" ? st.ok("granted") : st.warn(p);
-  } catch (e){ st.warn(String(e.message || e)); }
+  } catch (e){ st.warn(errText(e)); }
   try { await idbSet("lastDir", handle); $("#btnReconnect").disabled = false; } catch {}
   renderIndexWhere();
   await fillScopes();
@@ -153,7 +153,7 @@ $("#btnIndexDir").onclick = async () => {
   catch (e){
     if (e.name === "AbortError") return;
     if (isPickerStuck(e)){ offerPickerReset(); return; }
-    toast(String(e.message || e));
+    toast(errText(e));
     return;
   }
   if (!h) return;
@@ -173,7 +173,7 @@ $("#btnPick").onclick = async () => {
     if (e.name === "AbortError") return;
     if (isPickerStuck(e)){ offerPickerReset(); return; }
     renderChecks($("#fsOut"), [{ status:"err", title:"Could not open folder",
-      detail:String(e.message || e) }]);
+      detail:errText(e) }]);
     return;
   }
   if (h) await useDirectory(h);
@@ -212,7 +212,7 @@ $("#btnWriteTest").onclick = async () => {
       detail:"Open the Scan tab to see the plan." }));
   } catch (e){
     checksBox(host).append(checkRow({ status:"err", title:"Write test failed",
-      detail:String(e.message || e) }));
+      detail:errText(e) }));
   }
   btn.disabled = false; btn.textContent = "Test write to .photoindex/";
 };
@@ -269,7 +269,7 @@ async function refreshPlan(){
     renderPlan(p);
   } catch (e){
     if (e.name === "AbortError") return;
-    st.err(String(e.message || e));
+    st.err(errText(e));
   }
 }
 function renderPlan(p){
@@ -457,13 +457,13 @@ $("#btnFull").onclick = () => { const p = S.plan;
 $("#btnRetry").onclick = () => runScan(S.plan.failed, "retry-failed");
 $("#btnMissing").onclick = async () => {
   try { const n = await markMissing(S.plan); toast(n + " records marked missing."); await refreshPlan(); }
-  catch (e){ toast(String(e.message || e)); }
+  catch (e){ toast(errText(e)); }
 };
 $("#btnCompact").onclick = async () => {
   try { await ensureIndex(); const r = await compactRecords();
     toast("Compacted records.jsonl: " + r.before + " lines to " + r.after + ".");
     rebuildDerived(); await refreshPlan(); }
-  catch (e){ toast(String(e.message || e)); }
+  catch (e){ toast(errText(e)); }
 };
 $("#btnPause").onclick = () => {
   RUN.paused = !RUN.paused;
@@ -485,7 +485,7 @@ $("#btnMoveIndex").onclick = async () => {
   catch (e){
     if (e.name === "AbortError") return;
     if (isPickerStuck(e)){ offerPickerReset(); return; }
-    toast(String(e.message || e)); return;
+    toast(errText(e)); return;
   }
   if (!dest) return;
   const st = step(host, "Moving the index to " + dest.name);
@@ -498,8 +498,8 @@ $("#btnMoveIndex").onclick = async () => {
     await refreshPlan();
     toast("Index moved to " + dest.name);
   } catch (e){
-    st.err(String(e.message || e));
-    toast("Move failed: " + String(e.message || e));
+    st.err(errText(e));
+    toast("Move failed: " + errText(e));
   }
 };
 
@@ -534,7 +534,7 @@ $("#btnIndexReveal").onclick = async () => {
       + "\n\nNote: the leading dot makes .photoindex HIDDEN in Finder."
       + "\nPress Cmd+Shift+.  in Finder to show hidden folders.";
     host.append(pre);
-  } catch (e){ st.err(String(e.message || e)); }
+  } catch (e){ st.err(errText(e)); }
 };
 
 /* ================= backups ================= */
@@ -558,7 +558,7 @@ $("#btnBackup").onclick = async () => {
     }
   } catch (e){
     checksBox(host).append(checkRow({ status:"err", title:"Could not open the index",
-      detail:String(e.message || e) }));
+      detail:errText(e) }));
     btn.disabled = false; btn.textContent = "Back up now";
     return;
   }
@@ -573,8 +573,8 @@ $("#btnBackup").onclick = async () => {
     toast("Backup complete: " + (b.bytes/1048576).toFixed(1) + " MB");
     await showBackups();
   } catch (e){
-    st.err(String(e.message || e));
-    toast("Backup failed: " + String(e.message || e));
+    st.err(errText(e));
+    toast("Backup failed: " + errText(e));
   } finally {
     btn.disabled = false; btn.textContent = "Back up now";
   }
@@ -617,7 +617,7 @@ async function showBackups(){
           const r2 = await restoreBackup(b.name, m => st2.note(m));
           st2.ok("Restored " + r2.records + " records, " + r2.vectors + " vectors.");
           await refreshPlan();
-        } catch (e){ st2.err(String(e.message || e)); }
+        } catch (e){ st2.err(errText(e)); }
       };
       td.append(btn); tr.append(td);
       tb.append(tr);
@@ -625,7 +625,7 @@ async function showBackups(){
     t.append(tb); box.append(t);
     host.append(box);
   } catch (e){ renderChecks(host, [{ status:"err", title:"Could not list backups",
-    detail:String(e.message || e) }]); }
+    detail:errText(e) }]); }
 }
 
 /* ================= geonames button ================= */
@@ -641,7 +641,7 @@ $("#btnGeo").onclick = async () => {
     await geoFetchAndCache((phase, detail) =>
       st.note(phase + (detail ? "  " + detail : "")));
     st.ok(GEO.count.toLocaleString() + " places cached in .photoindex/geo/ — this is now offline.");
-  } catch (e){ st.err(String(e.message || e) + " — photos will store coordinates only."); }
+  } catch (e){ st.err(errText(e) + " — photos will store coordinates only."); }
 };
 
 /* ================= settings wiring ================= */

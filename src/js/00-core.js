@@ -169,6 +169,19 @@ function step(host, title){
     paint
   };
 }
+/* DOMExceptions frequently carry an empty .message, which rendered as a blank
+   error and left only the last progress label on screen. Always produce text. */
+function errText(e){
+  if (!e) return "unknown error";
+  const name = e.name && e.name !== "Error" ? e.name : "";
+  const msg = (e.message || "").trim();
+  if (name && msg) return name + ": " + msg;
+  if (msg) return msg;
+  if (name) return name;
+  const s = String(e);
+  return s === "[object Object]" ? JSON.stringify(e).slice(0, 200) : s;
+}
+
 function toast(msg){
   const t = $("#toast");
   t.textContent = msg; t.hidden = false;

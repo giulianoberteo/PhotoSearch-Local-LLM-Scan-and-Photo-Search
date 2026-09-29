@@ -69,7 +69,7 @@ async function scanOne(f, signal){
       break;
     } catch (e){
       if (e.name === "AbortError") throw e;
-      lastIssues = [String(e.message || e)];
+      lastIssues = [errText(e)];
       if (attempt >= 2) break;
       note = "Your previous answer failed to parse. Return ONE valid JSON object only.";
     }
@@ -104,7 +104,7 @@ async function scanOne(f, signal){
       ocrCost = { secs:o.secs, tokens:o.tokens, lines:o.lines.length };
     } catch (e){
       if (e.name === "AbortError") throw e;
-      ocrCost = { error:String(e.message || e) };
+      ocrCost = { error:errText(e) };
     }
   }
   const when = dateContext(exif.date_taken,
@@ -148,7 +148,7 @@ async function scanOne(f, signal){
       RUN.vecBatch.push({ id:rec.id, vec: Float32Array.from(vec) });
     } catch (e){
       if (e.name === "AbortError") throw e;
-      rec.embed_error = String(e.message || e);
+      rec.embed_error = errText(e);
     }
   }
   return rec;
@@ -225,7 +225,7 @@ async function runScan(files, mode, resuming){
         addRecent(rec);
       } catch (e){
         if (e.name === "AbortError"){ queue.unshift(f); return; }
-        const msg = String(e.message || e);
+        const msg = errText(e);
         const rec = { id:f.id, path:f.path, name:f.name, kind:f.kind, fingerprint:f.fp,
           library_root: (S.dirHandle && S.dirHandle.name) || null,
           size:f.size, mtime:f.mtime, status:"error", error:msg,
@@ -275,7 +275,7 @@ async function runScan(files, mode, resuming){
         const b = await backupIndex(mode);
         toast("Backed up " + (b.bytes/1048576).toFixed(1) + " MB"
           + (b.pruned ? " (" + b.pruned + " older removed)" : ""));
-      } catch (e){ toast("Backup failed: " + String(e.message || e)); }
+      } catch (e){ toast("Backup failed: " + errText(e)); }
     }
     RUN.active = false;
     releaseWakeLock();

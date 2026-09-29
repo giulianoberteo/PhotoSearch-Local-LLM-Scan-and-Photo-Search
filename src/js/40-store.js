@@ -83,9 +83,19 @@ async function ensureIndex(onPhase){
      before writing and skip the round trip otherwise. */
   const next = JSON.stringify({ ...conf, updated_at:undefined }, null, 2);
   if (next !== IDX.lastConfig){
+    await say("Writing config.json…");
     conf.updated_at = new Date().toISOString();
-    await writeFile(cfg, JSON.stringify(conf, null, 2));
-    IDX.lastConfig = next;
+    try {
+      await writeFile(cfg, JSON.stringify(conf, null, 2));
+      IDX.lastConfig = next;
+    } catch (e){
+      /* Housekeeping, not data. A backup exists to copy records OFF this share;
+         refusing to run because a settings file could not be rewritten would be
+         exactly backwards. */
+      IDX.configWriteError = errText(e);
+      await say("config.json could not be written (" + IDX.configWriteError
+        + ") — continuing");
+    }
   }
   return IDX.dir;
 }

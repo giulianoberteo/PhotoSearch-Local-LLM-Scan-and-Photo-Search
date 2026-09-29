@@ -550,6 +550,19 @@ function step(host, title){
     paint
   };
 }
+/* DOMExceptions frequently carry an empty .message, which rendered as a blank
+   error and left only the last progress label on screen. Always produce text. */
+function errText(e){
+  if (!e) return "unknown error";
+  const name = e.name && e.name !== "Error" ? e.name : "";
+  const msg = (e.message || "").trim();
+  if (name && msg) return name + ": " + msg;
+  if (msg) return msg;
+  if (name) return name;
+  const s = String(e);
+  return s === "[object Object]" ? JSON.stringify(e).slice(0, 200) : s;
+}
+
 function toast(msg){
   const t = $("#toast");
   t.textContent = msg; t.hidden = false;
@@ -1472,9 +1485,19 @@ async function ensureIndex(onPhase){
      before writing and skip the round trip otherwise. */
   const next = JSON.stringify({ ...conf, updated_at:undefined }, null, 2);
   if (next !== IDX.lastConfig){
+    await say("Writing config.json…");
     conf.updated_at = new Date().toISOString();
-    await writeFile(cfg, JSON.stringify(conf, null, 2));
-    IDX.lastConfig = next;
+    try {
+      await writeFile(cfg, JSON.stringify(conf, null, 2));
+      IDX.lastConfig = next;
+    } catch (e){
+      /* Housekeeping, not data. A backup exists to copy records OFF this share;
+         refusing to run because a settings file could not be rewritten would be
+         exactly backwards. */
+      IDX.configWriteError = errText(e);
+      await say("config.json could not be written (" + IDX.configWriteError
+        + ") — continuing");
+    }
   }
   return IDX.dir;
 }
@@ -1803,7 +1826,10 @@ async function backupIndex(reason, onProgress){
      sleeping share needs ~24s just to answer, and copies run at a few hundred
      KB/s. They exist to turn a hang into a message, not to police speed. */
   await say("Opening the index…");
-  await withDeadline("opening the index", 120000, ensureIndex(say));
+  let lastPhase = "opening the index";
+  await withDeadline("opening the index", 120000,
+    ensureIndex(async m => { lastPhase = m; await say(m); }))
+    .catch(e => { throw new Error(errText(e) + "  [stuck at: " + lastPhase + "]"); });
   await say("Waking the drive…");
   await wakeStorage(say);
   await say("Opening backups/…");
@@ -2904,7 +2930,7 @@ async function scanOne(f, signal){
       break;
     } catch (e){
       if (e.name === "AbortError") throw e;
-      lastIssues = [String(e.message || e)];
+      lastIssues = [errText(e)];
       if (attempt >= 2) break;
       note = "Your previous answer failed to parse. Return ONE valid JSON object only.";
     }
@@ -2939,7 +2965,7 @@ async function scanOne(f, signal){
       ocrCost = { secs:o.secs, tokens:o.tokens, lines:o.lines.length };
     } catch (e){
       if (e.name === "AbortError") throw e;
-      ocrCost = { error:String(e.message || e) };
+      ocrCost = { error:errText(e) };
     }
   }
   const when = dateContext(exif.date_taken,
@@ -2983,7 +3009,7 @@ async function scanOne(f, signal){
       RUN.vecBatch.push({ id:rec.id, vec: Float32Array.from(vec) });
     } catch (e){
       if (e.name === "AbortError") throw e;
-      rec.embed_error = String(e.message || e);
+      rec.embed_error = errText(e);
     }
   }
   return rec;
@@ -3060,7 +3086,7 @@ async function runScan(files, mode, resuming){
         addRecent(rec);
       } catch (e){
         if (e.name === "AbortError"){ queue.unshift(f); return; }
-        const msg = String(e.message || e);
+        const msg = errText(e);
         const rec = { id:f.id, path:f.path, name:f.name, kind:f.kind, fingerprint:f.fp,
           library_root: (S.dirHandle && S.dirHandle.name) || null,
           size:f.size, mtime:f.mtime, status:"error", error:msg,
@@ -3110,7 +3136,7 @@ async function runScan(files, mode, resuming){
         const b = await backupIndex(mode);
         toast("Backed up " + (b.bytes/1048576).toFixed(1) + " MB"
           + (b.pruned ? " (" + b.pruned + " older removed)" : ""));
-      } catch (e){ toast("Backup failed: " + String(e.message || e)); }
+      } catch (e){ toast("Backup failed: " + errText(e)); }
     }
     RUN.active = false;
     releaseWakeLock();
@@ -3247,7 +3273,7 @@ $("#btnThink").onclick = async () => {
       st[mode === "off" && !leaked ? "ok" : "warn"](
         tok + " output tokens, " + secs.toFixed(1) + "s, reasoning "
         + (leaked ? "present" : "absent"));
-    } catch (e){ st.err(String(e.message || e)); }
+    } catch (e){ st.err(errText(e)); }
   }
   const on = runs.find(r => r.mode === "on"), off = runs.find(r => r.mode === "off");
   if (on && off && on.tok && off.tok)
@@ -3269,7 +3295,7 @@ async function useDirectory(handle){
     let p = await handle.queryPermission({ mode:"readwrite" });
     if (p !== "granted") p = await handle.requestPermission({ mode:"readwrite" });
     p === "granted" ? st.ok("granted") : st.warn(p);
-  } catch (e){ st.warn(String(e.message || e)); }
+  } catch (e){ st.warn(errText(e)); }
   try { await idbSet("lastDir", handle); $("#btnReconnect").disabled = false; } catch {}
   renderIndexWhere();
   await fillScopes();
@@ -3324,7 +3350,7 @@ $("#btnIndexDir").onclick = async () => {
   catch (e){
     if (e.name === "AbortError") return;
     if (isPickerStuck(e)){ offerPickerReset(); return; }
-    toast(String(e.message || e));
+    toast(errText(e));
     return;
   }
   if (!h) return;
@@ -3344,7 +3370,7 @@ $("#btnPick").onclick = async () => {
     if (e.name === "AbortError") return;
     if (isPickerStuck(e)){ offerPickerReset(); return; }
     renderChecks($("#fsOut"), [{ status:"err", title:"Could not open folder",
-      detail:String(e.message || e) }]);
+      detail:errText(e) }]);
     return;
   }
   if (h) await useDirectory(h);
@@ -3383,7 +3409,7 @@ $("#btnWriteTest").onclick = async () => {
       detail:"Open the Scan tab to see the plan." }));
   } catch (e){
     checksBox(host).append(checkRow({ status:"err", title:"Write test failed",
-      detail:String(e.message || e) }));
+      detail:errText(e) }));
   }
   btn.disabled = false; btn.textContent = "Test write to .photoindex/";
 };
@@ -3440,7 +3466,7 @@ async function refreshPlan(){
     renderPlan(p);
   } catch (e){
     if (e.name === "AbortError") return;
-    st.err(String(e.message || e));
+    st.err(errText(e));
   }
 }
 function renderPlan(p){
@@ -3628,13 +3654,13 @@ $("#btnFull").onclick = () => { const p = S.plan;
 $("#btnRetry").onclick = () => runScan(S.plan.failed, "retry-failed");
 $("#btnMissing").onclick = async () => {
   try { const n = await markMissing(S.plan); toast(n + " records marked missing."); await refreshPlan(); }
-  catch (e){ toast(String(e.message || e)); }
+  catch (e){ toast(errText(e)); }
 };
 $("#btnCompact").onclick = async () => {
   try { await ensureIndex(); const r = await compactRecords();
     toast("Compacted records.jsonl: " + r.before + " lines to " + r.after + ".");
     rebuildDerived(); await refreshPlan(); }
-  catch (e){ toast(String(e.message || e)); }
+  catch (e){ toast(errText(e)); }
 };
 $("#btnPause").onclick = () => {
   RUN.paused = !RUN.paused;
@@ -3656,7 +3682,7 @@ $("#btnMoveIndex").onclick = async () => {
   catch (e){
     if (e.name === "AbortError") return;
     if (isPickerStuck(e)){ offerPickerReset(); return; }
-    toast(String(e.message || e)); return;
+    toast(errText(e)); return;
   }
   if (!dest) return;
   const st = step(host, "Moving the index to " + dest.name);
@@ -3669,8 +3695,8 @@ $("#btnMoveIndex").onclick = async () => {
     await refreshPlan();
     toast("Index moved to " + dest.name);
   } catch (e){
-    st.err(String(e.message || e));
-    toast("Move failed: " + String(e.message || e));
+    st.err(errText(e));
+    toast("Move failed: " + errText(e));
   }
 };
 
@@ -3705,7 +3731,7 @@ $("#btnIndexReveal").onclick = async () => {
       + "\n\nNote: the leading dot makes .photoindex HIDDEN in Finder."
       + "\nPress Cmd+Shift+.  in Finder to show hidden folders.";
     host.append(pre);
-  } catch (e){ st.err(String(e.message || e)); }
+  } catch (e){ st.err(errText(e)); }
 };
 
 /* ================= backups ================= */
@@ -3729,7 +3755,7 @@ $("#btnBackup").onclick = async () => {
     }
   } catch (e){
     checksBox(host).append(checkRow({ status:"err", title:"Could not open the index",
-      detail:String(e.message || e) }));
+      detail:errText(e) }));
     btn.disabled = false; btn.textContent = "Back up now";
     return;
   }
@@ -3744,8 +3770,8 @@ $("#btnBackup").onclick = async () => {
     toast("Backup complete: " + (b.bytes/1048576).toFixed(1) + " MB");
     await showBackups();
   } catch (e){
-    st.err(String(e.message || e));
-    toast("Backup failed: " + String(e.message || e));
+    st.err(errText(e));
+    toast("Backup failed: " + errText(e));
   } finally {
     btn.disabled = false; btn.textContent = "Back up now";
   }
@@ -3788,7 +3814,7 @@ async function showBackups(){
           const r2 = await restoreBackup(b.name, m => st2.note(m));
           st2.ok("Restored " + r2.records + " records, " + r2.vectors + " vectors.");
           await refreshPlan();
-        } catch (e){ st2.err(String(e.message || e)); }
+        } catch (e){ st2.err(errText(e)); }
       };
       td.append(btn); tr.append(td);
       tb.append(tr);
@@ -3796,7 +3822,7 @@ async function showBackups(){
     t.append(tb); box.append(t);
     host.append(box);
   } catch (e){ renderChecks(host, [{ status:"err", title:"Could not list backups",
-    detail:String(e.message || e) }]); }
+    detail:errText(e) }]); }
 }
 
 /* ================= geonames button ================= */
@@ -3812,7 +3838,7 @@ $("#btnGeo").onclick = async () => {
     await geoFetchAndCache((phase, detail) =>
       st.note(phase + (detail ? "  " + detail : "")));
     st.ok(GEO.count.toLocaleString() + " places cached in .photoindex/geo/ — this is now offline.");
-  } catch (e){ st.err(String(e.message || e) + " — photos will store coordinates only."); }
+  } catch (e){ st.err(errText(e) + " — photos will store coordinates only."); }
 };
 
 /* ================= settings wiring ================= */
@@ -4995,6 +5021,38 @@ async function selfTest(){
       const dirB2 = await backupsDir();
       for (const x of await listBackups())
         { try { await dirB2.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
+    /* ---- an error must never render as nothing ----
+       A DOMException with an empty .message showed as a blank line, leaving the
+       last progress label on screen under a failure icon and no way to tell
+       what had gone wrong. */
+    {
+      eq("an empty DOMException still says something",
+         errText(new DOMException("", "NotFoundError")), "NotFoundError");
+      eq("a named error keeps both parts",
+         errText(new DOMException("no entry", "NotFoundError")),
+         "NotFoundError: no entry");
+      eq("a plain Error uses its message",
+         errText(new Error("plain failure")), "plain failure");
+      ok("an object without either is still described",
+         errText({}) !== "" && errText({}) !== "[object Object]", errText({}));
+      eq("null does not produce blank", errText(null), "unknown error");
+    }
+
+    /* ---- housekeeping failures must not abort real work ---- */
+    {
+      const realWrite = writeFile;
+      IDX.lastConfig = null;
+      IDX.configWriteError = null;
+      writeFile = async () => { throw new DOMException("", "NoModificationAllowedError"); };
+      let threw = null;
+      try { await ensureIndex(); } catch (e){ threw = errText(e); }
+      ok("a config.json write failure does not abort ensureIndex", threw === null, threw);
+      ok("but it is recorded", !!IDX.configWriteError, IDX.configWriteError);
+      writeFile = realWrite;
+      IDX.lastConfig = null; IDX.configWriteError = null;
+      await ensureIndex();
     }
 
     /* ---- opening the index must not touch thumbs/ ----
