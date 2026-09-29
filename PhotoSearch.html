@@ -1552,6 +1552,23 @@ async function loadRecords(onProgress){
   if (bad) console.warn("records.jsonl: " + bad + " unparseable lines skipped");
   return lines;
 }
+/* Reads many full records in ONE pass. Anything that rewrites records must use
+   this, never the lightened in-memory copies. */
+async function readFullRecords(ids){
+  const out = new Map();
+  let fh;
+  try { fh = await IDX.dir.getFileHandle("records.jsonl"); } catch { return out; }
+  const text = await (await fh.getFile()).text();
+  for (const ln of text.split("\n")){
+    if (!ln.trim()) continue;
+    try {
+      const r = JSON.parse(ln);
+      if (r && ids.has(r.id)) out.set(r.id, r);     // later lines win
+    } catch {}
+  }
+  return out;
+}
+
 /* Reads one full record (including raw model JSON) straight from disk. */
 async function readFullRecord(id){
   let fh;
@@ -1566,9 +1583,18 @@ async function readFullRecord(id){
 }
 /* Rewrites records.jsonl to latest-state-only and drops soft-deleted rows. */
 async function compactRecords(){
-  /* This is the only operation that REWRITES records.jsonl rather than
-     appending. If it is interrupted the file is gone, so copy it first. */
-  if (typeof backupIndex === "function" && IDX.records.size > 0)
+  /* The only operation that REWRITES records.jsonl rather than appending, so:
+     never while a scan is flushing, never outside the write mutex, and never
+     without a copy first. */
+  if (typeof RUN !== "undefined" && RUN.active)
+    throw new Error("A scan is running. Compacting now would rewrite the log a "
+      + "flush is appending to. Stop the scan first.");
+  const text0 = await readTextIfAny(IDX.dir, "records.jsonl");
+  if (text0 == null) return { before:0, after:0 };
+  /* Guard on the FILE, not the in-memory count: if loadRecords never ran,
+     IDX.records.size is 0 and the old check skipped the safety copy entirely
+     while still rewriting the file. */
+  if (typeof backupIndex === "function" && text0.trim())
     await backupIndex("pre-compaction safety copy");
   const text = await readTextIfAny(IDX.dir, "records.jsonl");
   if (text == null) return { before:0, after:0 };
@@ -1580,8 +1606,10 @@ async function compactRecords(){
     try { const r = JSON.parse(ln); if (r && r.id) latest.set(r.id, r); } catch {}
   }
   const keep = [...latest.values()].filter(r => !r.deleted);
-  const fh = await IDX.dir.getFileHandle("records.jsonl", { create:true });
-  await writeFile(fh, keep.map(o => JSON.stringify(o)).join("\n") + (keep.length ? "\n" : ""));
+  await exclusive(async () => {
+    const fh = await IDX.dir.getFileHandle("records.jsonl", { create:true });
+    await writeFile(fh, keep.map(o => JSON.stringify(o)).join("\n") + (keep.length ? "\n" : ""));
+  });
   IDX.records = new Map(keep.map(r => [r.id, lighten(r)]));
   return { before, after: keep.length };
 }
@@ -1769,7 +1797,10 @@ async function copyInto(srcDir, destDir, name, onProgress){
     }
     await w.close();
   } catch (e){
-    try { await w.close(); } catch {}
+    /* abort() discards; close() would COMMIT a half-written file. A truncated
+       records.jsonl that looks valid is worse than no backup at all. */
+    try { await w.abort(); } catch {}
+    try { await destDir.removeEntry(name); } catch {}
     throw e;
   }
   const written = (await fh.getFile()).size;
@@ -2118,6 +2149,10 @@ async function buildPlan(onTick, signal){
 
   const claimed = new Set();
   const unmatched = [];
+  /* Records belonging to files we could not stat must be protected: the file is
+     present, we simply could not read it. Without this they fall through to
+     "missing" and Mark missing soft-deletes them. */
+  const unreadablePaths = new Set(files.filter(f => f.statError).map(f => f.path));
   for (const f of files){
     if (f.statError) continue;
     f.fp = f.size + ":" + f.mtime;
@@ -2227,6 +2262,7 @@ async function buildPlan(onTick, signal){
     if (seen.has(id) || r.deleted) continue;
     if (prefix && !(r.path || "").startsWith(prefix)) continue;
     if (r.library_root && r.library_root !== rootName) continue;
+    if (unreadablePaths.has(r.path)) continue;      // present but unreadable
     plan.missing.push(r);
   }
 
@@ -2250,9 +2286,15 @@ async function buildPlan(onTick, signal){
    staleness check still fires). */
 async function applyMoves(moved){
   if (!moved.length) return 0;
+  /* Read the FULL records from disk first. The in-memory copies are lightened
+     -- raw_model_json and embeddings are stripped to keep a large library in
+     memory -- and records.jsonl is last-line-wins, so writing a lightened copy
+     would make the stripped version authoritative and destroy the model output
+     permanently. One pass over the file covers every move. */
+  const full = await readFullRecords(new Set(moved.map(f => f.id)));
   const lines = [];
   for (const f of moved){
-    const old = IDX.records.get(f.id);
+    const old = full.get(f.id) || IDX.records.get(f.id);
     if (!old) continue;
     const rec = { ...old, path:f.path, name:f.name, fingerprint:f.fp,
       size:f.size, mtime:f.mtime, moved_from:f.movedFrom,
@@ -2276,6 +2318,17 @@ async function markMissing(plan){
   if (plan.missing.length > plan.total && plan.total > 0)
     throw new Error("More records are missing than files found. Refusing, as this usually means "
       + "a partly mounted share.");
+  /* A flaky share fails some reads, not all. Proportion is the signal a bare
+     count misses: losing a quarter of a library at once is never routine. */
+  const live = plan.indexTotal || IDX.records.size;
+  if (live > 20 && plan.missing.length > live * 0.25)
+    throw new Error("That would mark " + plan.missing.length + " of " + live
+      + " records missing (" + Math.round(plan.missing.length / live * 100) + "%). "
+      + "Refusing: this usually means the share is flaky rather than the photos being gone. "
+      + "Refresh the plan when it is responding normally.");
+  if (plan.unreadable && plan.unreadable.length)
+    throw new Error(plan.unreadable.length + " file(s) could not be read on this pass, so "
+      + "what is genuinely missing cannot be determined. Try again when the share is healthy.");
   const lines = plan.missing.map(r => ({ ...r, deleted:true, deleted_at:new Date().toISOString() }));
   for (const r of lines) IDX.records.set(r.id, lighten(r));
   await appendLines("records.jsonl", lines);
@@ -3137,11 +3190,26 @@ async function runScan(files, mode, resuming){
       } catch (e){
         if (e.name === "AbortError"){ queue.unshift(f); return; }
         const msg = errText(e);
-        const rec = { id:f.id, path:f.path, name:f.name, kind:f.kind, fingerprint:f.fp,
-          library_root: (S.dirHandle && S.dirHandle.name) || null,
-          size:f.size, mtime:f.mtime, status:"error", error:msg,
-          scanned_at:new Date().toISOString(), vision_model:S.roles.scan,
-          schema_hash:SCHEMA_HASH(), prompt_hash:PROMPT_HASH() };
+        /* NEVER downgrade a good record to an error stub. A transient read or
+           decode failure during a rescan would otherwise destroy a caption,
+           objects, dates and GPS that cost real model time -- and compaction
+           would make it permanent. Keep the old content and record the failure
+           alongside it. */
+        const prior = IDX.records.get(f.id);
+        const keep = (prior && !prior.deleted && prior.status !== "error")
+          ? (await readFullRecords(new Set([f.id]))).get(f.id) || prior
+          : null;
+        const rec = keep
+          ? { ...keep, path:f.path, name:f.name, fingerprint:f.fp,
+              size:f.size, mtime:f.mtime,
+              library_root: (S.dirHandle && S.dirHandle.name) || null,
+              last_error: msg, last_error_at: new Date().toISOString(),
+              rescan_failed: true }
+          : { id:f.id, path:f.path, name:f.name, kind:f.kind, fingerprint:f.fp,
+              library_root: (S.dirHandle && S.dirHandle.name) || null,
+              size:f.size, mtime:f.mtime, status:"error", error:msg,
+              scanned_at:new Date().toISOString(), vision_model:S.roles.scan,
+              schema_hash:SCHEMA_HASH(), prompt_hash:PROMPT_HASH() };
         RUN.batch.push(rec);
         IDX.records.set(rec.id, lighten(rec));
         RUN.errorCount++;
@@ -3203,13 +3271,33 @@ async function runScan(files, mode, resuming){
 /* Flush = records + vectors + checkpoint, in that order. If the tab dies
    between them the checkpoint is merely stale, never ahead of the data. */
 async function flushBatch(queue){
+  /* Both batches are put back if the write fails. They used to be cleared
+     first, so a failed write silently dropped up to 25 finished photos (and
+     every embedding) with only a console warning. */
   if (RUN.batch.length){
-    const b = RUN.batch; RUN.batch = [];
-    await appendLines("records.jsonl", b);
+    const b = RUN.batch.slice();
+    try {
+      await appendLines("records.jsonl", b);
+      RUN.batch = RUN.batch.slice(b.length);
+    } catch (e){
+      RUN.writeError = errText(e);
+      renderErrors();
+      throw e;                       // the caller must know records are unsaved
+    }
   }
   if (RUN.vecBatch.length){
-    const v = RUN.vecBatch; RUN.vecBatch = [];
-    try { await appendVectors(v); } catch (e){ console.warn("vectors:", e.message); }
+    const v = RUN.vecBatch.slice();
+    try {
+      await appendVectors(v);
+      RUN.vecBatch = RUN.vecBatch.slice(v.length);
+    } catch (e){
+      /* Keep them queued for the next flush and make it visible: embeddings
+         failing for a whole run used to be invisible, and search then degraded
+         to keyword-only with nothing to indicate why. */
+      RUN.vecError = errText(e);
+      RUN.vecErrorCount = (RUN.vecErrorCount || 0) + v.length;
+      renderErrors();
+    }
   }
   if (queue){
     await saveCheckpoint({
@@ -3238,6 +3326,17 @@ async function resumeScan(){
     return r.fingerprint !== f.fp || r.schema_hash !== sh || r.prompt_hash !== ph;
   });
   const gone = cp.pending.length - files.length;
+  /* Dropping queued paths silently is how a day of work disappears behind a
+     reassuring toast: anything not in the CURRENT plan may simply be out of
+     scope, not finished. Say so, and let the user decide. */
+  if (gone > 0 && files.length < cp.pending.length * 0.9){
+    const go = confirm(gone + " of " + cp.pending.length + " queued photos are not in the "
+      + "current plan.\n\nThey may be finished, deleted, or simply outside the current "
+      + "scan scope" + (S.scanScope ? " (" + S.scanScope + ")" : "") + ".\n\n"
+      + "Resume with the remaining " + files.length + "?\n\n"
+      + "Cancel keeps the checkpoint intact so nothing is lost.");
+    if (!go) return;
+  }
   if (!files.length){ await clearCheckpoint(); toast("Nothing left to resume."); await refreshPlan(); return; }
   toast("Resuming " + files.length + " of " + cp.pending.length + " queued images"
     + (gone ? " (" + gone + " already done or gone)" : ""));
@@ -3708,6 +3807,7 @@ $("#btnMissing").onclick = async () => {
   catch (e){ toast(errText(e)); }
 };
 $("#btnCompact").onclick = async () => {
+  if (RUN.active){ toast("Stop the scan before compacting."); return; }
   try { await ensureIndex(); const r = await compactRecords();
     toast("Compacted records.jsonl: " + r.before + " lines to " + r.after + ".");
     rebuildDerived(); await refreshPlan(); }
@@ -4801,8 +4901,15 @@ async function selfTest(){
       {
         S.dirHandle = scratch;
         const rec0 = [...IDX.records.values()].find(r => r.name === "IMG_1.jpg" && !r.deleted);
-        rec0.schema_hash = "OLD-HASH";                 // pretend the template moved on
-        rec0.library_root = "some-other-root";         // and it came from another pick
+        /* Write the stale state to DISK, not just to memory: applyMoves now
+           reads the full record from the log (so it cannot strip raw_model_json),
+           which means an in-memory-only change would simply be ignored. */
+        const disk0 = (await readFullRecords(new Set([rec0.id]))).get(rec0.id) || rec0;
+        await appendLines("records.jsonl", [{ ...disk0,
+          schema_hash:"OLD-HASH", library_root:"some-other-root" }]);
+        IDX.loaded = false; await loadRecords();
+        const rec0b = IDX.records.get(rec0.id);
+        eq("the stale state is really on disk", rec0b.schema_hash, "OLD-HASH");
         const pr = await buildPlan();
         const asStale = pr.stale.filter(f => f.name === "IMG_1.jpg").length;
         const asOk = pr.ok.filter(f => f.name === "IMG_1.jpg").length;
@@ -4810,10 +4917,11 @@ async function selfTest(){
         ok("it is not silently marked up to date", asOk <= 1, asOk + " ok");
         ok("and it is queued for relinking", pr.moved.some(f => f.name === "IMG_1.jpg"));
         await applyMoves(pr.moved);
-        const after = IDX.records.get(rec0.id);
+        const after = (await readFullRecords(new Set([rec0.id]))).get(rec0.id);
         eq("relinking rewrites the pick root", after.library_root, scratch.name);
         eq("relinking preserves the hashes so staleness still fires",
            after.schema_hash, "OLD-HASH");
+        ok("and still preserves the raw model output", !!after.raw_model_json);
         const pr2 = await buildPlan();
         eq("a second plan needs no further relinking of it",
            pr2.moved.filter(f => f.name === "IMG_1.jpg").length, 0);
@@ -5228,6 +5336,111 @@ async function selfTest(){
       const dirP = await backupsDir();
       for (const x of await listBackups())
         { try { await dirP.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
+    /* ---- data-loss regressions found by review ---- */
+    {
+      const live = [...IDX.records.values()].find(r => !r.deleted && r.status !== "error");
+
+      /* applyMoves must not strip raw_model_json (it was writing the lightened
+         in-memory copy into a last-line-wins log). */
+      const fullBefore = (await readFullRecords(new Set([live.id]))).get(live.id);
+      ok("the record on disk has raw model output", !!(fullBefore && fullBefore.raw_model_json));
+      await applyMoves([{ id:live.id, path:"relocated/" + live.name, name:live.name,
+                          fp:live.fingerprint, size:live.size, mtime:live.mtime }]);
+      const fullAfter = (await readFullRecords(new Set([live.id]))).get(live.id);
+      ok("relinking preserves raw model output",
+         !!(fullAfter && fullAfter.raw_model_json), "raw_model_json survived");
+      eq("and the path was updated", fullAfter.path, "relocated/" + live.name);
+
+      /* a failed rescan must not replace a good record with an error stub */
+      const priorCaption = live.caption;
+      ok("the record has a caption to lose", !!priorCaption);
+
+      /* an unreadable file must never be reported missing */
+      const planU = await buildPlan();
+      const fakeUnreadable = planU.ok[0] || planU.new[0];
+      if (fakeUnreadable){
+        const rec = IDX.records.get(fakeUnreadable.id);
+        if (rec){
+          // simulate statAll failing for this one file
+          const realStat = fakeUnreadable.handle.getFile;
+          fakeUnreadable.handle.getFile = async () => { throw new DOMException("", "NotReadableError"); };
+          const planV = await buildPlan();
+          const reported = planV.missing.some(r => r.path === rec.path);
+          ok("a file that cannot be read is not reported missing", !reported,
+             reported ? "WRONGLY MISSING" : "protected");
+          fakeUnreadable.handle.getFile = realStat;
+        }
+      }
+
+      /* mark missing refuses when reads failed on this pass */
+      let refusedUnreadable = false;
+      try {
+        await markMissing({ missing:[{id:"x"}], total:10, indexTotal:10,
+                            unreadable:[{path:"a.jpg"}], folderLooksEmpty:false });
+      } catch (e){ refusedUnreadable = /could not be read/.test(errText(e)); }
+      ok("mark missing refuses after read failures", refusedUnreadable);
+
+      /* and refuses to delete a large proportion at once */
+      let refusedBulk = false;
+      try {
+        await markMissing({ missing:new Array(30).fill({id:"x"}), total:100,
+                            indexTotal:100, unreadable:[], folderLooksEmpty:false });
+      } catch (e){ refusedBulk = /30 of 100/.test(errText(e)); }
+      ok("mark missing refuses to delete a quarter of the library", refusedBulk);
+
+      /* compaction refuses to run during a scan */
+      const wasActive = RUN.active; RUN.active = true;
+      let refusedCompact = false;
+      try { await compactRecords(); } catch (e){ refusedCompact = /scan is running/.test(errText(e)); }
+      ok("compaction refuses while a scan is flushing", refusedCompact);
+      RUN.active = wasActive;
+
+      /* a failed record write must not discard the batch */
+      const realAppend = appendLines;
+      RUN.batch = [{ id:"kept-1" }, { id:"kept-2" }];
+      appendLines = async () => { throw new DOMException("", "NoModificationAllowedError"); };
+      let threw = false;
+      try { await flushBatch(null); } catch { threw = true; }
+      appendLines = realAppend;
+      ok("a failed flush throws rather than continuing", threw);
+      eq("and the records are still queued", RUN.batch.length, 2);
+      RUN.batch = [];
+
+      /* a failed vector write must be kept and surfaced */
+      const realAppendVec = appendVectors;
+      RUN.vecBatch = [{ id:"v1", vec:Float32Array.from([1,2,3]) }];
+      RUN.vecError = null;
+      appendVectors = async () => { throw new DOMException("", "QuotaExceededError"); };
+      await flushBatch(null);
+      appendVectors = realAppendVec;
+      eq("embeddings stay queued after a failed write", RUN.vecBatch.length, 1);
+      ok("and the failure is recorded, not swallowed", !!RUN.vecError, RUN.vecError);
+      RUN.vecBatch = []; RUN.vecError = null;
+    }
+
+    /* ---- a partial copy must never be committed ---- */
+    {
+      const srcD = await scratch.getDirectoryHandle("pcsrc", { create:true });
+      const dstD = await scratch.getDirectoryHandle("pcdst", { create:true });
+      const fh = await srcD.getFileHandle("big.bin", { create:true });
+      const w0 = await fh.createWritable();
+      await w0.write(new Blob([new Uint8Array(9 * 1024 * 1024)])); await w0.close();
+
+      let failed = false;
+      try {
+        await copyInto(srcD, dstD, "big.bin", async (n, got) => {
+          if (got > 4 * 1024 * 1024) throw new DOMException("", "NotReadableError");
+        });
+      } catch { failed = true; }
+      ok("an interrupted copy reports failure", failed);
+      let leftBehind = true;
+      try { await dstD.getFileHandle("big.bin"); } catch { leftBehind = false; }
+      ok("and leaves no truncated file that looks valid", !leftBehind);
+
+      for (const d of ["pcsrc","pcdst"])
+        { try { await scratch.removeEntry(d, { recursive:true }); } catch {} }
     }
 
     /* ---- a new scan must not endanger an existing index ---- */

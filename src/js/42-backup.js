@@ -58,7 +58,10 @@ async function copyInto(srcDir, destDir, name, onProgress){
     }
     await w.close();
   } catch (e){
-    try { await w.close(); } catch {}
+    /* abort() discards; close() would COMMIT a half-written file. A truncated
+       records.jsonl that looks valid is worse than no backup at all. */
+    try { await w.abort(); } catch {}
+    try { await destDir.removeEntry(name); } catch {}
     throw e;
   }
   const written = (await fh.getFile()).size;

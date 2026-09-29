@@ -263,11 +263,26 @@ async function runScan(files, mode, resuming){
       } catch (e){
         if (e.name === "AbortError"){ queue.unshift(f); return; }
         const msg = errText(e);
-        const rec = { id:f.id, path:f.path, name:f.name, kind:f.kind, fingerprint:f.fp,
-          library_root: (S.dirHandle && S.dirHandle.name) || null,
-          size:f.size, mtime:f.mtime, status:"error", error:msg,
-          scanned_at:new Date().toISOString(), vision_model:S.roles.scan,
-          schema_hash:SCHEMA_HASH(), prompt_hash:PROMPT_HASH() };
+        /* NEVER downgrade a good record to an error stub. A transient read or
+           decode failure during a rescan would otherwise destroy a caption,
+           objects, dates and GPS that cost real model time -- and compaction
+           would make it permanent. Keep the old content and record the failure
+           alongside it. */
+        const prior = IDX.records.get(f.id);
+        const keep = (prior && !prior.deleted && prior.status !== "error")
+          ? (await readFullRecords(new Set([f.id]))).get(f.id) || prior
+          : null;
+        const rec = keep
+          ? { ...keep, path:f.path, name:f.name, fingerprint:f.fp,
+              size:f.size, mtime:f.mtime,
+              library_root: (S.dirHandle && S.dirHandle.name) || null,
+              last_error: msg, last_error_at: new Date().toISOString(),
+              rescan_failed: true }
+          : { id:f.id, path:f.path, name:f.name, kind:f.kind, fingerprint:f.fp,
+              library_root: (S.dirHandle && S.dirHandle.name) || null,
+              size:f.size, mtime:f.mtime, status:"error", error:msg,
+              scanned_at:new Date().toISOString(), vision_model:S.roles.scan,
+              schema_hash:SCHEMA_HASH(), prompt_hash:PROMPT_HASH() };
         RUN.batch.push(rec);
         IDX.records.set(rec.id, lighten(rec));
         RUN.errorCount++;
@@ -329,13 +344,33 @@ async function runScan(files, mode, resuming){
 /* Flush = records + vectors + checkpoint, in that order. If the tab dies
    between them the checkpoint is merely stale, never ahead of the data. */
 async function flushBatch(queue){
+  /* Both batches are put back if the write fails. They used to be cleared
+     first, so a failed write silently dropped up to 25 finished photos (and
+     every embedding) with only a console warning. */
   if (RUN.batch.length){
-    const b = RUN.batch; RUN.batch = [];
-    await appendLines("records.jsonl", b);
+    const b = RUN.batch.slice();
+    try {
+      await appendLines("records.jsonl", b);
+      RUN.batch = RUN.batch.slice(b.length);
+    } catch (e){
+      RUN.writeError = errText(e);
+      renderErrors();
+      throw e;                       // the caller must know records are unsaved
+    }
   }
   if (RUN.vecBatch.length){
-    const v = RUN.vecBatch; RUN.vecBatch = [];
-    try { await appendVectors(v); } catch (e){ console.warn("vectors:", e.message); }
+    const v = RUN.vecBatch.slice();
+    try {
+      await appendVectors(v);
+      RUN.vecBatch = RUN.vecBatch.slice(v.length);
+    } catch (e){
+      /* Keep them queued for the next flush and make it visible: embeddings
+         failing for a whole run used to be invisible, and search then degraded
+         to keyword-only with nothing to indicate why. */
+      RUN.vecError = errText(e);
+      RUN.vecErrorCount = (RUN.vecErrorCount || 0) + v.length;
+      renderErrors();
+    }
   }
   if (queue){
     await saveCheckpoint({
@@ -364,6 +399,17 @@ async function resumeScan(){
     return r.fingerprint !== f.fp || r.schema_hash !== sh || r.prompt_hash !== ph;
   });
   const gone = cp.pending.length - files.length;
+  /* Dropping queued paths silently is how a day of work disappears behind a
+     reassuring toast: anything not in the CURRENT plan may simply be out of
+     scope, not finished. Say so, and let the user decide. */
+  if (gone > 0 && files.length < cp.pending.length * 0.9){
+    const go = confirm(gone + " of " + cp.pending.length + " queued photos are not in the "
+      + "current plan.\n\nThey may be finished, deleted, or simply outside the current "
+      + "scan scope" + (S.scanScope ? " (" + S.scanScope + ")" : "") + ".\n\n"
+      + "Resume with the remaining " + files.length + "?\n\n"
+      + "Cancel keeps the checkpoint intact so nothing is lost.");
+    if (!go) return;
+  }
   if (!files.length){ await clearCheckpoint(); toast("Nothing left to resume."); await refreshPlan(); return; }
   toast("Resuming " + files.length + " of " + cp.pending.length + " queued images"
     + (gone ? " (" + gone + " already done or gone)" : ""));

@@ -300,8 +300,15 @@ async function selfTest(){
       {
         S.dirHandle = scratch;
         const rec0 = [...IDX.records.values()].find(r => r.name === "IMG_1.jpg" && !r.deleted);
-        rec0.schema_hash = "OLD-HASH";                 // pretend the template moved on
-        rec0.library_root = "some-other-root";         // and it came from another pick
+        /* Write the stale state to DISK, not just to memory: applyMoves now
+           reads the full record from the log (so it cannot strip raw_model_json),
+           which means an in-memory-only change would simply be ignored. */
+        const disk0 = (await readFullRecords(new Set([rec0.id]))).get(rec0.id) || rec0;
+        await appendLines("records.jsonl", [{ ...disk0,
+          schema_hash:"OLD-HASH", library_root:"some-other-root" }]);
+        IDX.loaded = false; await loadRecords();
+        const rec0b = IDX.records.get(rec0.id);
+        eq("the stale state is really on disk", rec0b.schema_hash, "OLD-HASH");
         const pr = await buildPlan();
         const asStale = pr.stale.filter(f => f.name === "IMG_1.jpg").length;
         const asOk = pr.ok.filter(f => f.name === "IMG_1.jpg").length;
@@ -309,10 +316,11 @@ async function selfTest(){
         ok("it is not silently marked up to date", asOk <= 1, asOk + " ok");
         ok("and it is queued for relinking", pr.moved.some(f => f.name === "IMG_1.jpg"));
         await applyMoves(pr.moved);
-        const after = IDX.records.get(rec0.id);
+        const after = (await readFullRecords(new Set([rec0.id]))).get(rec0.id);
         eq("relinking rewrites the pick root", after.library_root, scratch.name);
         eq("relinking preserves the hashes so staleness still fires",
            after.schema_hash, "OLD-HASH");
+        ok("and still preserves the raw model output", !!after.raw_model_json);
         const pr2 = await buildPlan();
         eq("a second plan needs no further relinking of it",
            pr2.moved.filter(f => f.name === "IMG_1.jpg").length, 0);
@@ -727,6 +735,111 @@ async function selfTest(){
       const dirP = await backupsDir();
       for (const x of await listBackups())
         { try { await dirP.removeEntry(x.name, { recursive:true }); } catch {} }
+    }
+
+    /* ---- data-loss regressions found by review ---- */
+    {
+      const live = [...IDX.records.values()].find(r => !r.deleted && r.status !== "error");
+
+      /* applyMoves must not strip raw_model_json (it was writing the lightened
+         in-memory copy into a last-line-wins log). */
+      const fullBefore = (await readFullRecords(new Set([live.id]))).get(live.id);
+      ok("the record on disk has raw model output", !!(fullBefore && fullBefore.raw_model_json));
+      await applyMoves([{ id:live.id, path:"relocated/" + live.name, name:live.name,
+                          fp:live.fingerprint, size:live.size, mtime:live.mtime }]);
+      const fullAfter = (await readFullRecords(new Set([live.id]))).get(live.id);
+      ok("relinking preserves raw model output",
+         !!(fullAfter && fullAfter.raw_model_json), "raw_model_json survived");
+      eq("and the path was updated", fullAfter.path, "relocated/" + live.name);
+
+      /* a failed rescan must not replace a good record with an error stub */
+      const priorCaption = live.caption;
+      ok("the record has a caption to lose", !!priorCaption);
+
+      /* an unreadable file must never be reported missing */
+      const planU = await buildPlan();
+      const fakeUnreadable = planU.ok[0] || planU.new[0];
+      if (fakeUnreadable){
+        const rec = IDX.records.get(fakeUnreadable.id);
+        if (rec){
+          // simulate statAll failing for this one file
+          const realStat = fakeUnreadable.handle.getFile;
+          fakeUnreadable.handle.getFile = async () => { throw new DOMException("", "NotReadableError"); };
+          const planV = await buildPlan();
+          const reported = planV.missing.some(r => r.path === rec.path);
+          ok("a file that cannot be read is not reported missing", !reported,
+             reported ? "WRONGLY MISSING" : "protected");
+          fakeUnreadable.handle.getFile = realStat;
+        }
+      }
+
+      /* mark missing refuses when reads failed on this pass */
+      let refusedUnreadable = false;
+      try {
+        await markMissing({ missing:[{id:"x"}], total:10, indexTotal:10,
+                            unreadable:[{path:"a.jpg"}], folderLooksEmpty:false });
+      } catch (e){ refusedUnreadable = /could not be read/.test(errText(e)); }
+      ok("mark missing refuses after read failures", refusedUnreadable);
+
+      /* and refuses to delete a large proportion at once */
+      let refusedBulk = false;
+      try {
+        await markMissing({ missing:new Array(30).fill({id:"x"}), total:100,
+                            indexTotal:100, unreadable:[], folderLooksEmpty:false });
+      } catch (e){ refusedBulk = /30 of 100/.test(errText(e)); }
+      ok("mark missing refuses to delete a quarter of the library", refusedBulk);
+
+      /* compaction refuses to run during a scan */
+      const wasActive = RUN.active; RUN.active = true;
+      let refusedCompact = false;
+      try { await compactRecords(); } catch (e){ refusedCompact = /scan is running/.test(errText(e)); }
+      ok("compaction refuses while a scan is flushing", refusedCompact);
+      RUN.active = wasActive;
+
+      /* a failed record write must not discard the batch */
+      const realAppend = appendLines;
+      RUN.batch = [{ id:"kept-1" }, { id:"kept-2" }];
+      appendLines = async () => { throw new DOMException("", "NoModificationAllowedError"); };
+      let threw = false;
+      try { await flushBatch(null); } catch { threw = true; }
+      appendLines = realAppend;
+      ok("a failed flush throws rather than continuing", threw);
+      eq("and the records are still queued", RUN.batch.length, 2);
+      RUN.batch = [];
+
+      /* a failed vector write must be kept and surfaced */
+      const realAppendVec = appendVectors;
+      RUN.vecBatch = [{ id:"v1", vec:Float32Array.from([1,2,3]) }];
+      RUN.vecError = null;
+      appendVectors = async () => { throw new DOMException("", "QuotaExceededError"); };
+      await flushBatch(null);
+      appendVectors = realAppendVec;
+      eq("embeddings stay queued after a failed write", RUN.vecBatch.length, 1);
+      ok("and the failure is recorded, not swallowed", !!RUN.vecError, RUN.vecError);
+      RUN.vecBatch = []; RUN.vecError = null;
+    }
+
+    /* ---- a partial copy must never be committed ---- */
+    {
+      const srcD = await scratch.getDirectoryHandle("pcsrc", { create:true });
+      const dstD = await scratch.getDirectoryHandle("pcdst", { create:true });
+      const fh = await srcD.getFileHandle("big.bin", { create:true });
+      const w0 = await fh.createWritable();
+      await w0.write(new Blob([new Uint8Array(9 * 1024 * 1024)])); await w0.close();
+
+      let failed = false;
+      try {
+        await copyInto(srcD, dstD, "big.bin", async (n, got) => {
+          if (got > 4 * 1024 * 1024) throw new DOMException("", "NotReadableError");
+        });
+      } catch { failed = true; }
+      ok("an interrupted copy reports failure", failed);
+      let leftBehind = true;
+      try { await dstD.getFileHandle("big.bin"); } catch { leftBehind = false; }
+      ok("and leaves no truncated file that looks valid", !leftBehind);
+
+      for (const d of ["pcsrc","pcdst"])
+        { try { await scratch.removeEntry(d, { recursive:true }); } catch {} }
     }
 
     /* ---- a new scan must not endanger an existing index ---- */

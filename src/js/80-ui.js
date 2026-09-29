@@ -461,6 +461,7 @@ $("#btnMissing").onclick = async () => {
   catch (e){ toast(errText(e)); }
 };
 $("#btnCompact").onclick = async () => {
+  if (RUN.active){ toast("Stop the scan before compacting."); return; }
   try { await ensureIndex(); const r = await compactRecords();
     toast("Compacted records.jsonl: " + r.before + " lines to " + r.after + ".");
     rebuildDerived(); await refreshPlan(); }

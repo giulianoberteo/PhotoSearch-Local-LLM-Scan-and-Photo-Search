@@ -149,6 +149,23 @@ async function loadRecords(onProgress){
   if (bad) console.warn("records.jsonl: " + bad + " unparseable lines skipped");
   return lines;
 }
+/* Reads many full records in ONE pass. Anything that rewrites records must use
+   this, never the lightened in-memory copies. */
+async function readFullRecords(ids){
+  const out = new Map();
+  let fh;
+  try { fh = await IDX.dir.getFileHandle("records.jsonl"); } catch { return out; }
+  const text = await (await fh.getFile()).text();
+  for (const ln of text.split("\n")){
+    if (!ln.trim()) continue;
+    try {
+      const r = JSON.parse(ln);
+      if (r && ids.has(r.id)) out.set(r.id, r);     // later lines win
+    } catch {}
+  }
+  return out;
+}
+
 /* Reads one full record (including raw model JSON) straight from disk. */
 async function readFullRecord(id){
   let fh;
@@ -163,9 +180,18 @@ async function readFullRecord(id){
 }
 /* Rewrites records.jsonl to latest-state-only and drops soft-deleted rows. */
 async function compactRecords(){
-  /* This is the only operation that REWRITES records.jsonl rather than
-     appending. If it is interrupted the file is gone, so copy it first. */
-  if (typeof backupIndex === "function" && IDX.records.size > 0)
+  /* The only operation that REWRITES records.jsonl rather than appending, so:
+     never while a scan is flushing, never outside the write mutex, and never
+     without a copy first. */
+  if (typeof RUN !== "undefined" && RUN.active)
+    throw new Error("A scan is running. Compacting now would rewrite the log a "
+      + "flush is appending to. Stop the scan first.");
+  const text0 = await readTextIfAny(IDX.dir, "records.jsonl");
+  if (text0 == null) return { before:0, after:0 };
+  /* Guard on the FILE, not the in-memory count: if loadRecords never ran,
+     IDX.records.size is 0 and the old check skipped the safety copy entirely
+     while still rewriting the file. */
+  if (typeof backupIndex === "function" && text0.trim())
     await backupIndex("pre-compaction safety copy");
   const text = await readTextIfAny(IDX.dir, "records.jsonl");
   if (text == null) return { before:0, after:0 };
@@ -177,8 +203,10 @@ async function compactRecords(){
     try { const r = JSON.parse(ln); if (r && r.id) latest.set(r.id, r); } catch {}
   }
   const keep = [...latest.values()].filter(r => !r.deleted);
-  const fh = await IDX.dir.getFileHandle("records.jsonl", { create:true });
-  await writeFile(fh, keep.map(o => JSON.stringify(o)).join("\n") + (keep.length ? "\n" : ""));
+  await exclusive(async () => {
+    const fh = await IDX.dir.getFileHandle("records.jsonl", { create:true });
+    await writeFile(fh, keep.map(o => JSON.stringify(o)).join("\n") + (keep.length ? "\n" : ""));
+  });
   IDX.records = new Map(keep.map(r => [r.id, lighten(r)]));
   return { before, after: keep.length };
 }

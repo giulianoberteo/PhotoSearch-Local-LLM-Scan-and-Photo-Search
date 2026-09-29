@@ -148,6 +148,10 @@ async function buildPlan(onTick, signal){
 
   const claimed = new Set();
   const unmatched = [];
+  /* Records belonging to files we could not stat must be protected: the file is
+     present, we simply could not read it. Without this they fall through to
+     "missing" and Mark missing soft-deletes them. */
+  const unreadablePaths = new Set(files.filter(f => f.statError).map(f => f.path));
   for (const f of files){
     if (f.statError) continue;
     f.fp = f.size + ":" + f.mtime;
@@ -257,6 +261,7 @@ async function buildPlan(onTick, signal){
     if (seen.has(id) || r.deleted) continue;
     if (prefix && !(r.path || "").startsWith(prefix)) continue;
     if (r.library_root && r.library_root !== rootName) continue;
+    if (unreadablePaths.has(r.path)) continue;      // present but unreadable
     plan.missing.push(r);
   }
 
@@ -280,9 +285,15 @@ async function buildPlan(onTick, signal){
    staleness check still fires). */
 async function applyMoves(moved){
   if (!moved.length) return 0;
+  /* Read the FULL records from disk first. The in-memory copies are lightened
+     -- raw_model_json and embeddings are stripped to keep a large library in
+     memory -- and records.jsonl is last-line-wins, so writing a lightened copy
+     would make the stripped version authoritative and destroy the model output
+     permanently. One pass over the file covers every move. */
+  const full = await readFullRecords(new Set(moved.map(f => f.id)));
   const lines = [];
   for (const f of moved){
-    const old = IDX.records.get(f.id);
+    const old = full.get(f.id) || IDX.records.get(f.id);
     if (!old) continue;
     const rec = { ...old, path:f.path, name:f.name, fingerprint:f.fp,
       size:f.size, mtime:f.mtime, moved_from:f.movedFrom,
@@ -306,6 +317,17 @@ async function markMissing(plan){
   if (plan.missing.length > plan.total && plan.total > 0)
     throw new Error("More records are missing than files found. Refusing, as this usually means "
       + "a partly mounted share.");
+  /* A flaky share fails some reads, not all. Proportion is the signal a bare
+     count misses: losing a quarter of a library at once is never routine. */
+  const live = plan.indexTotal || IDX.records.size;
+  if (live > 20 && plan.missing.length > live * 0.25)
+    throw new Error("That would mark " + plan.missing.length + " of " + live
+      + " records missing (" + Math.round(plan.missing.length / live * 100) + "%). "
+      + "Refusing: this usually means the share is flaky rather than the photos being gone. "
+      + "Refresh the plan when it is responding normally.");
+  if (plan.unreadable && plan.unreadable.length)
+    throw new Error(plan.unreadable.length + " file(s) could not be read on this pass, so "
+      + "what is genuinely missing cannot be determined. Try again when the share is healthy.");
   const lines = plan.missing.map(r => ({ ...r, deleted:true, deleted_at:new Date().toISOString() }));
   for (const r of lines) IDX.records.set(r.id, lighten(r));
   await appendLines("records.jsonl", lines);
