@@ -189,9 +189,68 @@ const dec = new ns.HeifDecoder();
 **Hash width matters.** A 32-bit id collides around 77,000 items (birthday bound) — well
 inside a real photo library. Ids are 64-bit.
 
+**A `DOMException` keeps its identity in its `name`, not its message** — and re-wrapping it
+destroys that. A generic retry helper that did this:
+
+```js
+throw new Error(label + " failed after 3 tries: " + String(last.message || last));
+```
+
+turned `NotFoundError: A requested file or directory could not be found` into a plain
+`Error` whose text contains the *message* but not the *name*. Callers testing
+`/NotFoundError/` then silently never matched, so "this folder was deleted" became
+indistinguishable from "the share is down" — and a scan scope pointing at a removed folder
+hard-failed the entire plan instead of widening to the library. Carry the original as
+`cause` and walk the chain:
+
+```js
+function isNotFound(e){
+  for (let x = e, d = 0; x && d < 5; x = x.cause, d++)
+    if (x.name === "NotFoundError") return true;
+  return false;
+}
+```
+
+The same helper also retried genuinely-absent entries three times with backoff. A missing
+file does not appear by waiting.
+
+**`confirm()` and `alert()` block the renderer main thread indefinitely** when nothing
+answers them. In headless Chrome this is not a dialog you cannot see — it is a full stop:
+`Runtime.evaluate` stops returning and even `Runtime.enable` never completes, so the page
+cannot be queried to find out why. It presents exactly as an infinite loop, with no
+exception and no timeout. Any CDP driver must handle `Page.javascriptDialogOpening`
+(after `Page.enable`, before navigating), and any code path a test can reach should be
+assumed to prompt.
+
 ---
 
-## 8. Index size
+## 8. In-memory state outlives the file it came from
+
+The index is loaded into memory once and consulted from there. Every loader must therefore
+treat "this file does not exist" as **a value** — an empty index — rather than as a reason
+to return early:
+
+```js
+try { fh = await IDX.dir.getFileHandle("records.jsonl"); }
+catch { IDX.loaded = true; return 0; }        // leaves the PREVIOUS index in memory
+```
+
+Switching the index to a fresh location left 6,635 records from the old location in
+memory. The planner then judged photos against records that location had never held, and
+the next flush wrote those foreign records *into* the new index. The sibling loader,
+`loadVectors`, resets its state as its first statement and was never affected — the
+asymmetry is what made it hard to see.
+
+The same class of bug appears wherever memory is updated before the write that justifies
+it. `vectors.bin` is the sharpest case: rows are placed by buffer length but indexed by
+`ids.length`, so if the two ever disagree, every subsequent embedding maps to *another
+photo's* vector. Dying between the `.bin` and `.json` writes produces exactly that
+disagreement, and only the "bin is shorter" direction was originally handled. The file on
+disk is the truth, and the id list must be reconciled to it in **both** directions.
+
+---
+
+## 9. Index size
 
 Measured on real photos, then projected:
 

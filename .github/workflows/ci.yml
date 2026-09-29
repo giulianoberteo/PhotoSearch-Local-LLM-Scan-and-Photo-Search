@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'   # the runner uses the global WebSocket
+
+      # The single-file artifact is committed, so it can drift from src/.
+      # This is the check that stops a stale PhotoSearch.html reaching main.
+      - name: PhotoSearch.html matches src/
+        run: python3 build.py --check
+
+      - name: Locate Chrome
+        id: chrome
+        run: |
+          for c in google-chrome google-chrome-stable chromium-browser chromium; do
+            if command -v "$c" >/dev/null 2>&1; then
+              echo "bin=$c" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          done
+          echo "no Chrome on this runner" >&2; exit 1
+
+      - name: Run the self-test
+        run: |
+          # --allow-file-access-from-files: without it OPFS is unavailable from
+          # file:// and the suite cannot create its scratch folder.
+          "${{ steps.chrome.outputs.bin }}" \
+            --headless=new --disable-gpu --no-sandbox \
+            --user-data-dir="$RUNNER_TEMP/chrome-selftest" \
+            --remote-debugging-port=9222 \
+            --allow-file-access-from-files about:blank &
+          CHROME_PID=$!
+          trap 'kill $CHROME_PID 2>/dev/null || true' EXIT
+          sleep 5
+          node tools/selftest-runner.mjs \
+            "file://$PWD/PhotoSearch.html#selftest" "window.__selftest" 600000

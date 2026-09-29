@@ -121,3 +121,23 @@ nodes, so a caption containing markup stays inert. There is a test asserting exa
 - index writes are serialised: `appendLines` reads a size then seeks to it, so concurrent
   appends would otherwise overwrite each other
 - restoring a backup first copies the current state, so a mistaken restore is undoable
+- an index that cannot be read is an **empty** index, never a stale one: loading a location
+  with no `records.jsonl` clears memory rather than leaving the previous location's records
+  behind, where they would be planned against and then flushed into the new index
+- `vectors.bin` is reconciled to its id list in both directions on load, and a write that
+  does not land at the expected length is refused before the ids describing it are recorded
+- a stalled write cannot wedge the index: the serialising lock has a timeout, so one
+  unresponsive NAS operation does not block every write that follows
+- the model can fill in fields but never *identify* a record: `id`, `path`, `fingerprint`,
+  `size`, `mtime` and `scanned_at` are reserved and stripped from model output
+- a failure keeps its `cause`, so callers can tell a deleted folder from an unreachable
+  share — the two need opposite responses, and a `DOMException` loses its name when wrapped
+
+## Known gaps
+
+- **Thumbnails have no rebuild path.** They are written only during a scan and excluded
+  from backups; a missing `thumbs/<id>.jpg` renders as a blank tile and can only be
+  recovered by re-scanning that photo. Nothing else depends on them.
+- **Tests run against OPFS**, which is fast and never fails. The conditions that actually
+  break this app — 75-second directory listings, operations that never return — are not yet
+  reproducible in the suite. A fault-injecting handle proxy is designed but not built.

@@ -11,7 +11,7 @@ network storage misbehaves. Paths below use `/Volumes/Photos` as an example libr
 
 | | |
 |---|---|
-| `~/PhotoSearch.html` | The app. One file, ~250 KB. Double-click to open in Chrome. |
+| `~/PhotoSearch.html` | The app. One file, ~310 KB. Double-click to open in Chrome. |
 | `~/PhotoSearch-dev/` | Source code + build script (a git clone of the GitHub repo). |
 | GitHub | https://github.com/giuvilas/PhotoSearch-Local-LLM-Scan-and-Photo-Search |
 
@@ -74,14 +74,28 @@ print(f'{n} lines, {len(ids)} photos, {bad} unreadable')
 
 Expect `6635 lines, 6635 photos, 0 unreadable`.
 
-**Thumbnails are not worth backing up.** They are 226 MB of the 275 MB index and can be
-rebuilt from your originals without any model calls. `records.jsonl` is the only file that
-cost 68 hours.
+**Thumbnails are deliberately excluded from backups.** They are 226 MB of the 275 MB
+index, and `records.jsonl` is the only file that cost 68 hours.
+
+> **Know what that trades away.** The app has **no thumbnail rebuild command**. Nothing
+> regenerates a missing `thumbs/<id>.jpg`; the grid simply shows a blank tile for it.
+> Thumbnails are written once, during a scan, so the only way to recover them is to
+> re-scan those photos — which *does* cost model time. Search, chat, dates, places and
+> every caption are unaffected, because none of them read the thumbnails.
+>
+> If you want them covered, copy `thumbs/` yourself — but on this NAS, listing that folder
+> alone takes 75 seconds (§6), which is exactly why the app does not attempt it.
 
 ### Restoring
 
-Copy the five files back into `/Volumes/Photos/.photoindex/`, overwriting. Reload the app,
-reconnect the folder, press **Refresh plan**.
+Copy the files back into `/Volumes/Photos/.photoindex/`, overwriting, then reload the app,
+reconnect the folder and press **Refresh plan**.
+
+A backup made by the app contains four files — `records.jsonl`, `vectors.bin`,
+`vectors.json`, `config.json`. The shell command above also takes `runs.jsonl`, which is
+history rather than data. `state.json` is a resume checkpoint and is *not* worth restoring:
+an old one points at a queue that no longer applies. Delete it and press **Refresh plan**
+instead.
 
 ---
 
@@ -168,9 +182,9 @@ and nothing in the browser can work around that.
 - **Refresh plan** may be slow or stall. Retry when the NAS is responsive.
 - Scanning worked fine for 68 hours, because it is mostly model time with occasional writes.
 
-**If you ever change your mind**, *Settings → Move index to a fast disk…* copies the six
-core files to a local folder and switches to it, leaving the photos on the NAS. Thumbnails
-stay behind and rebuild on demand. That removes this entire class of problem.
+The index stays on the NAS. There is no "move the index elsewhere" command in the app —
+it was removed. If you ever want the index somewhere faster, set **Where to save the
+index** to a local folder in Settings and re-scan; the photos stay where they are.
 
 ---
 
@@ -184,6 +198,24 @@ stay behind and rebuild on demand. That removes this entire class of problem.
 | **Scan scope** | Optional: work through a big library one folder at a time. |
 | **Max tokens** | 2000. Lower values truncate photos containing a lot of text. |
 | **Back up after every scan** | On by default. Keeps the last 3. |
+
+### Picking a different photo folder
+
+Choosing another folder to scan does **not** move or replace your index. The two settings
+are independent:
+
+- **Where to save the index** decides where the data goes.
+- The **picked folder** decides which photos are scanned into it.
+
+With the index location fixed, scanning a second folder adds to the *same* index. Photos
+are matched by content, not by path, so you can scan a subfolder today and the whole
+library tomorrow without duplicates and without anything being wrongly marked missing.
+
+With the index set to live *beside the photos*, each folder you pick gets its own
+`.photoindex/` — which is the reason the fixed-location setting exists.
+
+Records from a folder you are not currently looking at are never reported missing: only
+records belonging to the folder actually walked are considered.
 
 ---
 
