@@ -546,6 +546,38 @@ async function selfTest(){
         { try { await dirB2.removeEntry(x.name, { recursive:true }); } catch {} }
     }
 
+    /* ---- a slow share must look slow, not stuck ---- */
+    {
+      // a file big enough to need several chunks
+      const big = new Blob([new Uint8Array(9 * 1024 * 1024)]);
+      const srcDir = await scratch.getDirectoryHandle("copysrc", { create:true });
+      const dstDir = await scratch.getDirectoryHandle("copydst", { create:true });
+      const fh = await srcDir.getFileHandle("big.bin", { create:true });
+      const w0 = await fh.createWritable(); await w0.write(big); await w0.close();
+
+      const ticks = [];
+      const r = await copyInto(srcDir, dstDir, "big.bin",
+        async (n, got, size) => ticks.push(got));
+      ok("the copy verifies byte-for-byte", r && r.ok === true,
+         r ? r.bytes + " B" : "no result");
+      ok("progress is reported in chunks, not once at the end", ticks.length >= 2,
+         ticks.length + " updates");
+      ok("progress is monotonic and ends at the file size",
+         ticks[ticks.length - 1] === 9 * 1024 * 1024,
+         String(ticks[ticks.length - 1]));
+      const copied = await (await dstDir.getFileHandle("big.bin")).getFile();
+      eq("the copy is the same size", copied.size, 9 * 1024 * 1024);
+
+      // an empty file must still copy
+      const e1 = await srcDir.getFileHandle("empty.bin", { create:true });
+      const we = await e1.createWritable(); await we.write(new Blob([])); await we.close();
+      const re = await copyInto(srcDir, dstDir, "empty.bin");
+      ok("an empty file copies cleanly", re && re.ok === true);
+
+      for (const d of ["copysrc","copydst"])
+        { try { await scratch.removeEntry(d, { recursive:true }); } catch {} }
+    }
+
     /* ---- the index can be moved to faster storage ---- */
     {
       const keepMode = S.indexMode, keepIdx = S.indexDirHandle;

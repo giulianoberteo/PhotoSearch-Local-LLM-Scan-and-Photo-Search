@@ -244,6 +244,8 @@ async function refreshPlan(){
       await autoConnect();
     }
     await ensureIndex();
+    await st.note("Waking the drive…");
+    await wakeStorage(m => st.note(m));
     if (!IDX.loaded){
       await loadRecords((pct, n) => st.note("Loading index… " + pct + "% (" + n + " records)"));
       await loadVectors();
