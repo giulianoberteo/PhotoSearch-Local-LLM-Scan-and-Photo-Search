@@ -360,11 +360,36 @@ function renderPlan(p){
   box.append(Object.assign(el("div","hint"), { textContent: bits.join(" · ") }));
   const todo = p.new.length + p.changed.length + p.failed.length;
   const avg = avgSecs(), conc = Math.max(1, Math.min(4, S.scan.concurrency));
+  /* "Everything is up to date" is true but useless when you have just pointed
+     at a NEW folder and the Scan button is greyed out: it does not say whether
+     nothing was found, or everything found was already known. Say which. */
+  const recognised = p.ok.length + p.moved.length;
+  const why = p.total === 0
+    ? "No images found in this folder, so there is nothing to scan."
+      + (c.raw || c.video || c.vector
+         ? "  It does contain files this app skips ("
+           + [c.raw && c.raw + " RAW", c.video && c.video + " video",
+              c.vector && c.vector + " vector/PDF"].filter(Boolean).join(", ") + ")."
+         : "  Check you picked the right folder — subfolders are included, "
+           + "but hidden folders are skipped.")
+    : recognised >= p.total
+      ? "All " + p.total + " images here are already in the index, so there is "
+        + "nothing new to scan. Photos are matched by their content, so copies and "
+        + "photos that have moved are recognised rather than scanned again."
+        + (p.moved.length ? "  " + p.moved.length + " were found at a new path." : "")
+      : "Everything is up to date.";
   box.append(Object.assign(el("div","hint"), { textContent: todo
     ? "Scan new & changed: " + todo + " images, about " + fmtDur(todo*avg/conc)
       + " at " + avg.toFixed(0) + "s each."
       + (p.stale.length ? "  " + p.stale.length + " stale (schema/prompt/model changed)." : "")
-    : "Everything is up to date." }));
+    : why }));
+  /* A greyed-out button with no reason is the actual complaint. Name the one
+     action that still does something. */
+  if (!todo && p.total > 0)
+    box.append(Object.assign(el("div","hint"), { textContent:
+      "\u201cFull rescan\u201d would re-scan all " + p.total + " from scratch, at model "
+      + "cost. \u201cRefresh stale\u201d re-does only what the schema or model changed."
+      }));
   if (DERIVED.stats && DERIVED.stats.dateSuspect)
     box.append(Object.assign(el("div","hint"), { textContent:
       DERIVED.stats.dateSuspect + " photos have a date but no camera tags — the date may be an "
