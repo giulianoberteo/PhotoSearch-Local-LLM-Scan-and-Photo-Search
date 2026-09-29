@@ -77,14 +77,23 @@ Expect `6635 lines, 6635 photos, 0 unreadable`.
 **Thumbnails are deliberately excluded from backups.** They are 226 MB of the 275 MB
 index, and `records.jsonl` is the only file that cost 68 hours.
 
-> **Know what that trades away.** The app has **no thumbnail rebuild command**. Nothing
-> regenerates a missing `thumbs/<id>.jpg`; the grid simply shows a blank tile for it.
-> Thumbnails are written once, during a scan, so the only way to recover them is to
-> re-scan those photos — which *does* cost model time. Search, chat, dates, places and
-> every caption are unaffected, because none of them read the thumbnails.
->
-> If you want them covered, copy `thumbs/` yourself — but on this NAS, listing that folder
-> alone takes 75 seconds (§6), which is exactly why the app does not attempt it.
+**Getting them back: Scan tab → Rebuild thumbnails.** It lists what is already there,
+works out which photos have no thumbnail, finds those originals in the folder you have
+open and re-makes the missing ones. **No model is involved** — it is a decode and a
+resize, so it runs at disk speed rather than at 21 seconds a photo.
+
+- Photos are found by **content**, so a library that has been reorganised since the scan
+  still rebuilds correctly.
+- If some photos live in a folder you do not currently have open, it says how many and
+  rebuilds the rest. Open that folder afterwards and run it again.
+- **Nothing in the index is rewritten.** Captions, dates, places and embeddings are not
+  touched, and error records are left alone.
+- Thumbnails belonging to photos no longer in the index are reported but **never
+  deleted** — the command rebuilds, it does not tidy.
+- It can be paused and stopped like a scan, and picks up where it left off next time.
+
+Listing `thumbs/` takes about 75 seconds on this NAS (§6), so expect the count to take
+that long before the rebuild itself starts.
 
 ### Restoring
 
@@ -216,6 +225,7 @@ index** to a local folder in Settings and re-scan; the photos stay where they ar
 | **Scan scope** | Optional: work through a big library one folder at a time. |
 | **Max tokens** | 2000. Lower values truncate photos containing a lot of text. |
 | **Back up after every scan** | On by default. Keeps the last 3. |
+| **Rebuild thumbnails** (Scan tab) | Remakes missing thumbnails from the originals. No model time. |
 
 ### Picking a different photo folder
 

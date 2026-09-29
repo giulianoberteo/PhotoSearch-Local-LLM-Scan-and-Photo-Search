@@ -286,12 +286,18 @@ async function refreshPlan(){
     rebuildDerived();
     S.planStale = false;
     st.ok(p.total + " images · " + IDX.records.size + " records");
+    /* This used to say "everything will look new -- use a separate index per
+       library", which was true only before photos were matched by content.
+       They are now, so adding a second folder to one index is a supported
+       thing to do and anything already scanned is recognised wherever it sits.
+       What is worth saying is which folder the index was last built from. */
     if (IDX.rootMismatch && !S.scanScope)
-      checksBox($("#planBox")).append(checkRow({ status:"warn",
-        title:"This index was built for a different folder",
-        detail:"It describes '" + IDX.rootMismatch.was + "' but you opened '"
-          + IDX.rootMismatch.now + "'. Everything will look new. Use a separate index "
-          + "folder per library." }));
+      checksBox($("#planBox")).append(checkRow({ status:"ok",
+        title:"Adding a second folder to this index",
+        detail:"This index was last built from '" + IDX.rootMismatch.was
+          + "'; you have opened '" + IDX.rootMismatch.now + "'. Photos are matched "
+          + "by content, so anything already scanned is recognised and only genuinely "
+          + "new photos are queued. Nothing in the existing index is touched." }));
     renderPlan(p);
   } catch (e){
     if (e.name === "AbortError") return;
@@ -393,7 +399,7 @@ function scanUi(running){
   $("#progCard").hidden = false;
   $("#btnPause").hidden = !running;
   $("#btnStop").hidden = !running;
-  ["btnScan","btnStale","btnFull","btnRetry","btnMissing","btnPlan","btnCompact"]
+  ["btnScan","btnStale","btnFull","btnRetry","btnMissing","btnPlan","btnCompact","btnThumbs"]
     .forEach(id => { const n = $("#" + id); if (n) n.disabled = running; });
   if (running) $("#btnPause").textContent = "Pause";
 }
@@ -526,6 +532,48 @@ $("#btnCompact").onclick = async () => {
     rebuildDerived(); await refreshPlan(); }
   catch (e){ toast(errText(e)); }
 };
+$("#btnThumbs").onclick = async () => {
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the rebuild"))) return;
+  if (RUN.active){ toast("Stop the scan first."); return; }
+  const host = $("#errBox"); resetChecks(host);
+  $("#progCard").hidden = false;
+  const st = step(host, "Rebuild thumbnails");
+  let p;
+  try {
+    p = await planThumbnails(async m => { await st.note(m); });
+  } catch (e){ st.err(errText(e)); toast(errText(e)); return; }
+
+  if (!p.missing){
+    st.ok(p.have + " thumbnails for " + p.total + " photos — none are missing."
+      + (p.orphans ? "  " + p.orphans + " belong to photos no longer in the index." : ""));
+    return;
+  }
+  if (!p.files.length){
+    st.warn(p.missing + " thumbnails are missing, but none of those photos are in the "
+      + "folder you have open. Open the folder they live in and try again.");
+    return;
+  }
+  const extra = p.unresolved.length
+    ? "\n\n" + p.unresolved.length + " more are missing but their photos are not in this "
+      + "folder; open that folder afterwards to finish them."
+    : "";
+  if (!confirm("Rebuild " + p.files.length + " missing thumbnail"
+      + (p.files.length === 1 ? "" : "s") + "?\n\nThis re-reads the original photos and "
+      + "costs no model time. Nothing already in the index is changed." + extra)) return;
+
+  st.note("Rebuilding " + p.files.length + "…");
+  try {
+    const r = await runThumbnailRebuild(p.files);
+    if (!r) return;
+    const parts = [r.built + " rebuilt"];
+    if (r.failed) parts.push(r.failed + " could not be read");
+    if (r.stopped) parts.push("stopped early");
+    if (p.unresolved.length) parts.push(p.unresolved.length + " await another folder");
+    (r.failed || r.stopped ? st.warn : st.ok)(parts.join(", ") + ".");
+    toast(r.built + " thumbnails rebuilt.");
+  } catch (e){ st.err(errText(e)); toast(errText(e)); }
+};
+
 $("#btnPause").onclick = () => {
   RUN.paused = !RUN.paused;
   $("#btnPause").textContent = RUN.paused ? "Resume" : "Pause";

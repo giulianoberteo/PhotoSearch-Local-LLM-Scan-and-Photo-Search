@@ -378,6 +378,22 @@ async function saveThumb(id, blob){
   const fh = await dir.getFileHandle(id + ".jpg", { create:true });
   await writeBinary(fh, blob);
 }
+/* One listing, not one existence check per photo. On the real library thumbs/
+   holds 6,568 files and listing it measured 75 seconds -- but 6,568 individual
+   getFileHandle round trips over SMB would be far worse. This is the one place
+   in the app that deliberately enumerates thumbs/, because it is the only one
+   that actually needs to know what is in there. */
+async function listThumbIds(onPhase){
+  const have = new Set();
+  const dir = await thumbsDir();
+  let n = 0;
+  for await (const name of dir.keys()){
+    if (name.endsWith(".jpg")) have.add(name.slice(0, -4));
+    if (++n % 500 === 0 && onPhase) await onPhase("Listing thumbnails… " + n + " so far");
+  }
+  return have;
+}
+
 const thumbCache = new Map();
 /* Object URLs were evicted while <img> elements in earlier chat bubbles still
    pointed at them, turning older grids into broken images. Pinned ids are kept. */

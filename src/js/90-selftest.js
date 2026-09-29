@@ -1515,6 +1515,88 @@ async function selfTest(){
        && probe.textContent.includes("<img src=x"));
     ok("markdown renderer still formats", probe.querySelector("strong") !== null);
 
+    /* ---- rebuilding thumbnails ----
+       Thumbnails are excluded from every backup on the grounds that they can be
+       remade. That claim was false for months: nothing regenerated them, and a
+       missing one was a blank tile until the photo was re-scanned at full model
+       cost. These assertions are what make the claim true. */
+    {
+      S.dirHandle = scratch;
+      S.scanScope = "";
+      IDX.loaded = false;
+      await ensureIndex(); await loadRecords();
+
+      const before = await planThumbnails();
+      eq("a complete index reports nothing to rebuild", before.missing, 0);
+      ok("and it counted the thumbnails it found", before.have > 0,
+         before.have + " of " + before.total);
+
+      /* delete two thumbnails behind the app's back, exactly as a lost or
+         excluded thumbs/ folder would look */
+      const tdir = await thumbsDir();
+      const victims = [...IDX.records.values()]
+        .filter(r => !r.deleted && r.status !== "error").slice(0, 2);
+      ok("there are records to test with", victims.length === 2, String(victims.length));
+      for (const v of victims) { try { await tdir.removeEntry(v.id + ".jpg"); } catch {} }
+
+      const p2 = await planThumbnails();
+      eq("missing thumbnails are detected", p2.missing, 2);
+      eq("and the originals are found for all of them", p2.files.length, 2);
+      eq("nothing is left unresolved when the folder is open", p2.unresolved.length, 0);
+
+      const r = await runThumbnailRebuild(p2.files);
+      eq("every missing thumbnail is rebuilt", r.built, 2);
+      eq("with no failures", r.failed, 0);
+
+      const p3 = await planThumbnails();
+      eq("nothing is missing afterwards", p3.missing, 0);
+      for (const v of victims)
+        ok("the thumbnail is readable again: " + v.name,
+           !!(await (await tdir.getFileHandle(v.id + ".jpg")).getFile()).size);
+
+      /* A rebuild must not touch the records: the captions are the expensive
+         part and nothing here has any business rewriting them. */
+      const capBefore = victims.map(v => IDX.records.get(v.id));
+      ok("records are untouched by a rebuild",
+         capBefore.every(r2 => r2 && !r2.deleted && r2.status !== "error"));
+      eq("and the record count is unchanged", IDX.records.size, before.total
+         + [...IDX.records.values()].filter(r2 => r2.deleted || r2.status === "error").length);
+
+      /* An error stub never had a thumbnail and must not be queued for one. */
+      const stub = { id:"thumb-err-1", name:"broken.jpg", path:"broken.jpg",
+                     status:"error", error:"decode failed",
+                     scanned_at:new Date().toISOString() };
+      await appendLines("records.jsonl", [stub]);
+      IDX.records.set(stub.id, lighten(stub));
+      const p4 = await planThumbnails();
+      eq("an error stub is not queued for a thumbnail", p4.missing, 0);
+      IDX.records.delete(stub.id);
+
+      /* A thumbnail with no record is dead weight -- counted, never deleted. */
+      await saveThumb("orphan-thumb-1", new Blob(["x"], { type:"image/jpeg" }));
+      const p5 = await planThumbnails();
+      ok("an orphaned thumbnail is reported", p5.orphans >= 1, String(p5.orphans));
+      eq("but it is not treated as work", p5.missing, 0);
+      let stillThere = true;
+      try { await (await thumbsDir()).getFileHandle("orphan-thumb-1.jpg"); }
+      catch { stillThere = false; }
+      ok("and it is not deleted behind the user's back", stillThere);
+      try { await (await thumbsDir()).removeEntry("orphan-thumb-1.jpg"); } catch {}
+
+      /* Records whose originals are not in the open folder must be reported,
+         not silently skipped. */
+      const ghost = { id:"thumb-ghost-1", name:"gone.jpg", path:"nowhere/gone.jpg",
+                      status:"ok", caption:"a photo that has moved away",
+                      fingerprint:"x", scanned_at:new Date().toISOString() };
+      await appendLines("records.jsonl", [ghost]);
+      IDX.records.set(ghost.id, lighten(ghost));
+      const p6 = await planThumbnails();
+      eq("a photo outside the open folder still counts as missing", p6.missing, 1);
+      eq("but is not queued, because its original cannot be read", p6.files.length, 0);
+      eq("and it is reported as unresolved", p6.unresolved.length, 1);
+      IDX.records.delete(ghost.id);
+    }
+
     /* ---- compaction ---- */
     const c = await compactRecords();
     ok("compaction shrinks the log", c.after <= c.before, c.before + " -> " + c.after);

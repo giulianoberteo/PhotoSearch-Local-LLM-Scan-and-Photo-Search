@@ -94,7 +94,7 @@ async function toJpeg(bmp, max, quality){
   return { blob: await c.convertToBlob({ type:"image/jpeg", quality }), w, h };
 }
 self.onmessage = async e => {
-  const { id, file, kind, bigPx, thumbPx, thumbQ } = e.data;
+  const { id, file, kind, bigPx, thumbPx, thumbQ, thumbOnly } = e.data;
   try {
     let bmp = null, decoder = "native";
     if (kind === "native"){
@@ -111,11 +111,13 @@ self.onmessage = async e => {
     }
     if (!bmp || !bmp.width || !bmp.height) throw new Error("decoded image has no pixels");
     const srcW = bmp.width, srcH = bmp.height;
-    const big = await toJpeg(bmp, bigPx, 0.82);
+    /* Rebuilding thumbnails needs no 1024px JPEG, and encoding one anyway was
+       the bulk of the work: skip it rather than produce a blob nobody reads. */
     const th  = await toJpeg(bmp, thumbPx, thumbQ);
+    const big = thumbOnly ? null : await toJpeg(bmp, bigPx, 0.82);
     bmp.close();
-    self.postMessage({ id, ok:true, big:big.blob, thumb:th.blob,
-      w:big.w, h:big.h, srcW, srcH, decoder });
+    self.postMessage({ id, ok:true, big: big ? big.blob : null, thumb:th.blob,
+      w: big ? big.w : th.w, h: big ? big.h : th.h, srcW, srcH, decoder });
   } catch (err){
     self.postMessage({ id, ok:false, error: String(err && err.message || err) });
   }
@@ -156,6 +158,6 @@ function processImage(file, kind, opts){
     wJobs.set(id, { res, rej, timer });
     imgWorker().postMessage({ id, file, kind,
       bigPx: opts.bigPx || S.scan.bigPx, thumbPx: opts.thumbPx || S.scan.thumbPx,
-      thumbQ: S.scan.thumbQ });
+      thumbQ: S.scan.thumbQ, thumbOnly: !!opts.thumbOnly });
   });
 }

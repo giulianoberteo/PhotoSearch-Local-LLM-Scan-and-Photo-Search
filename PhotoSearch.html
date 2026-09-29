@@ -161,6 +161,7 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
         <button class="btn sec" id="btnRetry" disabled>Retry failed</button>
         <button class="btn sec" id="btnMissing" disabled>Mark missing</button>
         <button class="btn sec" id="btnCompact">Compact log</button>
+        <button class="btn sec" id="btnThumbs">Rebuild thumbnails</button>
         <span class="spacer"></span>
         <button class="btn sec" id="btnPause" hidden>Pause</button>
         <button class="btn sec" id="btnStop" hidden>Stop</button>
@@ -1396,7 +1397,7 @@ async function toJpeg(bmp, max, quality){
   return { blob: await c.convertToBlob({ type:"image/jpeg", quality }), w, h };
 }
 self.onmessage = async e => {
-  const { id, file, kind, bigPx, thumbPx, thumbQ } = e.data;
+  const { id, file, kind, bigPx, thumbPx, thumbQ, thumbOnly } = e.data;
   try {
     let bmp = null, decoder = "native";
     if (kind === "native"){
@@ -1413,11 +1414,13 @@ self.onmessage = async e => {
     }
     if (!bmp || !bmp.width || !bmp.height) throw new Error("decoded image has no pixels");
     const srcW = bmp.width, srcH = bmp.height;
-    const big = await toJpeg(bmp, bigPx, 0.82);
+    /* Rebuilding thumbnails needs no 1024px JPEG, and encoding one anyway was
+       the bulk of the work: skip it rather than produce a blob nobody reads. */
     const th  = await toJpeg(bmp, thumbPx, thumbQ);
+    const big = thumbOnly ? null : await toJpeg(bmp, bigPx, 0.82);
     bmp.close();
-    self.postMessage({ id, ok:true, big:big.blob, thumb:th.blob,
-      w:big.w, h:big.h, srcW, srcH, decoder });
+    self.postMessage({ id, ok:true, big: big ? big.blob : null, thumb:th.blob,
+      w: big ? big.w : th.w, h: big ? big.h : th.h, srcW, srcH, decoder });
   } catch (err){
     self.postMessage({ id, ok:false, error: String(err && err.message || err) });
   }
@@ -1458,7 +1461,7 @@ function processImage(file, kind, opts){
     wJobs.set(id, { res, rej, timer });
     imgWorker().postMessage({ id, file, kind,
       bigPx: opts.bigPx || S.scan.bigPx, thumbPx: opts.thumbPx || S.scan.thumbPx,
-      thumbQ: S.scan.thumbQ });
+      thumbQ: S.scan.thumbQ, thumbOnly: !!opts.thumbOnly });
   });
 }
 
@@ -1965,6 +1968,22 @@ async function saveThumb(id, blob){
   const fh = await dir.getFileHandle(id + ".jpg", { create:true });
   await writeBinary(fh, blob);
 }
+/* One listing, not one existence check per photo. On the real library thumbs/
+   holds 6,568 files and listing it measured 75 seconds -- but 6,568 individual
+   getFileHandle round trips over SMB would be far worse. This is the one place
+   in the app that deliberately enumerates thumbs/, because it is the only one
+   that actually needs to know what is in there. */
+async function listThumbIds(onPhase){
+  const have = new Set();
+  const dir = await thumbsDir();
+  let n = 0;
+  for await (const name of dir.keys()){
+    if (name.endsWith(".jpg")) have.add(name.slice(0, -4));
+    if (++n % 500 === 0 && onPhase) await onPhase("Listing thumbnails… " + n + " so far");
+  }
+  return have;
+}
+
 const thumbCache = new Map();
 /* Object URLs were evicted while <img> elements in earlier chat bubbles still
    pointed at them, turning older grids into broken images. Pinned ids are kept. */
@@ -3820,6 +3839,130 @@ async function resumeScan(){
   await runScan(files, cp.mode || "resume", true);
 }
 
+/* ================= rebuilding thumbnails =================
+   Thumbnails are the only derived part of the index: 384px JPEGs written during
+   a scan, and deliberately excluded from backups because they are ~80% of the
+   bytes while costing no model time to produce.
+
+   That trade is only honest if they can actually be remade. Until now they
+   could not -- a missing thumbs/<id>.jpg was a blank tile for ever, and the
+   only way back was to re-scan the photo and pay the model again for a caption
+   that was never lost. Rebuilding needs the original file and nothing else: no
+   model, no network, no embeddings. */
+
+async function planThumbnails(onPhase, signal){
+  const say = async m => { if (onPhase) await onPhase(m); };
+  await say("Opening the index…");
+  await indexOp("opening the index", note => ensureIndex(note, { write:false }),
+    { onPhase: say, cost: 4 });
+  if (!IDX.loaded) { await say("Loading records…"); await loadRecords(); }
+
+  await say("Listing existing thumbnails…");
+  const have = await indexOp("listing thumbnails", note => listThumbIds(note),
+    { onPhase: say, cost: 60 });          // the 75-second operation, deliberately
+
+  /* Error stubs never had a thumbnail and are not supposed to get one; a
+     soft-deleted record describes a photo that is no longer there. */
+  const wanted = [...IDX.records.values()]
+    .filter(r => !r.deleted && r.status !== "error");
+  const missingIds = new Set(wanted.filter(r => !have.has(r.id)).map(r => r.id));
+
+  /* A thumbnail with no record is dead weight from a compacted or restored
+     index. Counted, never deleted: this command rebuilds, it does not tidy, and
+     removing files is not a decision it should make alone. Counted BEFORE the
+     early return, because "nothing is missing" is exactly when someone is most
+     likely to be asking what is in there. */
+  let orphans = 0;
+  for (const id of have) if (!IDX.records.has(id)) orphans++;
+
+  if (!missingIds.size)
+    return { files: [], missing: 0, have: have.size, total: wanted.length,
+             unresolved: [], orphans };
+
+  /* The originals have to be found the same way a scan finds them -- by
+     identity, not by the stored path -- or a library that has been reorganised
+     rebuilds nothing. buildPlan already does exactly that. */
+  await say("Finding the originals…");
+  const plan = await buildPlan(null, signal);
+  const byId = new Map();
+  for (const g of ["ok","stale","changed","failed","moved"])
+    for (const f of plan[g])
+      if (missingIds.has(f.id) && !byId.has(f.id)) byId.set(f.id, f);
+
+  /* Anything still unaccounted for belongs to a folder that is not open right
+     now. Say so rather than silently rebuilding a subset. */
+  const unresolved = [...missingIds].filter(id => !byId.has(id))
+    .map(id => IDX.records.get(id)).filter(Boolean);
+
+  return { files: [...byId.values()], missing: missingIds.size,
+           have: have.size, total: wanted.length, unresolved, orphans };
+}
+
+async function runThumbnailRebuild(files){
+  if (!files.length){ toast("Nothing to rebuild."); return null; }
+  RUN.active = true; RUN.paused = false; RUN.stop = false;
+  RUN.abort = new AbortController();
+  RUN.done = 0; RUN.total = files.length; RUN.errors = []; RUN.times = [];
+  RUN.tokens = []; RUN.errorCount = 0; RUN.streak = 0; RUN.streakMsg = null;
+  RUN.started = Date.now(); RUN.mode = "thumbnails";
+  RUN.batch = []; RUN.vecBatch = []; RUN.pending = new Set();
+  await acquireWakeLock();
+  scanUi(true);
+  $("#progCard").hidden = false;
+  updateProgress();
+
+  const queue = files.slice();
+  let built = 0;
+  /* Reads are latency-bound on a share and decoding is one worker, so a few in
+     flight overlaps the two. No model is involved, so none of the reasons
+     scanning stays at concurrency 1 apply here. */
+  const conc = Math.max(1, Math.min(4, S.scan.statConcurrency > 1 ? 3 : 1));
+
+  async function loop(){
+    for(;;){
+      await waitIfPaused();
+      if (RUN.stop) return;
+      const f = queue.shift();
+      if (!f) return;
+      const t0 = performance.now();
+      try {
+        const file = await withRetry("read " + f.name, () => f.handle.getFile());
+        const img = await processImage(file, f.kind, { thumbOnly:true });
+        await saveThumb(f.id, img.thumb);
+        showCurrent(img.thumb, f.path);
+        RUN.times.push((performance.now() - t0) / 1000);
+        built++;
+      } catch (e){
+        if (e.name === "AbortError") return;
+        RUN.errorCount++;
+        if (RUN.errors.length < 200)
+          RUN.errors.push({ path:f.path, error:errText(e) });
+        if (RUN.errorCount < 20 || RUN.errorCount % 25 === 0) renderErrors();
+      }
+      RUN.done++;
+      updateProgress();
+    }
+  }
+
+  try {
+    await Promise.all(Array.from({ length: conc }, loop));
+  } finally {
+    RUN.active = false;
+    releaseWakeLock();
+    scanUi(false);
+    updateProgress();
+    renderErrors();
+    /* Cached object URLs were created before these files existed; drop them so
+       the grid re-reads what was just written instead of showing blanks. */
+    for (const [k, v] of thumbCache){
+      if (thumbPinned.has(k)) continue;
+      try { URL.revokeObjectURL(v); } catch {}
+      thumbCache.delete(k);
+    }
+  }
+  return { built, failed: RUN.errorCount, stopped: RUN.stop };
+}
+
 /* ==================== 80-ui.js ==================== */
 
 /* ================= connection test ================= */
@@ -4109,12 +4252,18 @@ async function refreshPlan(){
     rebuildDerived();
     S.planStale = false;
     st.ok(p.total + " images · " + IDX.records.size + " records");
+    /* This used to say "everything will look new -- use a separate index per
+       library", which was true only before photos were matched by content.
+       They are now, so adding a second folder to one index is a supported
+       thing to do and anything already scanned is recognised wherever it sits.
+       What is worth saying is which folder the index was last built from. */
     if (IDX.rootMismatch && !S.scanScope)
-      checksBox($("#planBox")).append(checkRow({ status:"warn",
-        title:"This index was built for a different folder",
-        detail:"It describes '" + IDX.rootMismatch.was + "' but you opened '"
-          + IDX.rootMismatch.now + "'. Everything will look new. Use a separate index "
-          + "folder per library." }));
+      checksBox($("#planBox")).append(checkRow({ status:"ok",
+        title:"Adding a second folder to this index",
+        detail:"This index was last built from '" + IDX.rootMismatch.was
+          + "'; you have opened '" + IDX.rootMismatch.now + "'. Photos are matched "
+          + "by content, so anything already scanned is recognised and only genuinely "
+          + "new photos are queued. Nothing in the existing index is touched." }));
     renderPlan(p);
   } catch (e){
     if (e.name === "AbortError") return;
@@ -4216,7 +4365,7 @@ function scanUi(running){
   $("#progCard").hidden = false;
   $("#btnPause").hidden = !running;
   $("#btnStop").hidden = !running;
-  ["btnScan","btnStale","btnFull","btnRetry","btnMissing","btnPlan","btnCompact"]
+  ["btnScan","btnStale","btnFull","btnRetry","btnMissing","btnPlan","btnCompact","btnThumbs"]
     .forEach(id => { const n = $("#" + id); if (n) n.disabled = running; });
   if (running) $("#btnPause").textContent = "Pause";
 }
@@ -4349,6 +4498,48 @@ $("#btnCompact").onclick = async () => {
     rebuildDerived(); await refreshPlan(); }
   catch (e){ toast(errText(e)); }
 };
+$("#btnThumbs").onclick = async () => {
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the rebuild"))) return;
+  if (RUN.active){ toast("Stop the scan first."); return; }
+  const host = $("#errBox"); resetChecks(host);
+  $("#progCard").hidden = false;
+  const st = step(host, "Rebuild thumbnails");
+  let p;
+  try {
+    p = await planThumbnails(async m => { await st.note(m); });
+  } catch (e){ st.err(errText(e)); toast(errText(e)); return; }
+
+  if (!p.missing){
+    st.ok(p.have + " thumbnails for " + p.total + " photos — none are missing."
+      + (p.orphans ? "  " + p.orphans + " belong to photos no longer in the index." : ""));
+    return;
+  }
+  if (!p.files.length){
+    st.warn(p.missing + " thumbnails are missing, but none of those photos are in the "
+      + "folder you have open. Open the folder they live in and try again.");
+    return;
+  }
+  const extra = p.unresolved.length
+    ? "\n\n" + p.unresolved.length + " more are missing but their photos are not in this "
+      + "folder; open that folder afterwards to finish them."
+    : "";
+  if (!confirm("Rebuild " + p.files.length + " missing thumbnail"
+      + (p.files.length === 1 ? "" : "s") + "?\n\nThis re-reads the original photos and "
+      + "costs no model time. Nothing already in the index is changed." + extra)) return;
+
+  st.note("Rebuilding " + p.files.length + "…");
+  try {
+    const r = await runThumbnailRebuild(p.files);
+    if (!r) return;
+    const parts = [r.built + " rebuilt"];
+    if (r.failed) parts.push(r.failed + " could not be read");
+    if (r.stopped) parts.push("stopped early");
+    if (p.unresolved.length) parts.push(p.unresolved.length + " await another folder");
+    (r.failed || r.stopped ? st.warn : st.ok)(parts.join(", ") + ".");
+    toast(r.built + " thumbnails rebuilt.");
+  } catch (e){ st.err(errText(e)); toast(errText(e)); }
+};
+
 $("#btnPause").onclick = () => {
   RUN.paused = !RUN.paused;
   $("#btnPause").textContent = RUN.paused ? "Resume" : "Pause";
@@ -6722,6 +6913,88 @@ async function selfTest(){
     ok("markdown renderer escapes HTML", probe.querySelector("img") === null
        && probe.textContent.includes("<img src=x"));
     ok("markdown renderer still formats", probe.querySelector("strong") !== null);
+
+    /* ---- rebuilding thumbnails ----
+       Thumbnails are excluded from every backup on the grounds that they can be
+       remade. That claim was false for months: nothing regenerated them, and a
+       missing one was a blank tile until the photo was re-scanned at full model
+       cost. These assertions are what make the claim true. */
+    {
+      S.dirHandle = scratch;
+      S.scanScope = "";
+      IDX.loaded = false;
+      await ensureIndex(); await loadRecords();
+
+      const before = await planThumbnails();
+      eq("a complete index reports nothing to rebuild", before.missing, 0);
+      ok("and it counted the thumbnails it found", before.have > 0,
+         before.have + " of " + before.total);
+
+      /* delete two thumbnails behind the app's back, exactly as a lost or
+         excluded thumbs/ folder would look */
+      const tdir = await thumbsDir();
+      const victims = [...IDX.records.values()]
+        .filter(r => !r.deleted && r.status !== "error").slice(0, 2);
+      ok("there are records to test with", victims.length === 2, String(victims.length));
+      for (const v of victims) { try { await tdir.removeEntry(v.id + ".jpg"); } catch {} }
+
+      const p2 = await planThumbnails();
+      eq("missing thumbnails are detected", p2.missing, 2);
+      eq("and the originals are found for all of them", p2.files.length, 2);
+      eq("nothing is left unresolved when the folder is open", p2.unresolved.length, 0);
+
+      const r = await runThumbnailRebuild(p2.files);
+      eq("every missing thumbnail is rebuilt", r.built, 2);
+      eq("with no failures", r.failed, 0);
+
+      const p3 = await planThumbnails();
+      eq("nothing is missing afterwards", p3.missing, 0);
+      for (const v of victims)
+        ok("the thumbnail is readable again: " + v.name,
+           !!(await (await tdir.getFileHandle(v.id + ".jpg")).getFile()).size);
+
+      /* A rebuild must not touch the records: the captions are the expensive
+         part and nothing here has any business rewriting them. */
+      const capBefore = victims.map(v => IDX.records.get(v.id));
+      ok("records are untouched by a rebuild",
+         capBefore.every(r2 => r2 && !r2.deleted && r2.status !== "error"));
+      eq("and the record count is unchanged", IDX.records.size, before.total
+         + [...IDX.records.values()].filter(r2 => r2.deleted || r2.status === "error").length);
+
+      /* An error stub never had a thumbnail and must not be queued for one. */
+      const stub = { id:"thumb-err-1", name:"broken.jpg", path:"broken.jpg",
+                     status:"error", error:"decode failed",
+                     scanned_at:new Date().toISOString() };
+      await appendLines("records.jsonl", [stub]);
+      IDX.records.set(stub.id, lighten(stub));
+      const p4 = await planThumbnails();
+      eq("an error stub is not queued for a thumbnail", p4.missing, 0);
+      IDX.records.delete(stub.id);
+
+      /* A thumbnail with no record is dead weight -- counted, never deleted. */
+      await saveThumb("orphan-thumb-1", new Blob(["x"], { type:"image/jpeg" }));
+      const p5 = await planThumbnails();
+      ok("an orphaned thumbnail is reported", p5.orphans >= 1, String(p5.orphans));
+      eq("but it is not treated as work", p5.missing, 0);
+      let stillThere = true;
+      try { await (await thumbsDir()).getFileHandle("orphan-thumb-1.jpg"); }
+      catch { stillThere = false; }
+      ok("and it is not deleted behind the user's back", stillThere);
+      try { await (await thumbsDir()).removeEntry("orphan-thumb-1.jpg"); } catch {}
+
+      /* Records whose originals are not in the open folder must be reported,
+         not silently skipped. */
+      const ghost = { id:"thumb-ghost-1", name:"gone.jpg", path:"nowhere/gone.jpg",
+                      status:"ok", caption:"a photo that has moved away",
+                      fingerprint:"x", scanned_at:new Date().toISOString() };
+      await appendLines("records.jsonl", [ghost]);
+      IDX.records.set(ghost.id, lighten(ghost));
+      const p6 = await planThumbnails();
+      eq("a photo outside the open folder still counts as missing", p6.missing, 1);
+      eq("but is not queued, because its original cannot be read", p6.files.length, 0);
+      eq("and it is reported as unresolved", p6.unresolved.length, 1);
+      IDX.records.delete(ghost.id);
+    }
 
     /* ---- compaction ---- */
     const c = await compactRecords();

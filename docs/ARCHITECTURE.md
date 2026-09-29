@@ -122,6 +122,9 @@ nodes, so a caption containing markup stays inert. There is a test asserting exa
 - index writes are serialised: `appendLines` reads a size then seeks to it, so concurrent
   appends would otherwise overwrite each other
 - restoring a backup first copies the current state, so a mistaken restore is undoable
+- thumbnails are the only derived part of the index, and the only part excluded from
+  backups — which is honest because **Rebuild thumbnails** remakes them from the originals
+  with no model calls, matching photos by content rather than by stored path
 - an index that cannot be read is an **empty** index, never a stale one: loading a location
   with no `records.jsonl` clears memory rather than leaving the previous location's records
   behind, where they would be planned against and then flushed into the new index
@@ -154,9 +157,8 @@ round trip measured 24 seconds when the drives were asleep, and a directory list
 
 ## Known gaps
 
-- **Thumbnails have no rebuild path.** They are written only during a scan and excluded
-  from backups; a missing `thumbs/<id>.jpg` renders as a blank tile and can only be
-  recovered by re-scanning that photo. Nothing else depends on them.
+- **Orphaned thumbnails are counted, not collected.** A thumbnail whose record is gone
+  stays on disk; deleting files is not a decision the rebuild makes on its own.
 - **The fault-injection suite is simulation.** `95-faultfs.js` reproduces latency, hangs,
   failing and short writes, and the assertions were verified by removing the fixes and
   watching them go red. It is still OPFS underneath: it models the failures observed on
