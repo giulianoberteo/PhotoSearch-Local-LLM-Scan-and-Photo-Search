@@ -55,7 +55,9 @@ function renderPeople(){
     + (FACES.people.length === 1 ? "person" : "people") + " and "
     + FACES.clusters.length + " unnamed group"
     + (FACES.clusters.length === 1 ? "" : "s")
-    + ". Type a name to label a group; it becomes searchable straight away.";
+    + ". Type a name to label a group; it becomes searchable straight away."
+    + "  If people are mixed together, raise the strictness and re-group — it is "
+    + "instant and keeps your names.";
 
   const grid = el("div", "people");
   all.forEach((g, i) => {
@@ -167,7 +169,52 @@ function showPersonPhotos(g, label){
     + (recs.length > 120 ? " (showing 120)" : ""));
 }
 
+/* Vectors built by an earlier configuration describe pose rather than identity,
+   so they cannot be salvaged by re-grouping -- they have to be recomputed. Say
+   that plainly instead of letting the groups look merely bad. */
+function renderFaceStale(){
+  const box = $("#faceStale");
+  const stale = staleFaceEngines();
+  if (!stale.length){ box.hidden = true; box.textContent = ""; return; }
+  box.hidden = false;
+  box.textContent = "";
+  box.append(el("b", null, "These faces were measured the old way. "));
+  box.append(document.createTextNode(
+    "They were described without landmark alignment (" + stale.join(", ")
+    + "), which encodes the angle of the head rather than who it is — which is "
+    + "why groups mixed people together. Re-grouping cannot fix it; the faces "
+    + "have to be looked at again. Delete the face data and press Find faces."));
+  const b = el("button", "btn");
+  b.textContent = "Delete face data and start again";
+  b.style.marginTop = "8px";
+  b.onclick = async () => {
+    try {
+      await deleteAllFaceData();
+      rebuildDerived(); renderFaceStale(); renderPeople();
+      toast("Face data deleted — press Find faces.");
+    } catch (e){ toast(errText(e)); }
+  };
+  box.append(el("div"));
+  box.append(b);
+}
+
 /* ---- actions ---- */
+$("#sFaceTh").oninput = () => {
+  S.faces.threshold = +$("#sFaceTh").value;
+  $("#sFaceThVal").textContent = S.faces.threshold.toFixed(2);
+};
+$("#sFaceTh").onchange = async () => {
+  saveSettings();
+  if (!FACES.vec.ids.length) return;
+  /* Instant: the vectors are already on disk, so trying a different strictness
+     costs nothing and never re-reads a photo. */
+  clusterFaces();
+  await savePeople();
+  rebuildDerived();
+  renderPeople();
+  toast("Re-grouped at " + S.faces.threshold.toFixed(2) + " — "
+    + FACES.clusters.length + " unnamed groups. Names were kept.");
+};
 $("#btnFaceScan").onclick = async () => {
   if (!(await ensureIndexConnected()) || !(await ensureConnected("the face scan"))) return;
   if (RUN.active){ toast("Stop the scan first."); return; }
@@ -189,7 +236,8 @@ $("#btnFaceScan").onclick = async () => {
   if (!p.files.length){
     st.ok("All " + p.already + " photos have been looked at already. "
       + FACES.faces.size + " faces found.");
-    clusterFaces(); await savePeople(); rebuildDerived(); renderPeople();
+    clusterFaces(); await savePeople(); rebuildDerived();
+    renderFaceStale(); renderPeople();
     return;
   }
   if (!confirm("Look for faces in " + p.files.length + " photo"
@@ -204,6 +252,7 @@ $("#btnFaceScan").onclick = async () => {
     clusterFaces();
     await savePeople();
     rebuildDerived();
+    renderFaceStale();
     renderPeople();
     const bits = [r.looked + " looked at", r.found + " faces found",
       FACES.clusters.length + FACES.people.length + " groups"];
@@ -257,6 +306,9 @@ async function onPeopleShown(){
     await loadFaces();
     if (FACES.faces.size && !FACES.people.length && !FACES.clusters.length)
       clusterFaces();
+    $("#sFaceTh").value = String(S.faces.threshold);
+    $("#sFaceThVal").textContent = S.faces.threshold.toFixed(2);
+    renderFaceStale();
     renderPeople();
   } catch (e){
     $("#peopleBox").textContent = "";

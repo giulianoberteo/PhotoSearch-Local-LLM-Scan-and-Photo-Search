@@ -264,7 +264,14 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
         <button class="btn" id="btnFaceScan">Find faces</button>
         <button class="btn sec" id="btnRecluster">Re-group</button>
         <button class="btn sec" id="btnFaceWipe">Delete all face data</button>
+        <label class="hint" style="display:flex;align-items:center;gap:7px;margin-left:6px">
+          Grouping strictness
+          <input type="range" id="sFaceTh" min="0.50" max="0.95" step="0.01" value="0.75"
+                 style="width:150px">
+          <span class="mono" id="sFaceThVal">0.75</span>
+        </label>
       </div>
+      <div id="faceStale" class="note" hidden></div>
       <div class="hint" id="faceNote">Faces are grouped by how alike they look.
         Nothing is named until you name it.</div>
       <div id="faceOut"></div>

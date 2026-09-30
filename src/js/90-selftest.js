@@ -1823,7 +1823,9 @@ async function selfTest(){
           "p5": [{ box:[0.2,0.2,0.3,0.3], score:0.88, vec: mkv(3, 0.05),
                    age: 34, gender: "female", genderScore: 0.9, emotion: "happy" }]
         };
-        setFaceEngine(async bmp => planted[bmp.__id] || [], "stub");
+        /* Claim the current engine id: a stub calling itself something else
+           would make every face look like it came from an older build. */
+        setFaceEngine(async bmp => planted[bmp.__id] || [], FACE_ENGINE_ID);
 
         IDX.records = new Map(Object.keys(planted).map(id =>
           [id, { id, name:id + ".jpg", status:"ok", caption:"a photo",
@@ -1921,6 +1923,53 @@ async function selfTest(){
         ok("without losing its faces",
            FACES.clusters.some(c => c.face_ids.length === wasCount));
 
+        /* ---- a group must not drift into a blur of several people ----
+           Centroid-only merging cascades: one wrong face moves the centre,
+           which admits more wrong faces. A candidate must also be close to an
+           actual member. */
+        {
+          const keepT = S.faces.threshold;
+          S.faces.threshold = 0.9;
+          const far = mkv(5, 0);
+          /* A face that is near the CENTROID of a two-identity group but close
+             to neither member must not be admitted. */
+          const mid = new Float32Array(dim);
+          const a = faceNormalise(mkv(0, 0)), b = faceNormalise(mkv(5, 0));
+          for (let i = 0; i < dim; i++) mid[i] = a[i] * 0.5 + b[i] * 0.5;
+          ok("a face between two identities is not close to either",
+             faceDot(faceNormalise(mid), 0, a, 0, dim) < 0.9);
+          S.faces.threshold = keepT;
+        }
+
+        /* ---- a face too small to describe is discarded ---- */
+        {
+          const keepMin = S.faces.minRelSize;
+          S.faces.minRelSize = 0.1;
+          planted["tiny"] = [{ box:[0.5,0.5,0.02,0.02], score:0.99, vec: mkv(6, 0) }];
+          IDX.records.set("tiny", { id:"tiny", name:"tiny.jpg", status:"ok", caption:"x" });
+          const before = FACES.faces.size;
+          await detectFacesIn("tiny", { __id:"tiny", width:1000, height:800 });
+          eq("a face too small to describe is not stored", FACES.faces.size, before);
+          S.faces.minRelSize = 0.01;
+          await detectFacesIn("tiny", { __id:"tiny", width:1000, height:800 });
+          eq("but it is kept when the floor allows it", FACES.faces.size, before + 1);
+          S.faces.minRelSize = keepMin;
+        }
+
+        /* ---- vectors from an older configuration must be flagged ----
+           Unaligned embeddings describe pose, not identity. Re-grouping cannot
+           rescue them, so they must be visible rather than quietly mixed in. */
+        {
+          eq("current faces are not reported stale", staleFaceEngines(), []);
+          const one = [...FACES.faces.values()][0];
+          const saved = one.engine;
+          one.engine = "human@3.3.6";                    // the unaligned build
+          eq("a face from an older engine is reported",
+             staleFaceEngines(), ["human@3.3.6"]);
+          one.engine = saved;
+          eq("and the report clears once it is gone", staleFaceEngines(), []);
+        }
+
         /* ---- the detector's confidence must come from the right field ----
            faceScore is produced by the mesh model, which is switched off, so it
            is always 0. Preferring it scored every face 0 and the minimum-score
@@ -1991,11 +2040,12 @@ async function selfTest(){
 
         /* ---- it survives a reload ---- */
         await namePerson(FACES.clusters.find(c => c.face_ids.length === wasCount).id, "Ben");
+        const vecsBefore = FACES.vec.ids.length;
         FACES.loaded = false;
         await loadFaces();
         eq("names survive a reload", FACES.people.length, 1);
         eq("with the right name", FACES.people[0].name, "Ben");
-        eq("and faces reload with them", FACES.vec.ids.length, 5);
+        eq("and every face reloads with them", FACES.vec.ids.length, vecsBefore);
         ok("names still map to photos after a reload",
            faceNamesFor("p1").includes("Ben"), faceNamesFor("p1").join(","));
 

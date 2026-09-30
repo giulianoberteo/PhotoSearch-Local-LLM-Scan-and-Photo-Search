@@ -50,6 +50,10 @@ function setFaceEngine(fn, name){ FACE_ENGINE = fn; FACE_ENGINE_NAME = name || "
    error page as a graph and later dies on "Cannot read properties of undefined
    (reading 'inputNodes')", which says nothing about what actually went wrong. */
 const HUMAN_VERSION = "3.3.6";
+/* Recorded on every face. Vectors from a different configuration are NOT
+   comparable -- unaligned ones encode pose -- so a change here has to be
+   visible rather than silently mixed into the same clusters. */
+const FACE_ENGINE_ID = "human@3.3.6+aligned";
 const HUMAN_BASE = "https://cdn.jsdelivr.net/npm/@vladmandic/human@" + HUMAN_VERSION;
 const HUMAN_URL = HUMAN_BASE + "/dist/human.esm.js";
 const HUMAN_MODELS = HUMAN_BASE + "/models/";
@@ -92,8 +96,17 @@ async function loadHumanEngine(onPhase){
     /* Everything that is not detection or the embedding is off. */
     face: {
       enabled: true,
-      detector: { enabled:true, rotation:false, maxDetected:20, minConfidence:0.4 },
-      mesh:      { enabled:false },
+      /* mesh and rotation are REQUIRED for usable embeddings, not optional
+         quality settings. The descriptor runs on the crop it is handed, so
+         without landmark alignment it encodes pose rather than identity.
+         Measured on the same face across rotations and scales:
+
+             mesh+rotation off:  self 0.527  cross 0.393  separability 0.134
+             mesh+rotation on:   self 0.925  cross 0.586  separability 0.339
+
+         Shipping this off was why groups mixed different people together. */
+      detector: { enabled:true, rotation:true, maxDetected:20, minConfidence:0.4 },
+      mesh:      { enabled:true },         // landmarks -> alignment
       iris:      { enabled:false },
       emotion:   { enabled:false },
       antispoof: { enabled:false },
@@ -126,7 +139,7 @@ async function loadHumanEngine(onPhase){
       });
     }
     return out;
-  }, "human@3.3.6");
+  }, FACE_ENGINE_ID);
   return FACE_ENGINE;
 }
 
@@ -310,6 +323,15 @@ function rebuildFaceNames(){
   FACES.namesByPhoto = m;
   return m;
 }
+/* Faces described by a different engine configuration cannot be compared with
+   the current ones, so say so rather than clustering nonsense together. */
+function staleFaceEngines(){
+  const seen = new Set();
+  for (const f of FACES.faces.values())
+    if (f.engine && f.engine !== FACE_ENGINE_ID) seen.add(f.engine);
+  return [...seen];
+}
+
 /* Read by recordTerms() so a name is searchable, and by candidateSet(). */
 function faceNamesFor(photoId){ return FACES.namesByPhoto.get(photoId) || []; }
 
@@ -363,7 +385,17 @@ function clusterFaces(threshold){
     let best = null, bestSim = th;
     for (const s of seeds){
       const sim = faceDot(v, 0, s.centroid, 0, dim);
-      if (sim >= bestSim){ bestSim = sim; best = s; }
+      if (sim < bestSim) continue;
+      let near = -1;
+      for (const mid of s.person.face_ids){
+        const mv = faceVectorOf(mid);
+        if (!mv) continue;
+        const d2 = faceDot(v, 0, mv, 0, dim);
+        if (d2 > near) near = d2;
+        if (near >= th) break;
+      }
+      if (near < th) continue;        // never auto-join a person on drift alone
+      bestSim = sim; best = s;
     }
     if (best){                                   // joins an existing named person
       best.person.face_ids.push(id);
@@ -371,10 +403,24 @@ function clusterFaces(threshold){
       if (c) best.centroid = c;
       continue;
     }
+    /* Match the CENTROID and the nearest MEMBER. Centroid-only merging drifts:
+       one wrong face moves the centre, which pulls in more wrong faces, and a
+       group ends up as a blur of several people. Requiring a close individual
+       neighbour as well stops that cascade. */
     let bg = null; bestSim = th;
     for (const g of groups){
       const sim = faceDot(v, 0, g.centroid, 0, dim);
-      if (sim >= bestSim){ bestSim = sim; bg = g; }
+      if (sim < bestSim) continue;
+      let near = -1;
+      for (const mid of g.face_ids){
+        const mv = faceVectorOf(mid);
+        if (!mv) continue;
+        const d2 = faceDot(v, 0, mv, 0, dim);
+        if (d2 > near) near = d2;
+        if (near >= th) break;                  // close enough, stop looking
+      }
+      if (near < th) continue;
+      bestSim = sim; bg = g;
     }
     if (bg){
       bg.face_ids.push(id);
@@ -475,8 +521,13 @@ function faceIdFor(photoId, box){
 async function detectFacesIn(photoId, bitmap){
   if (!FACE_ENGINE) throw new Error("no face engine loaded");
   const found = await FACE_ENGINE(bitmap);
+  /* A face 30 pixels across carries no identity: the descriptor returns
+     something, it just is not about this person, and one such face poisons a
+     whole group. Judged on the longer side of the box relative to the image. */
   const keep = found
     .filter(f => (f.score || 0) >= S.faces.minScore)
+    .filter(f => Math.max(f.box[2], f.box[3]) >= S.faces.minRelSize)
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
     .slice(0, S.faces.maxPerPhoto);
   if (!keep.length) return [];
   const rows = [], pairs = [];

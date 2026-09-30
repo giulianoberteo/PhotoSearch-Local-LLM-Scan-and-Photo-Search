@@ -166,8 +166,15 @@ like the photo vectors), and `people.json` (groups and the names you gave them).
 
 - **No crops are stored.** A face box is kept in 0..1, so a tile is the photo's existing
   thumbnail zoomed to that box. One less file per face, and one less write path.
+- **Alignment is mandatory.** The descriptor runs on the crop it is given, so `face.mesh`
+  and `face.detection.rotation` are on: without them the vector encodes head angle rather
+  than identity (0.53 self-similarity versus 0.93 — see FINDINGS §10).
 - **Grouping is greedy against centroids**, not all-pairs: 8,000 faces against a few
-  hundred centroids is seconds, where all-pairs would be minutes.
+  hundred centroids is seconds, where all-pairs would be minutes. A candidate must be
+  close to an actual member as well as to the centroid, because centroid-only merging
+  drifts until a group is a blur of several people.
+- **The engine configuration is recorded on every face.** Vectors from a different
+  configuration are not comparable, so they are reported rather than silently mixed in.
 - **A name is authoritative.** Re-grouping never re-clusters a named person's faces away,
   and unnamed faces are matched against named people first, so new photos join by
   themselves. Merge and split exist because clustering gets some wrong.

@@ -58,7 +58,14 @@ const S = {
      person into several groups, lower merges different people together. */
   /* minScore matches the detector's own minConfidence: a second, stricter
      floor on top of it just discards faces the detector already accepted. */
-  faces: { enabled:false, threshold:0.55, minScore:0.4, maxPerPhoto:20 },
+  /* threshold measured, not guessed: with alignment on, the same face across
+     poses scores ~0.93 and two different faces ~0.59, so 0.75 sits between
+     them. Adjustable in the People tab, because only you can judge your own
+     library -- and re-grouping is instant, the vectors are already on disk.
+     minRelSize: a face smaller than this fraction of the image is too few
+     pixels to describe, and one such face poisons a whole group. */
+  faces: { enabled:false, threshold:0.75, minScore:0.4, minRelSize:0.05,
+           maxPerPhoto:20 },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null
 };

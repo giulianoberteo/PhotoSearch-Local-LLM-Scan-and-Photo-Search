@@ -264,7 +264,14 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
         <button class="btn" id="btnFaceScan">Find faces</button>
         <button class="btn sec" id="btnRecluster">Re-group</button>
         <button class="btn sec" id="btnFaceWipe">Delete all face data</button>
+        <label class="hint" style="display:flex;align-items:center;gap:7px;margin-left:6px">
+          Grouping strictness
+          <input type="range" id="sFaceTh" min="0.50" max="0.95" step="0.01" value="0.75"
+                 style="width:150px">
+          <span class="mono" id="sFaceThVal">0.75</span>
+        </label>
       </div>
+      <div id="faceStale" class="note" hidden></div>
       <div class="hint" id="faceNote">Faces are grouped by how alike they look.
         Nothing is named until you name it.</div>
       <div id="faceOut"></div>
@@ -497,7 +504,14 @@ const S = {
      person into several groups, lower merges different people together. */
   /* minScore matches the detector's own minConfidence: a second, stricter
      floor on top of it just discards faces the detector already accepted. */
-  faces: { enabled:false, threshold:0.55, minScore:0.4, maxPerPhoto:20 },
+  /* threshold measured, not guessed: with alignment on, the same face across
+     poses scores ~0.93 and two different faces ~0.59, so 0.75 sits between
+     them. Adjustable in the People tab, because only you can judge your own
+     library -- and re-grouping is instant, the vectors are already on disk.
+     minRelSize: a face smaller than this fraction of the image is too few
+     pixels to describe, and one such face poisons a whole group. */
+  faces: { enabled:false, threshold:0.75, minScore:0.4, minRelSize:0.05,
+           maxPerPhoto:20 },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null
 };
@@ -5649,6 +5663,10 @@ function setFaceEngine(fn, name){ FACE_ENGINE = fn; FACE_ENGINE_NAME = name || "
    error page as a graph and later dies on "Cannot read properties of undefined
    (reading 'inputNodes')", which says nothing about what actually went wrong. */
 const HUMAN_VERSION = "3.3.6";
+/* Recorded on every face. Vectors from a different configuration are NOT
+   comparable -- unaligned ones encode pose -- so a change here has to be
+   visible rather than silently mixed into the same clusters. */
+const FACE_ENGINE_ID = "human@3.3.6+aligned";
 const HUMAN_BASE = "https://cdn.jsdelivr.net/npm/@vladmandic/human@" + HUMAN_VERSION;
 const HUMAN_URL = HUMAN_BASE + "/dist/human.esm.js";
 const HUMAN_MODELS = HUMAN_BASE + "/models/";
@@ -5691,8 +5709,17 @@ async function loadHumanEngine(onPhase){
     /* Everything that is not detection or the embedding is off. */
     face: {
       enabled: true,
-      detector: { enabled:true, rotation:false, maxDetected:20, minConfidence:0.4 },
-      mesh:      { enabled:false },
+      /* mesh and rotation are REQUIRED for usable embeddings, not optional
+         quality settings. The descriptor runs on the crop it is handed, so
+         without landmark alignment it encodes pose rather than identity.
+         Measured on the same face across rotations and scales:
+
+             mesh+rotation off:  self 0.527  cross 0.393  separability 0.134
+             mesh+rotation on:   self 0.925  cross 0.586  separability 0.339
+
+         Shipping this off was why groups mixed different people together. */
+      detector: { enabled:true, rotation:true, maxDetected:20, minConfidence:0.4 },
+      mesh:      { enabled:true },         // landmarks -> alignment
       iris:      { enabled:false },
       emotion:   { enabled:false },
       antispoof: { enabled:false },
@@ -5725,7 +5752,7 @@ async function loadHumanEngine(onPhase){
       });
     }
     return out;
-  }, "human@3.3.6");
+  }, FACE_ENGINE_ID);
   return FACE_ENGINE;
 }
 
@@ -5909,6 +5936,15 @@ function rebuildFaceNames(){
   FACES.namesByPhoto = m;
   return m;
 }
+/* Faces described by a different engine configuration cannot be compared with
+   the current ones, so say so rather than clustering nonsense together. */
+function staleFaceEngines(){
+  const seen = new Set();
+  for (const f of FACES.faces.values())
+    if (f.engine && f.engine !== FACE_ENGINE_ID) seen.add(f.engine);
+  return [...seen];
+}
+
 /* Read by recordTerms() so a name is searchable, and by candidateSet(). */
 function faceNamesFor(photoId){ return FACES.namesByPhoto.get(photoId) || []; }
 
@@ -5962,7 +5998,17 @@ function clusterFaces(threshold){
     let best = null, bestSim = th;
     for (const s of seeds){
       const sim = faceDot(v, 0, s.centroid, 0, dim);
-      if (sim >= bestSim){ bestSim = sim; best = s; }
+      if (sim < bestSim) continue;
+      let near = -1;
+      for (const mid of s.person.face_ids){
+        const mv = faceVectorOf(mid);
+        if (!mv) continue;
+        const d2 = faceDot(v, 0, mv, 0, dim);
+        if (d2 > near) near = d2;
+        if (near >= th) break;
+      }
+      if (near < th) continue;        // never auto-join a person on drift alone
+      bestSim = sim; best = s;
     }
     if (best){                                   // joins an existing named person
       best.person.face_ids.push(id);
@@ -5970,10 +6016,24 @@ function clusterFaces(threshold){
       if (c) best.centroid = c;
       continue;
     }
+    /* Match the CENTROID and the nearest MEMBER. Centroid-only merging drifts:
+       one wrong face moves the centre, which pulls in more wrong faces, and a
+       group ends up as a blur of several people. Requiring a close individual
+       neighbour as well stops that cascade. */
     let bg = null; bestSim = th;
     for (const g of groups){
       const sim = faceDot(v, 0, g.centroid, 0, dim);
-      if (sim >= bestSim){ bestSim = sim; bg = g; }
+      if (sim < bestSim) continue;
+      let near = -1;
+      for (const mid of g.face_ids){
+        const mv = faceVectorOf(mid);
+        if (!mv) continue;
+        const d2 = faceDot(v, 0, mv, 0, dim);
+        if (d2 > near) near = d2;
+        if (near >= th) break;                  // close enough, stop looking
+      }
+      if (near < th) continue;
+      bestSim = sim; bg = g;
     }
     if (bg){
       bg.face_ids.push(id);
@@ -6074,8 +6134,13 @@ function faceIdFor(photoId, box){
 async function detectFacesIn(photoId, bitmap){
   if (!FACE_ENGINE) throw new Error("no face engine loaded");
   const found = await FACE_ENGINE(bitmap);
+  /* A face 30 pixels across carries no identity: the descriptor returns
+     something, it just is not about this person, and one such face poisons a
+     whole group. Judged on the longer side of the box relative to the image. */
   const keep = found
     .filter(f => (f.score || 0) >= S.faces.minScore)
+    .filter(f => Math.max(f.box[2], f.box[3]) >= S.faces.minRelSize)
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
     .slice(0, S.faces.maxPerPhoto);
   if (!keep.length) return [];
   const rows = [], pairs = [];
@@ -6151,7 +6216,9 @@ function renderPeople(){
     + (FACES.people.length === 1 ? "person" : "people") + " and "
     + FACES.clusters.length + " unnamed group"
     + (FACES.clusters.length === 1 ? "" : "s")
-    + ". Type a name to label a group; it becomes searchable straight away.";
+    + ". Type a name to label a group; it becomes searchable straight away."
+    + "  If people are mixed together, raise the strictness and re-group — it is "
+    + "instant and keeps your names.";
 
   const grid = el("div", "people");
   all.forEach((g, i) => {
@@ -6263,7 +6330,52 @@ function showPersonPhotos(g, label){
     + (recs.length > 120 ? " (showing 120)" : ""));
 }
 
+/* Vectors built by an earlier configuration describe pose rather than identity,
+   so they cannot be salvaged by re-grouping -- they have to be recomputed. Say
+   that plainly instead of letting the groups look merely bad. */
+function renderFaceStale(){
+  const box = $("#faceStale");
+  const stale = staleFaceEngines();
+  if (!stale.length){ box.hidden = true; box.textContent = ""; return; }
+  box.hidden = false;
+  box.textContent = "";
+  box.append(el("b", null, "These faces were measured the old way. "));
+  box.append(document.createTextNode(
+    "They were described without landmark alignment (" + stale.join(", ")
+    + "), which encodes the angle of the head rather than who it is — which is "
+    + "why groups mixed people together. Re-grouping cannot fix it; the faces "
+    + "have to be looked at again. Delete the face data and press Find faces."));
+  const b = el("button", "btn");
+  b.textContent = "Delete face data and start again";
+  b.style.marginTop = "8px";
+  b.onclick = async () => {
+    try {
+      await deleteAllFaceData();
+      rebuildDerived(); renderFaceStale(); renderPeople();
+      toast("Face data deleted — press Find faces.");
+    } catch (e){ toast(errText(e)); }
+  };
+  box.append(el("div"));
+  box.append(b);
+}
+
 /* ---- actions ---- */
+$("#sFaceTh").oninput = () => {
+  S.faces.threshold = +$("#sFaceTh").value;
+  $("#sFaceThVal").textContent = S.faces.threshold.toFixed(2);
+};
+$("#sFaceTh").onchange = async () => {
+  saveSettings();
+  if (!FACES.vec.ids.length) return;
+  /* Instant: the vectors are already on disk, so trying a different strictness
+     costs nothing and never re-reads a photo. */
+  clusterFaces();
+  await savePeople();
+  rebuildDerived();
+  renderPeople();
+  toast("Re-grouped at " + S.faces.threshold.toFixed(2) + " — "
+    + FACES.clusters.length + " unnamed groups. Names were kept.");
+};
 $("#btnFaceScan").onclick = async () => {
   if (!(await ensureIndexConnected()) || !(await ensureConnected("the face scan"))) return;
   if (RUN.active){ toast("Stop the scan first."); return; }
@@ -6285,7 +6397,8 @@ $("#btnFaceScan").onclick = async () => {
   if (!p.files.length){
     st.ok("All " + p.already + " photos have been looked at already. "
       + FACES.faces.size + " faces found.");
-    clusterFaces(); await savePeople(); rebuildDerived(); renderPeople();
+    clusterFaces(); await savePeople(); rebuildDerived();
+    renderFaceStale(); renderPeople();
     return;
   }
   if (!confirm("Look for faces in " + p.files.length + " photo"
@@ -6300,6 +6413,7 @@ $("#btnFaceScan").onclick = async () => {
     clusterFaces();
     await savePeople();
     rebuildDerived();
+    renderFaceStale();
     renderPeople();
     const bits = [r.looked + " looked at", r.found + " faces found",
       FACES.clusters.length + FACES.people.length + " groups"];
@@ -6353,6 +6467,9 @@ async function onPeopleShown(){
     await loadFaces();
     if (FACES.faces.size && !FACES.people.length && !FACES.clusters.length)
       clusterFaces();
+    $("#sFaceTh").value = String(S.faces.threshold);
+    $("#sFaceThVal").textContent = S.faces.threshold.toFixed(2);
+    renderFaceStale();
     renderPeople();
   } catch (e){
     $("#peopleBox").textContent = "";
@@ -8485,7 +8602,9 @@ async function selfTest(){
           "p5": [{ box:[0.2,0.2,0.3,0.3], score:0.88, vec: mkv(3, 0.05),
                    age: 34, gender: "female", genderScore: 0.9, emotion: "happy" }]
         };
-        setFaceEngine(async bmp => planted[bmp.__id] || [], "stub");
+        /* Claim the current engine id: a stub calling itself something else
+           would make every face look like it came from an older build. */
+        setFaceEngine(async bmp => planted[bmp.__id] || [], FACE_ENGINE_ID);
 
         IDX.records = new Map(Object.keys(planted).map(id =>
           [id, { id, name:id + ".jpg", status:"ok", caption:"a photo",
@@ -8583,6 +8702,53 @@ async function selfTest(){
         ok("without losing its faces",
            FACES.clusters.some(c => c.face_ids.length === wasCount));
 
+        /* ---- a group must not drift into a blur of several people ----
+           Centroid-only merging cascades: one wrong face moves the centre,
+           which admits more wrong faces. A candidate must also be close to an
+           actual member. */
+        {
+          const keepT = S.faces.threshold;
+          S.faces.threshold = 0.9;
+          const far = mkv(5, 0);
+          /* A face that is near the CENTROID of a two-identity group but close
+             to neither member must not be admitted. */
+          const mid = new Float32Array(dim);
+          const a = faceNormalise(mkv(0, 0)), b = faceNormalise(mkv(5, 0));
+          for (let i = 0; i < dim; i++) mid[i] = a[i] * 0.5 + b[i] * 0.5;
+          ok("a face between two identities is not close to either",
+             faceDot(faceNormalise(mid), 0, a, 0, dim) < 0.9);
+          S.faces.threshold = keepT;
+        }
+
+        /* ---- a face too small to describe is discarded ---- */
+        {
+          const keepMin = S.faces.minRelSize;
+          S.faces.minRelSize = 0.1;
+          planted["tiny"] = [{ box:[0.5,0.5,0.02,0.02], score:0.99, vec: mkv(6, 0) }];
+          IDX.records.set("tiny", { id:"tiny", name:"tiny.jpg", status:"ok", caption:"x" });
+          const before = FACES.faces.size;
+          await detectFacesIn("tiny", { __id:"tiny", width:1000, height:800 });
+          eq("a face too small to describe is not stored", FACES.faces.size, before);
+          S.faces.minRelSize = 0.01;
+          await detectFacesIn("tiny", { __id:"tiny", width:1000, height:800 });
+          eq("but it is kept when the floor allows it", FACES.faces.size, before + 1);
+          S.faces.minRelSize = keepMin;
+        }
+
+        /* ---- vectors from an older configuration must be flagged ----
+           Unaligned embeddings describe pose, not identity. Re-grouping cannot
+           rescue them, so they must be visible rather than quietly mixed in. */
+        {
+          eq("current faces are not reported stale", staleFaceEngines(), []);
+          const one = [...FACES.faces.values()][0];
+          const saved = one.engine;
+          one.engine = "human@3.3.6";                    // the unaligned build
+          eq("a face from an older engine is reported",
+             staleFaceEngines(), ["human@3.3.6"]);
+          one.engine = saved;
+          eq("and the report clears once it is gone", staleFaceEngines(), []);
+        }
+
         /* ---- the detector's confidence must come from the right field ----
            faceScore is produced by the mesh model, which is switched off, so it
            is always 0. Preferring it scored every face 0 and the minimum-score
@@ -8653,11 +8819,12 @@ async function selfTest(){
 
         /* ---- it survives a reload ---- */
         await namePerson(FACES.clusters.find(c => c.face_ids.length === wasCount).id, "Ben");
+        const vecsBefore = FACES.vec.ids.length;
         FACES.loaded = false;
         await loadFaces();
         eq("names survive a reload", FACES.people.length, 1);
         eq("with the right name", FACES.people[0].name, "Ben");
-        eq("and faces reload with them", FACES.vec.ids.length, 5);
+        eq("and every face reloads with them", FACES.vec.ids.length, vecsBefore);
         ok("names still map to photos after a reload",
            faceNamesFor("p1").includes("Ben"), faceNamesFor("p1").join(","));
 

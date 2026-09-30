@@ -279,7 +279,38 @@ anything in the app, which is why it took four attempts to find four different c
 
 ---
 
-## 10. Index size
+## 10. A face embedding without alignment describes the pose, not the person
+
+`human`'s descriptor runs on whatever crop it is handed. Disabling `face.mesh` and
+`face.detection.rotation` to avoid loading models that were not wanted removed the landmark
+alignment the descriptor depends on, and the resulting vectors encoded head angle rather
+than identity. Measured on the same drawn face across rotations and scales, against a
+second face with different proportions:
+
+| configuration | same face, different pose | different people | separability |
+|---|---:|---:|---:|
+| mesh + rotation **off** | 0.527 | 0.393 | **0.134** |
+| mesh + rotation **on** | **0.925** | 0.586 | **0.339** |
+
+Self-similarity is the number that matters: at 0.527 a photo of someone barely resembled
+another photo of the same person, so no threshold could separate anybody. The docs do say
+*"it is highly recommended to have face.mesh and face.detection.rotation enabled"* — for
+recognition it is not a recommendation, it is a requirement.
+
+**The threshold has to be measured too, not guessed.** At 0.55 — chosen before any of this
+was measured — the cutoff sat *below* the 0.586 that two different faces score, so the
+clusterer was merging different people by construction. 0.75 sits between the two.
+
+**Centroid-only clustering cascades.** One wrong face moves the centre, which admits more
+wrong faces, and a group becomes a blur of several people. Requiring a candidate to be
+close to an actual member as well as to the centroid stops the drift.
+
+**Small faces are noise.** A face 30 px across still yields a descriptor; it is simply not
+about that person, and one of them poisons a whole group.
+
+---
+
+## 11. Index size
 
 Measured on real photos, then projected:
 
