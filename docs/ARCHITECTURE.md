@@ -11,6 +11,7 @@ PhotoSearch.html
 ├── scan runner                  queue · retries · checkpoint · backup
 ├── search                       BM25 + cosine + reciprocal rank fusion
 ├── chat agent                   tool-calling loop over the index
+├── timeline                     browse by day · lazy, windowed thumbnails
 └── fault proxy (test-only)      slow · hanging · failing · short-writing storage
 ```
 

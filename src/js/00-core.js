@@ -121,7 +121,12 @@ async function idbGet(k){ const db = await idb(); return new Promise((res, rej) 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x =>
     x.setAttribute("aria-selected", String(x === b)));
-  ["chat","scan","settings"].forEach(t => $("#tab-" + t).hidden = (t !== b.dataset.tab));
+  ["chat","timeline","scan","settings"].forEach(t =>
+    $("#tab-" + t).hidden = (t !== b.dataset.tab));
+  /* The timeline reads the whole index, so it is built on first view rather
+     than at boot -- opening the app must not wait for it. */
+  if (b.dataset.tab === "timeline" && typeof onTimelineShown === "function")
+    onTimelineShown();
 });
 
 /* ================= browser gate ================= */

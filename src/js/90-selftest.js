@@ -1632,6 +1632,101 @@ async function selfTest(){
       IDX.records.delete(ghost.id);
     }
 
+    /* ---- timeline ----
+       Every record already carried a date, a confidence and a place; none of it
+       was browsable. These assertions cover the grouping, and the one thing
+       that would make it unusable on a share: rendering every thumbnail. */
+    {
+      const keepRecords = IDX.records;
+      const mk = (id, iso, when, place, extra) => [id, Object.assign({
+        id, name:id + ".jpg", path:id + ".jpg", status:"ok",
+        date_taken: iso, when, place, caption:"c" }, extra || {})];
+      IDX.records = new Map([
+        mk("t1", "2012-04-07T09:00:00.000Z",
+           { year:2012, month:4, day:7, occasions:["easter"] }, "Staines, GB"),
+        mk("t2", "2012-04-07T18:30:00.000Z",
+           { year:2012, month:4, day:7, occasions:["easter"] }, "Staines, GB"),
+        mk("t3", "2012-04-09T10:00:00.000Z", { year:2012, month:4, day:9 }, null),
+        mk("t4", "2026-01-02T10:00:00.000Z", { year:2026, month:1, day:2 }, "Sicily, IT",
+           { date_suspect:true, date_source:"mtime" }),
+        mk("t5", null, null, null),                       // undated
+        mk("t6", "2026-01-02T11:00:00.000Z", { year:2026, month:1, day:2 }, null,
+           { deleted:true }),                             // must be excluded
+        mk("t7", null, null, null, { status:"error", error:"x" })
+      ]);
+
+      const t = buildTimeline();
+      eq("undated and deleted photos are not days", t.days.length, 3);
+      eq("the newest day comes first", t.days[0].key, "2026-01-02");
+      eq("photos on a day are grouped together", t.days[2].recs.length, 2);
+      eq("a soft-deleted photo is excluded", t.days[0].recs.length, 1);
+      eq("undated photos are counted, not dropped", t.undated, 1);
+      eq("the total excludes errors and deletions", t.total, 5);
+      eq("within a day the newest photo is first", t.days[2].recs[0].id, "t2");
+      eq("places are collected per day", t.days[2].places, ["Staines, GB"]);
+      eq("occasions are collected per day", t.days[2].occasions, ["easter"]);
+      eq("an uncertain date is counted on its day", t.days[0].suspect, 1);
+
+      eq("years are listed newest first", t.years.map(y => y.year), [2026, 2012]);
+      eq("and carry a photo count", t.years[1].count, 3);
+      eq("months are listed within a year", t.years[1].months.length, 1);
+
+      /* A record whose `when` block is missing must still land on a day: the
+         app's own block is preferred, but date_taken is the fallback. */
+      IDX.records.set("t8", { id:"t8", name:"t8.jpg", status:"ok",
+        date_taken:"2019-06-15T12:00:00.000Z", caption:"c" });
+      const t2 = buildTimeline();
+      ok("a record with no when block still lands on a day",
+         t2.days.some(d => d.key === "2019-06-15"),
+         t2.days.map(d => d.key).join(","));
+
+      renderTimeline();
+      const sections = $("#tlBody").querySelectorAll(".tlday");
+      eq("one section is rendered per day", sections.length, t2.days.length);
+      /* THE important one. Rendering every thumbnail up front would be one read
+         per photo from the share -- 6,635 of them on the real library. */
+      eq("no thumbnails are rendered until a day is on screen",
+         $("#tlBody").querySelectorAll("img").length, 0);
+      ok("but the scrollbar is honest before anything is filled",
+         [...sections].every(x => parseInt(x.querySelector(".tlrows").style.minHeight) > 0));
+
+      tlFill(sections[0]);
+      ok("filling a day renders its photos",
+         sections[0].querySelectorAll("img").length === 1,
+         String(sections[0].querySelectorAll("img").length));
+      ok("a filled day pins its thumbnails against cache eviction",
+         thumbPinned.has(t2.days[0].recs[0].id));
+      ok("an uncertain date is marked in the caption",
+         !!sections[0].querySelector(".tlmark"));
+      tlFill(sections[0]);
+      eq("filling twice does not duplicate anything",
+         sections[0].querySelectorAll("img").length, 1);
+
+      tlEmpty(sections[0]);
+      eq("scrolling a day away releases its images",
+         sections[0].querySelectorAll("img").length, 0);
+      ok("and unpins them so the cache can reclaim them",
+         !thumbPinned.has(t2.days[0].recs[0].id));
+      ok("without collapsing the page under the reader",
+         parseInt(sections[0].querySelector(".tlrows").style.minHeight) > 0);
+
+      const bar = $("#tlBar");
+      ok("the bar offers a button per year",
+         bar.querySelectorAll("button").length === t2.years.length,
+         String(bar.querySelectorAll("button").length));
+      ok("and a date picker to jump with", !!bar.querySelector('input[type="date"]'));
+
+      eq("jumping to a known day finds it", tlJump("2012-04-07"),
+         t2.days.findIndex(d => d.key === "2012-04-07"));
+      /* A date with no photos must land somewhere sensible, not nowhere. */
+      const near = tlJump("2012-04-08", true);
+      eq("a date with no photos lands on the nearest earlier day",
+         t2.days[near].key, "2012-04-07");
+
+      IDX.records = keepRecords;
+      TL.built = 0;
+    }
+
     /* ---- compaction ---- */
     const c = await compactRecords();
     ok("compaction shrinks the log", c.after <= c.before, c.before + " -> " + c.after);

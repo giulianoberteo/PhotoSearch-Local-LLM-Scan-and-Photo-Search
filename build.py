@@ -32,6 +32,7 @@ ORDER = [
     "70-runner.js",   # the scan runner
     "80-ui.js",       # settings and scan UI
     "85-chat.js",     # tool-calling agent
+    "82-timeline.js", # browse by day
     "87-chatui.js",   # chat rendering, lightbox
     "90-selftest.js", # in-browser test suite
     "95-faultfs.js",  # test-only: slow/hanging/failing filesystem proxy

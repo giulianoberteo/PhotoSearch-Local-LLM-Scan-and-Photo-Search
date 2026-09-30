@@ -99,6 +99,23 @@ td.mono{font-family:var(--mono);font-size:12px}
 .grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:7px;border:1px solid var(--line);display:block;background:var(--panel2)}
 .grid figcaption{font-size:11px;color:var(--dim);margin-top:3px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
+.tlbar{position:sticky;top:0;z-index:6;background:var(--panel);padding:6px 0 8px;
+  border-bottom:1px solid var(--line);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.tlbar button{background:var(--panel2);border:1px solid var(--line);color:var(--text);
+  border-radius:6px;padding:3px 9px;font-size:12px;cursor:pointer;font-family:inherit}
+.tlbar button[aria-current="true"]{background:var(--accent);color:var(--accent-t);
+  border-color:var(--accent)}
+.tlbar input[type="date"]{background:var(--panel2);border:1px solid var(--line);
+  color:var(--text);border-radius:6px;padding:3px 7px;font-size:12px;font-family:inherit}
+.tlday{margin:16px 0 0}
+.tlday > h3{position:sticky;top:41px;z-index:4;background:var(--panel);margin:0;
+  padding:7px 0 5px;font-size:13px;font-weight:650;border-bottom:1px solid var(--line)}
+.tlday > h3 span{color:var(--dim);font-weight:400;font-size:11.5px;margin-left:8px}
+/* Reserve the height a filled day will need, so lazily filling one does not
+   shift everything below it under the reader's cursor. */
+.tlrows{min-height:64px}
+.tlmark{color:var(--warn);cursor:help}
+
 .kv{display:grid;grid-template-columns:132px 1fr;gap:3px 10px;font-size:12.5px}
 .kv dt{color:var(--dim)} .kv dd{margin:0;word-break:break-word}
 .stat{display:flex;gap:18px;flex-wrap:wrap;font-size:13px}
@@ -139,6 +156,7 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
   <h1>PhotoSearch</h1>
   <nav role="tablist">
     <button role="tab" data-tab="chat" aria-selected="false">Chat</button>
+    <button role="tab" data-tab="timeline" aria-selected="false">Timeline</button>
     <button role="tab" data-tab="scan" aria-selected="false">Scan</button>
     <button role="tab" data-tab="settings" aria-selected="true">Settings</button>
   </nav>
@@ -211,6 +229,13 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
         <button class="btn" id="chatSend">Send</button>
         <button class="btn sec" id="chatStop" hidden>Stop</button>
       </div>
+    </div>
+  </section>
+
+  <section id="tab-timeline" hidden>
+    <div class="card">
+      <div id="tlBar" class="tlbar"></div>
+      <div id="tlBody"><span class="dim">Loading…</span></div>
     </div>
   </section>
 

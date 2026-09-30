@@ -7,7 +7,7 @@ in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it 
 responses and an [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
 scratch folder, so your real photos and index are never touched.
 
-**318 assertions** covering:
+**346 assertions** covering:
 
 - pure logic — Easter/occasion dates, singularisation, validation caps, enum checks
 - `image_type` correction from filename, EXIF, dimensions and caption
@@ -23,6 +23,8 @@ scratch folder, so your real photos and index are never touched.
 - storage invariants — the vectors bin is always exactly as long as its id list claims,
   a torn final row is healed, and an unforced checkpoint save is throttled, not written
 - **storage that misbehaves** — slow, hanging, failing and short writes (see below)
+- **timeline** — day grouping, newest-first ordering, deleted and undated handling,
+  and that no thumbnail is rendered until its day is on screen
 - **thumbnail rebuild** — missing ones are detected and remade, error stubs are not queued,
   orphans are reported but never deleted, and photos outside the open folder are reported
   rather than silently skipped

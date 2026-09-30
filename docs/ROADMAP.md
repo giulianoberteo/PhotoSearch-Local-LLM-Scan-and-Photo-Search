@@ -129,13 +129,16 @@ question.
 **Cost:** medium build, model time proportional to video count. **Risk:** low — codec
 support is whatever Chrome already plays.
 
-### 1.3 Timeline browsing
+### 1.3 Timeline browsing — **BUILT, 30 September 2026**
 
-Every record has a date, a confidence and a source, and none of it is browsable. Google
-Photos *is* a timeline. Needs: a scrubbable year/month index, a grid grouped by day with
-place-name headings, and jump-to-date. Pure UI over data already in memory.
+A Timeline tab grouped by day, newest first, with place and occasion headings, a year bar,
+and a date picker that lands on the nearest earlier day when the exact one has no photos.
+Uncertain dates are marked per photo with their source in the tooltip.
 
-**Cost:** low. **Risk:** low. Highest value per hour of work in this document.
+Thumbnails are **windowed**: only days near the viewport are filled, and a day that scrolls
+away releases its images and unpins them. Rendering all 6,635 up front would have been
+6,635 reads from the share. Heights are reserved up front so the scrollbar is honest and
+nothing shifts under the reader.
 
 ### 1.4 Map view
 
@@ -215,7 +218,7 @@ The premise is one HTML file that works offline against your own disk.
 
 ## Recommended order
 
-1. **Timeline (1.3)** — a day's work, and it changes how the whole library feels.
+1. ~~**Timeline (1.3)**~~ — done, 30 September 2026.
 2. **Perceptual hash into the scan (1.5)** — cheap, and avoids a future re-pass.
 3. **People (1.1)** — the headline feature, ~20 minutes of compute, pending your agreement
    on the privacy design above.

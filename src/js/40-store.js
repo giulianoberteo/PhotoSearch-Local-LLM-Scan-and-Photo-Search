@@ -399,6 +399,10 @@ const thumbCache = new Map();
    pointed at them, turning older grids into broken images. Pinned ids are kept. */
 const thumbPinned = new Set();
 function thumbPin(id){ thumbPinned.add(id); }
+/* The timeline scrolls through thousands of photos, so it pins what is on
+   screen and releases it again -- pinning everything would defeat the cache
+   bound, and pinning nothing would let an eviction revoke a visible image. */
+function thumbUnpin(id){ thumbPinned.delete(id); }
 async function thumbUrl(id){
   if (thumbCache.has(id)) return thumbCache.get(id);
   try {
