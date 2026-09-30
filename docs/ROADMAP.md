@@ -72,7 +72,7 @@ costs another 68 hours.
 
 ## Phase 1 — People, and the browsing you already have the data for
 
-### 1.1 People (face grouping) — the headline ask
+### 1.1 People (face grouping) — **BUILT, 30 September 2026**
 
 **How it works.** Re-read each original (the thumbnail-rebuild path already does exactly
 this), detect faces, embed each face as a 512-d vector, cluster the vectors, and let **you**
@@ -220,8 +220,7 @@ The premise is one HTML file that works offline against your own disk.
 
 1. ~~**Timeline (1.3)**~~ — done, 30 September 2026.
 2. **Perceptual hash into the scan (1.5)** — cheap, and avoids a future re-pass.
-3. **People (1.1)** — the headline feature, ~20 minutes of compute, pending your agreement
-   on the privacy design above.
+3. ~~**People (1.1)**~~ — done, 30 September 2026.
 4. **Video (1.2)** — closes the one gap where content is entirely invisible.
 5. **Place grouping (1.4)**, then near-duplicate UI (1.5).
 6. **Image embeddings (2.1)** — last of the substantial items, because it is the largest

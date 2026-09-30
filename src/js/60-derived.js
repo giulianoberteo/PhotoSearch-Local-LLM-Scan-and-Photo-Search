@@ -21,6 +21,9 @@ function recordTerms(r){
   for (const ln of r.text_lines || []) t.push(...tokenise(ln));
   if (r.place) t.push(...tokenise(r.place));
   if (r.when && r.when.occasions) for (const o of r.when.occasions) t.push(...tokenise(o));
+  /* A name you assigned to a face group is searchable text like any other, so
+     "anna at the beach" works in the plain search box and in chat. */
+  for (const n of faceNamesFor(r.id)) t.push(...tokenise(n));
   return t;
 }
 function addEntity(type, value, id){

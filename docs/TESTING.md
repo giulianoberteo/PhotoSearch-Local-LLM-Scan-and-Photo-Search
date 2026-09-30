@@ -7,7 +7,7 @@ in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it 
 responses and an [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
 scratch folder, so your real photos and index are never touched.
 
-**346 assertions** covering:
+**385 assertions** covering:
 
 - pure logic — Easter/occasion dates, singularisation, validation caps, enum checks
 - `image_type` correction from filename, EXIF, dimensions and caption
@@ -23,6 +23,9 @@ scratch folder, so your real photos and index are never touched.
 - storage invariants — the vectors bin is always exactly as long as its id list claims,
   a torn final row is healed, and an unforced checkpoint save is throttled, not written
 - **storage that misbehaves** — slow, hanging, failing and short writes (see below)
+- **faces** — grouping by resemblance, naming, merge and split, that re-grouping never
+  destroys a name, that a new photo of a named person joins them, and that **no age,
+  gender, emotion or ethnicity ever reaches storage**
 - **timeline** — day grouping, newest-first ordering, deleted and undated handling,
   and that no thumbnail is rendered until its day is on screen
 - **thumbnail rebuild** — missing ones are detected and remade, error stubs are not queued,
@@ -82,6 +85,11 @@ S.indexDirHandle = faultFS(dir, {
 Handles enter the app at four points, so wrapping is contained: `useDirectory` and three
 `S.indexDirHandle` assignments. Nothing in the app calls `faultFS` — it is test-only.
 
+The **face engine is injected** the same way: `setFaceEngine(fn)` replaces the detector
+with a stub returning planted vectors, so nothing in the face tests needs a network, a GPU
+or a model download. Use orthogonal vectors with a little jitter for distinct identities —
+vaguer ones do not test the clustering threshold, they test the noise.
+
 `shortWrites` is the nastiest of the five, and the reason `appendLines` checks the
 resulting file length: a write that reports success having stored half its data raises no
 error anywhere, so the caller carries on believing those records are safe.
@@ -111,6 +119,7 @@ removing the fix and confirming the suite goes red:
 | `appendLines` stops checking the resulting length | *a write that silently lands short is caught* |
 | the pre-scan safety copy goes back to running silently | *the safety copy is given a progress callback*, *the progress card is already visible while it runs* |
 | the thumbnail rebuild stops calling `saveThumb` | *nothing is missing afterwards* + a read-back throw |
+| a face row carries everything the engine returned | *no age, gender, emotion or ethnicity is ever stored* |
 
 Do this for any new assertion that guards a defect which has actually shipped.
 

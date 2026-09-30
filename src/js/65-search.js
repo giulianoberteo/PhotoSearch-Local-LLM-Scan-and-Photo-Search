@@ -27,6 +27,7 @@ function candidateSet(f){
   const types = f.image_type ? [].concat(f.image_type).map(s => String(s).toLowerCase()) : null;
   const ents  = f.entities ? [].concat(f.entities).map(s => singular(String(s).toLowerCase())) : null;
   const occ   = f.occasion ? [].concat(f.occasion).map(s => String(s).toLowerCase()) : null;
+  const who   = f.person ? [].concat(f.person).map(s => String(s).toLowerCase()) : null;
   for (const r of IDX.records.values()){
     if (r.deleted || r.status === "error" || r.probe) continue;
     if (from && (!r.date_taken || r.date_taken.slice(0,10) < from)) continue;
@@ -34,6 +35,11 @@ function candidateSet(f){
     if (place && !(r.place || "").toLowerCase().includes(place)) continue;
     if (types && !types.includes(String(r.image_type || "").toLowerCase())) continue;
     if (occ && !((r.when && r.when.occasions) || []).some(o => occ.includes(o))) continue;
+    /* EVERY named person must appear, so "Anna and Ben" means both of them. */
+    if (who){
+      const names = faceNamesFor(r.id).map(n => n.toLowerCase());
+      if (!who.every(w => names.some(n => n.includes(w)))) continue;
+    }
     if (f.text){
       const needle = String(f.text).toLowerCase();
       if (!textOf(r).toLowerCase().includes(needle)) continue;

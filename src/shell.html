@@ -116,6 +116,24 @@ td.mono{font-family:var(--mono);font-size:12px}
 .tlrows{min-height:64px}
 .tlmark{color:var(--warn);cursor:help}
 
+.people{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;
+  margin-top:12px}
+.pcard{border:1px solid var(--line);border-radius:9px;padding:10px;background:var(--panel2)}
+.pcard .top{display:flex;gap:10px;align-items:center}
+.facetile{width:64px;height:64px;flex:0 0 64px;overflow:hidden;border-radius:9px;
+  background:var(--panel);border:1px solid var(--line)}
+.facetile img{width:100%;height:100%;object-fit:fill;display:block}
+.pcard input[type="text"]{width:100%;background:var(--panel);border:1px solid var(--line);
+  color:var(--text);border-radius:6px;padding:4px 7px;font-size:13px;font-family:inherit}
+.pcard .acts{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.pcard .acts button,.pcard .acts select{background:var(--panel);border:1px solid var(--line);
+  color:var(--text);border-radius:6px;padding:3px 8px;font-size:11.5px;cursor:pointer;
+  font-family:inherit}
+.pcard.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.facestrip{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.facestrip .facetile{width:52px;height:52px;flex:0 0 52px;cursor:pointer}
+.facestrip .facetile.pick{outline:2px solid var(--accent);outline-offset:1px}
+
 .kv{display:grid;grid-template-columns:132px 1fr;gap:3px 10px;font-size:12.5px}
 .kv dt{color:var(--dim)} .kv dd{margin:0;word-break:break-word}
 .stat{display:flex;gap:18px;flex-wrap:wrap;font-size:13px}
@@ -157,6 +175,7 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
   <nav role="tablist">
     <button role="tab" data-tab="chat" aria-selected="false">Chat</button>
     <button role="tab" data-tab="timeline" aria-selected="false">Timeline</button>
+    <button role="tab" data-tab="people" aria-selected="false">People</button>
     <button role="tab" data-tab="scan" aria-selected="false">Scan</button>
     <button role="tab" data-tab="settings" aria-selected="true">Settings</button>
   </nav>
@@ -236,6 +255,20 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
     <div class="card">
       <div id="tlBar" class="tlbar"></div>
       <div id="tlBody"><span class="dim">Loading…</span></div>
+    </div>
+  </section>
+
+  <section id="tab-people" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:10px">
+        <button class="btn" id="btnFaceScan">Find faces</button>
+        <button class="btn sec" id="btnRecluster">Re-group</button>
+        <button class="btn sec" id="btnFaceWipe">Delete all face data</button>
+      </div>
+      <div class="hint" id="faceNote">Faces are grouped by how alike they look.
+        Nothing is named until you name it.</div>
+      <div id="faceOut"></div>
+      <div id="peopleBox"><span class="dim">Press "Find faces" to begin.</span></div>
     </div>
   </section>
 

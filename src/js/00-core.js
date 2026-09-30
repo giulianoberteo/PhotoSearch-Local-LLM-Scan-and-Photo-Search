@@ -54,6 +54,9 @@ const S = {
   io: { retries:3, retryMs:400, deadlineFactor:40, deadlineFloorMs:8000,
         deadlineCapMs:180000 },
   storage: { openMs:null, readMs:null, listMs:null, at:0, listTimedOut:false },
+  /* threshold is cosine similarity between unit vectors: higher splits one
+     person into several groups, lower merges different people together. */
+  faces: { enabled:false, threshold:0.55, minScore:0.5, maxPerPhoto:20 },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null
 };
@@ -64,7 +67,7 @@ const LS_OLD = "photosearch.settings.v1";
 function saveSettings(){
   try { localStorage.setItem(LS, JSON.stringify({
     baseUrl:S.baseUrl, roles:S.roles, scan:S.scan, date:S.date, events:S.events,
-    search:S.search, ocr:S.ocr, backup:S.backup, chat:S.chat, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
+    search:S.search, ocr:S.ocr, backup:S.backup, chat:S.chat, faces:S.faces, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
     mock: $("#mock").checked })); } catch {}
 }
 function loadSettings(){
@@ -84,6 +87,7 @@ function loadSettings(){
     if (d.events) S.events = { ...S.events, ...d.events };
     if (d.search) S.search = { ...S.search, ...d.search };
     if (d.chat) S.chat = { ...S.chat, ...d.chat };
+    if (d.faces) S.faces = { ...S.faces, ...d.faces };
     if (d.ocr) S.ocr = { ...S.ocr, ...d.ocr };
     if (d.indexMode) S.indexMode = d.indexMode;
     if (d.indexChosen) S.indexChosen = d.indexChosen;
@@ -121,12 +125,14 @@ async function idbGet(k){ const db = await idb(); return new Promise((res, rej) 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x =>
     x.setAttribute("aria-selected", String(x === b)));
-  ["chat","timeline","scan","settings"].forEach(t =>
+  ["chat","timeline","people","scan","settings"].forEach(t =>
     $("#tab-" + t).hidden = (t !== b.dataset.tab));
   /* The timeline reads the whole index, so it is built on first view rather
      than at boot -- opening the app must not wait for it. */
   if (b.dataset.tab === "timeline" && typeof onTimelineShown === "function")
     onTimelineShown();
+  if (b.dataset.tab === "people" && typeof onPeopleShown === "function")
+    onPeopleShown();
 });
 
 /* ================= browser gate ================= */

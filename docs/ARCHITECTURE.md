@@ -12,6 +12,7 @@ PhotoSearch.html
 ├── search                       BM25 + cosine + reciprocal rank fusion
 ├── chat agent                   tool-calling loop over the index
 ├── timeline                     browse by day · lazy, windowed thumbnails
+├── faces                        detect · embed · group by resemblance · you name them
 └── fault proxy (test-only)      slow · hanging · failing · short-writing storage
 ```
 
@@ -155,6 +156,27 @@ round trip measured 24 seconds when the drives were asleep, and a directory list
   because the backup that failed four times reported the least of anything in the app.
 - **Writes are verified by length.** `appendLines` and `appendVectors` both re-read the
   file and refuse to report success unless it grew by exactly what was written.
+
+## Faces
+
+Detection and embedding run **in the browser** — LM Studio's embeddings endpoint is
+text-only, so there is no alternative. `.photoindex/faces/` holds `faces.jsonl` (geometry
+and provenance), `facevecs.bin`/`.json` (unit-length vectors, reconciled both ways on load
+like the photo vectors), and `people.json` (groups and the names you gave them).
+
+- **No crops are stored.** A face box is kept in 0..1, so a tile is the photo's existing
+  thumbnail zoomed to that box. One less file per face, and one less write path.
+- **Grouping is greedy against centroids**, not all-pairs: 8,000 faces against a few
+  hundred centroids is seconds, where all-pairs would be minutes.
+- **A name is authoritative.** Re-grouping never re-clusters a named person's faces away,
+  and unnamed faces are matched against named people first, so new photos join by
+  themselves. Merge and split exist because clustering gets some wrong.
+- **Nothing is inferred.** A group is "Group 1" until you type a name. `human`'s descriptor
+  model computes age and a gender guess as a side effect of the embedding and cannot be
+  asked not to; both are dropped at the adapter boundary, a face row is built field by
+  field rather than spread, and a test asserts neither ever reaches storage. Emotion, iris,
+  antispoof and liveness are switched off outright.
+- **One action deletes all of it**, leaving the rest of the index untouched.
 
 ## Known gaps
 

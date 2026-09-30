@@ -1727,6 +1727,170 @@ async function selfTest(){
       TL.built = 0;
     }
 
+    /* ---- faces ----
+       The engine is injected, so none of this needs a network or a model: the
+       detector is a thin adapter and everything that can be wrong -- grouping,
+       naming, merging, splitting, and what is allowed to be stored -- is
+       arithmetic and storage below it. */
+    {
+      const keepFaces = S.faces.enabled, keepTh = S.faces.threshold;
+      const keepEngine = FACE_ENGINE, keepName = FACE_ENGINE_NAME;
+      const keepRecords = IDX.records;
+      try {
+        S.faces.threshold = 0.9;
+        await ensureIndex();
+        await deleteAllFaceData();
+
+        /* Three identities as unit-ish vectors: A and B far apart, A2 close to
+           A. Exactly the situation clustering has to get right. */
+        const dim = 8;
+        /* Distinct identities must be genuinely far apart, so use orthogonal
+           axes with a little jitter: within one identity cosine is ~0.99,
+           between two it is ~0. Anything vaguer does not actually test the
+           threshold, it tests the noise. */
+        const mkv = (axis, jitter) => {
+          const v = new Float32Array(dim);
+          v[axis] = 1;
+          for (let i = 0; i < dim; i++)
+            v[i] += (jitter || 0) * (((i * 37) % 11) / 11 - 0.5);
+          return v;
+        };
+        const planted = {
+          "p1": [{ box:[0.1,0.1,0.2,0.2], score:0.95, vec: mkv(0, 0) }],
+          "p2": [{ box:[0.3,0.2,0.2,0.2], score:0.90, vec: mkv(0, 0.05) }],
+          "p3": [{ box:[0.5,0.3,0.2,0.2], score:0.85, vec: mkv(3, 0) }],
+          "p4": [{ box:[0.1,0.1,0.2,0.2], score:0.20, vec: mkv(0, 0) }],   // below minScore
+          /* age/gender arrive from the real descriptor model; the adapter must
+             be the only thing that ever sees them. */
+          "p5": [{ box:[0.2,0.2,0.3,0.3], score:0.88, vec: mkv(3, 0.05),
+                   age: 34, gender: "female", genderScore: 0.9, emotion: "happy" }]
+        };
+        setFaceEngine(async bmp => planted[bmp.__id] || [], "stub");
+
+        IDX.records = new Map(Object.keys(planted).map(id =>
+          [id, { id, name:id + ".jpg", status:"ok", caption:"a photo",
+                 date_taken:"2026-01-0" + id.slice(1) + "T10:00:00.000Z" }]));
+
+        await loadFaces();
+        for (const id of Object.keys(planted))
+          await detectFacesIn(id, { __id:id, width:1000, height:800 });
+
+        eq("a face below the score floor is not stored", FACES.faces.has("p4-f100_100_200_200"), false);
+        eq("every confident face is stored", FACES.faces.size, 4);
+        eq("and each has a vector", FACES.vec.ids.length, 4);
+        ok("vectors are stored normalised", (() => {
+          const v = faceVectorOf(FACES.vec.ids[0]);
+          let n = 0; for (let i = 0; i < v.length; i++) n += v[i]*v[i];
+          return Math.abs(Math.sqrt(n) - 1) < 1e-5;
+        })());
+
+        /* THE privacy assertion. */
+        const stored = JSON.stringify([...FACES.faces.values()]);
+        ok("no age, gender, emotion or ethnicity is ever stored",
+           !/age|gender|emotion|ethnic|race/i.test(stored), stored.slice(0, 160));
+        eq("a face row carries only geometry and provenance",
+           Object.keys([...FACES.faces.values()][0]).sort().join(","),
+           "box,detected_at,engine,id,photo_id,score");
+
+        /* ---- grouping ---- */
+        clusterFaces();
+        eq("alike faces are grouped and unalike ones are not", FACES.clusters.length, 2);
+        eq("no group is named to begin with",
+           FACES.clusters.filter(c => c.name).length, 0);
+        eq("each group holds both of its faces",
+           FACES.clusters.map(c => c.face_ids.length).sort().join(","), "2,2");
+        /* Pick by content, not by position: two groups of equal size have no
+           guaranteed order, and the rest of this test follows one identity. */
+        const faceOfP1 = [...FACES.faces.values()].find(f => f.photo_id === "p1").id;
+        const big = FACES.clusters.find(c => c.face_ids.includes(faceOfP1));
+        ok("the group containing p1 is findable", !!big);
+
+        /* ---- naming ---- */
+        await namePerson(big.id, "Anna");
+        eq("naming promotes a group to a person", FACES.people.length, 1);
+        eq("and removes it from the unnamed list", FACES.clusters.length, 1);
+        eq("the name is kept", FACES.people[0].name, "Anna");
+        ok("and reaches the photos that person is in",
+           faceNamesFor("p1").includes("Anna"), faceNamesFor("p1").join(","));
+
+        rebuildDerived();
+        const byName = await searchPhotos({ query:"", person:"Anna", limit:20 });
+        eq("searching by name returns that person's photos", byName.results.length, 2);
+        ok("and only theirs",
+           byName.results.every(x => faceNamesFor(x.rec.id).includes("Anna")));
+        const noSuch = await searchPhotos({ query:"", person:"Nobody", limit:20 });
+        eq("an unknown name returns nothing", noSuch.results.length, 0);
+        ok("the name is searchable as ordinary text too",
+           recordTerms(IDX.records.get("p1")).includes("anna"),
+           recordTerms(IDX.records.get("p1")).join(" "));
+
+        /* ---- re-grouping must never destroy a name ---- */
+        clusterFaces();
+        eq("re-grouping keeps the named person", FACES.people.length, 1);
+        eq("with their faces intact", FACES.people[0].face_ids.length, 2);
+        eq("and their name", FACES.people[0].name, "Anna");
+
+        /* A new photo of a known person joins them without being asked. */
+        IDX.records.set("p6", { id:"p6", name:"p6.jpg", status:"ok", caption:"x" });
+        planted["p6"] = [{ box:[0.4,0.4,0.2,0.2], score:0.93, vec: mkv(0, 0.02) }];
+        await detectFacesIn("p6", { __id:"p6", width:1000, height:800 });
+        clusterFaces();
+        ok("a new photo of a named person joins them automatically",
+           faceNamesFor("p6").includes("Anna"), faceNamesFor("p6").join(","));
+
+        /* ---- merging and splitting: clustering WILL get some wrong ---- */
+        const other = FACES.clusters[0];
+        const beforeMerge = FACES.people[0].face_ids.length;
+        await mergeGroups(FACES.people[0].id, other.id);
+        eq("merging moves every face across",
+           FACES.people[0].face_ids.length, beforeMerge + other.face_ids.length);
+        eq("and the group merged from is gone", FACES.clusters.length, 0);
+
+        /* Move a face out that is NOT p1's, so the rest of the test can keep
+           following p1 through the group it stays in. */
+        const faceOfP3 = [...FACES.faces.values()].find(f => f.photo_id === "p3").id;
+        const moving = [faceOfP3];
+        await splitOut(FACES.people[0].id, moving);
+        eq("splitting moves the chosen faces out", FACES.clusters.length, 1);
+        eq("into a group of their own", FACES.clusters[0].face_ids.length, 1);
+        ok("and they leave the person they came from",
+           !FACES.people[0].face_ids.includes(moving[0]));
+
+        /* Clearing a name returns the group to unnamed rather than losing it. */
+        const wasCount = FACES.people[0].face_ids.length;
+        await namePerson(FACES.people[0].id, "");
+        eq("clearing a name unnames the group", FACES.people.length, 0);
+        ok("without losing its faces",
+           FACES.clusters.some(c => c.face_ids.length === wasCount));
+
+        /* ---- it survives a reload ---- */
+        await namePerson(FACES.clusters.find(c => c.face_ids.length === wasCount).id, "Ben");
+        FACES.loaded = false;
+        await loadFaces();
+        eq("names survive a reload", FACES.people.length, 1);
+        eq("with the right name", FACES.people[0].name, "Ben");
+        eq("and faces reload with them", FACES.vec.ids.length, 5);
+        ok("names still map to photos after a reload",
+           faceNamesFor("p1").includes("Ben"), faceNamesFor("p1").join(","));
+
+        /* ---- deleting everything ---- */
+        await deleteAllFaceData();
+        eq("deleting face data removes every face", FACES.faces.size, 0);
+        eq("and every vector", FACES.vec.ids.length, 0);
+        eq("and every name", FACES.people.length, 0);
+        eq("and nothing maps to a photo any more", faceNamesFor("p1").length, 0);
+        let gone = false;
+        try { await IDX.dir.getDirectoryHandle("faces"); } catch { gone = true; }
+        ok("the faces folder itself is gone", gone);
+        ok("but the photo records are untouched", IDX.records.size >= 5);
+      } finally {
+        S.faces.enabled = keepFaces; S.faces.threshold = keepTh;
+        FACE_ENGINE = keepEngine; FACE_ENGINE_NAME = keepName;
+        IDX.records = keepRecords;
+        try { await deleteAllFaceData(); } catch {}
+      }
+    }
+
     /* ---- compaction ---- */
     const c = await compactRecords();
     ok("compaction shrinks the log", c.after <= c.before, c.before + " -> " + c.after);

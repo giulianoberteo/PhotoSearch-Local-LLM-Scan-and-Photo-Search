@@ -99,6 +99,17 @@ async function scanOne(f, signal){
 
   await saveThumb(f.id, img.thumb);
 
+  /* Faces, if switched on. The photo is already decoded at this point, so this
+     costs milliseconds against 21.5 seconds of model time -- invisible. A
+     failure here must never fail the photo: the caption is the expensive part
+     and faces can always be filled in later by the backfill pass. */
+  if (S.faces.enabled && FACE_ENGINE){
+    try {
+      const bmp = await createImageBitmap(img.big);
+      try { await detectFacesIn(f.id, bmp); } finally { bmp.close(); }
+    } catch (e){ console.warn("faces:", errText(e)); }
+  }
+
   const norm = out.v.norm;
   const fix = correctImageType(norm.image_type,
     { name:f.name, width:img.srcW, height:img.srcH, camera:exif.camera }, norm);
@@ -624,4 +635,95 @@ async function runThumbnailRebuild(files){
     }
   }
   return { built, failed: RUN.errorCount, stopped: RUN.stop };
+}
+
+
+/* ================= backfilling faces =================
+   Same shape as the thumbnail rebuild, and for the same reason: it re-reads
+   the originals and calls no model, so the whole existing library costs
+   minutes rather than another pass at 21.5 seconds a photo. */
+
+async function planFaceScan(onPhase, signal){
+  const say = async m => { if (onPhase) await onPhase(m); };
+  await say("Opening the index…");
+  await indexOp("opening the index", note => ensureIndex(note, { write:false }),
+    { onPhase: say, cost: 4 });
+  if (!IDX.loaded){ await say("Loading records…"); await loadRecords(); }
+  await say("Loading known faces…");
+  await loadFaces();
+
+  /* Photos already looked at, so a stopped run resumes instead of restarting. */
+  const done = new Set();
+  for (const f of FACES.faces.values()) done.add(f.photo_id);
+
+  await say("Finding the originals…");
+  const plan = await buildPlan(null, signal);
+  const files = [];
+  for (const g of ["ok","stale","changed","failed","moved"])
+    for (const f of plan[g])
+      if (!done.has(f.id) && !files.some(x => x.id === f.id)) files.push(f);
+
+  /* Photos already looked at are not looked at again, so this is resumable:
+     stop it half way and the next run picks up where it left off. */
+  const total = [...IDX.records.values()]
+    .filter(r => !r.deleted && r.status !== "error").length;
+  return { files, already: done.size, total,
+           faces: FACES.faces.size, people: FACES.people.length };
+}
+
+async function runFaceScan(files){
+  if (!files.length){ toast("No photos left to look at."); return null; }
+  RUN.active = true; RUN.paused = false; RUN.stop = false;
+  RUN.abort = new AbortController();
+  RUN.done = 0; RUN.total = files.length; RUN.errors = []; RUN.times = [];
+  RUN.tokens = []; RUN.errorCount = 0; RUN.streak = 0; RUN.streakMsg = null;
+  RUN.started = Date.now(); RUN.mode = "faces";
+  RUN.batch = []; RUN.vecBatch = []; RUN.pending = new Set();
+  await acquireWakeLock();
+  scanUi(true);
+  $("#progCard").hidden = false;
+  updateProgress();
+
+  const queue = files.slice();
+  let found = 0, looked = 0;
+  /* One at a time: the detector is the bottleneck and it already uses the GPU,
+     so overlapping copies fight each other rather than going faster. */
+  async function loop(){
+    for(;;){
+      await waitIfPaused();
+      if (RUN.stop) return;
+      const f = queue.shift();
+      if (!f) return;
+      const t0 = performance.now();
+      try {
+        const file = await withRetry("read " + f.name, () => f.handle.getFile());
+        const img = await processImage(file, f.kind, { thumbOnly:false });
+        const bmp = await createImageBitmap(img.big);
+        try {
+          const rows = await detectFacesIn(f.id, bmp);
+          found += rows.length;
+        } finally { bmp.close(); }
+        showCurrent(img.thumb, f.path);
+        looked++;
+        RUN.times.push((performance.now() - t0) / 1000);
+      } catch (e){
+        if (e.name === "AbortError") return;
+        RUN.errorCount++;
+        if (RUN.errors.length < 200)
+          RUN.errors.push({ path:f.path, error:errText(e) });
+        if (RUN.errorCount < 20 || RUN.errorCount % 25 === 0) renderErrors();
+      }
+      RUN.done++;
+      updateProgress();
+    }
+  }
+  try { await loop(); }
+  finally {
+    RUN.active = false;
+    releaseWakeLock();
+    scanUi(false);
+    updateProgress();
+    renderErrors();
+  }
+  return { looked, found, failed: RUN.errorCount, stopped: RUN.stop };
 }
