@@ -7,7 +7,7 @@ in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it 
 responses and an [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
 scratch folder, so your real photos and index are never touched.
 
-**397 assertions** covering:
+**402 assertions** covering:
 
 - pure logic — Easter/occasion dates, singularisation, validation caps, enum checks
 - `image_type` correction from filename, EXIF, dimensions and caption
@@ -149,6 +149,7 @@ removing the fix and confirming the suite goes red:
 | the pre-scan safety copy goes back to running silently | *the safety copy is given a progress callback*, *the progress card is already visible while it runs* |
 | the thumbnail rebuild stops calling `saveThumb` | *nothing is missing afterwards* + a read-back throw |
 | a face row carries everything the engine returned | *no age, gender, emotion or ethnicity is ever stored* |
+| the face plan walks with no progress callback | *the walk is given a progress callback* |
 
 Do this for any new assertion that guards a defect which has actually shipped.
 
@@ -188,6 +189,10 @@ until killed, three times, with no output at all.
 
 ## Things worth knowing when writing tests
 
+- **Escape sequences reach the screen silently.** `"Press \\u201cFind faces\\u201d"` in a
+  source file renders the backslashes literally, and nothing else notices. One assertion
+  walks the rendered DOM (skipping `<script>`) plus every `placeholder` and `title`,
+  looking for `\\uXXXX`, `\\n` and `\\t`.
 - **Absence of `FAIL` is not a pass.** Grep for `EXCEPTION` and `TIMEOUT` too — a suite that
   died on a syntax error prints no failures at all.
 - **Headless has no file dialogs**, so picker behaviour cannot be tested that way.

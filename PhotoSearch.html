@@ -4118,8 +4118,18 @@ async function planFaceScan(onPhase, signal){
   const done = new Set();
   for (const f of FACES.faces.values()) done.add(f.photo_id);
 
-  await say("Finding the originals…");
-  const plan = await buildPlan(null, signal);
+  /* Reuse a plan that is already current. Walking and stat-ing the library over
+     a share is the longest step here by far, and doing it a second time when
+     the Scan tab just did it is pure waiting. */
+  let plan = (S.plan && !S.planStale && !S.plan.folderLooksEmpty) ? S.plan : null;
+  if (plan) await say("Using the current plan (" + plan.total + " photos)…");
+  else {
+    await say("Finding the originals — this walks the whole folder…");
+    /* Pass the progress through. Without it this step says nothing at all for
+       however many minutes the walk takes, which is indistinguishable from
+       being stuck -- and on a share it IS minutes. */
+    plan = await buildPlan(async m => { await say(m); }, signal);
+  }
   const files = [];
   for (const g of ["ok","stale","changed","failed","moved"])
     for (const f of plan[g])
@@ -6133,7 +6143,7 @@ function renderPeople(){
   if (!all.length){
     box.append(Object.assign(el("span", "dim"), { textContent: FACES.faces.size
       ? "No groups yet — press Re-group."
-      : "No faces found yet. Press \\u201cFind faces\\u201d." }));
+      : "No faces found yet. Press “Find faces”." }));
     return;
   }
   $("#faceNote").textContent = FACES.faces.size + " faces in "
@@ -6259,6 +6269,12 @@ $("#btnFaceScan").onclick = async () => {
   if (RUN.active){ toast("Stop the scan first."); return; }
   const host = $("#faceOut"); resetChecks(host);
   const st = step(host, "Find faces");
+  /* Do not leave "No faces found yet" sitting under a running step: it reads
+     as a result rather than a stale label. */
+  $("#peopleBox").textContent = "";
+  $("#peopleBox").append(Object.assign(el("span", "dim"),
+    { textContent: "Working — watch the line above. Walking a large folder over "
+      + "a network share can take several minutes before any photo is read." }));
   let p;
   try {
     await st.note("Loading the face model (first run downloads it)…");
@@ -6273,9 +6289,9 @@ $("#btnFaceScan").onclick = async () => {
     return;
   }
   if (!confirm("Look for faces in " + p.files.length + " photo"
-      + (p.files.length === 1 ? "" : "s") + "?\\n\\nThis re-reads the originals and "
+      + (p.files.length === 1 ? "" : "s") + "?\n\nThis re-reads the originals and "
       + "costs no model time. Roughly "
-      + fmtDur(p.files.length * 0.15) + ".\\n\\nNothing is named automatically.")) return;
+      + fmtDur(p.files.length * 0.15) + ".\n\nNothing is named automatically.")) return;
 
   try {
     const r = await runFaceScan(p.files);
@@ -6308,9 +6324,9 @@ $("#btnRecluster").onclick = async () => {
 };
 
 $("#btnFaceWipe").onclick = async () => {
-  if (!confirm("Delete ALL face data?\\n\\nEvery face vector, group and name you "
+  if (!confirm("Delete ALL face data?\n\nEvery face vector, group and name you "
     + "assigned is removed from .photoindex/faces/. Your photos, captions, dates "
-    + "and search index are not touched.\\n\\nThis cannot be undone.")) return;
+    + "and search index are not touched.\n\nThis cannot be undone.")) return;
   try {
     await deleteAllFaceData();
     rebuildDerived();
@@ -8371,6 +8387,64 @@ async function selfTest(){
 
       IDX.records = keepRecords;
       TL.built = 0;
+    }
+
+    /* ---- escape sequences must never reach the screen ----
+       "Press \u201cFind faces\u201d" rendered literally, backslashes and all,
+       because the source carried an escaped backslash. It is invisible to every
+       other test, so check the rendered text itself. */
+    {
+      const bad = [];
+      const walk = node => {
+        /* The page carries its own source in a <script>; that is not UI text. */
+        if (node.nodeType === 1 && /^(SCRIPT|STYLE|TEMPLATE)$/.test(node.tagName)) return;
+        if (node.nodeType === 3){
+          if (/\\u[0-9a-fA-F]{4}|\\n|\\t/.test(node.nodeValue))
+            bad.push(node.nodeValue.trim().slice(0, 70));
+          return;
+        }
+        for (const c of node.childNodes) walk(c);
+      };
+      renderPeople();
+      walk(document.body);
+      /* Placeholders and titles are text the user reads too. */
+      for (const n of document.querySelectorAll("[placeholder],[title]")){
+        const v = (n.getAttribute("placeholder") || "") + " " + (n.getAttribute("title") || "");
+        if (/\\u[0-9a-fA-F]{4}|\\n/.test(v)) bad.push(v.trim().slice(0, 70));
+      }
+      eq("no literal escape sequence is shown to the user", bad.join(" | "), "");
+    }
+
+    /* ---- the face plan must report the longest step it takes ----
+       Walking and stat-ing a library over a share is minutes. Passing no
+       progress callback made that indistinguishable from being stuck -- the
+       same defect as the silent pre-scan backup. */
+    {
+      const realPlan = buildPlan;
+      const keepPlan = S.plan, keepStale = S.planStale;
+      const emptyPlan = () => ({ new:[], changed:[], stale:[], ok:[], failed:[],
+        moved:[], missing:[], unreadable:[], counts:{}, total:0, scope:"" });
+      let tickType = null, calls = 0;
+      buildPlan = async (onTick) => { calls++; tickType = typeof onTick; return emptyPlan(); };
+      try {
+        S.plan = null; S.planStale = true;
+        await planFaceScan(() => {});
+        eq("the walk is given a progress callback", tickType, "function");
+        eq("and it really did walk", calls, 1);
+
+        /* And when the Scan tab has just done that work, do not repeat it. */
+        calls = 0;
+        S.plan = emptyPlan(); S.plan.total = 3; S.planStale = false;
+        await planFaceScan(() => {});
+        eq("a current plan is reused instead of walking again", calls, 0);
+
+        calls = 0;
+        S.planStale = true;
+        await planFaceScan(() => {});
+        eq("but a stale plan is not trusted", calls, 1);
+      } finally {
+        buildPlan = realPlan; S.plan = keepPlan; S.planStale = keepStale;
+      }
     }
 
     /* ---- faces ----

@@ -1727,6 +1727,64 @@ async function selfTest(){
       TL.built = 0;
     }
 
+    /* ---- escape sequences must never reach the screen ----
+       "Press \u201cFind faces\u201d" rendered literally, backslashes and all,
+       because the source carried an escaped backslash. It is invisible to every
+       other test, so check the rendered text itself. */
+    {
+      const bad = [];
+      const walk = node => {
+        /* The page carries its own source in a <script>; that is not UI text. */
+        if (node.nodeType === 1 && /^(SCRIPT|STYLE|TEMPLATE)$/.test(node.tagName)) return;
+        if (node.nodeType === 3){
+          if (/\\u[0-9a-fA-F]{4}|\\n|\\t/.test(node.nodeValue))
+            bad.push(node.nodeValue.trim().slice(0, 70));
+          return;
+        }
+        for (const c of node.childNodes) walk(c);
+      };
+      renderPeople();
+      walk(document.body);
+      /* Placeholders and titles are text the user reads too. */
+      for (const n of document.querySelectorAll("[placeholder],[title]")){
+        const v = (n.getAttribute("placeholder") || "") + " " + (n.getAttribute("title") || "");
+        if (/\\u[0-9a-fA-F]{4}|\\n/.test(v)) bad.push(v.trim().slice(0, 70));
+      }
+      eq("no literal escape sequence is shown to the user", bad.join(" | "), "");
+    }
+
+    /* ---- the face plan must report the longest step it takes ----
+       Walking and stat-ing a library over a share is minutes. Passing no
+       progress callback made that indistinguishable from being stuck -- the
+       same defect as the silent pre-scan backup. */
+    {
+      const realPlan = buildPlan;
+      const keepPlan = S.plan, keepStale = S.planStale;
+      const emptyPlan = () => ({ new:[], changed:[], stale:[], ok:[], failed:[],
+        moved:[], missing:[], unreadable:[], counts:{}, total:0, scope:"" });
+      let tickType = null, calls = 0;
+      buildPlan = async (onTick) => { calls++; tickType = typeof onTick; return emptyPlan(); };
+      try {
+        S.plan = null; S.planStale = true;
+        await planFaceScan(() => {});
+        eq("the walk is given a progress callback", tickType, "function");
+        eq("and it really did walk", calls, 1);
+
+        /* And when the Scan tab has just done that work, do not repeat it. */
+        calls = 0;
+        S.plan = emptyPlan(); S.plan.total = 3; S.planStale = false;
+        await planFaceScan(() => {});
+        eq("a current plan is reused instead of walking again", calls, 0);
+
+        calls = 0;
+        S.planStale = true;
+        await planFaceScan(() => {});
+        eq("but a stale plan is not trusted", calls, 1);
+      } finally {
+        buildPlan = realPlan; S.plan = keepPlan; S.planStale = keepStale;
+      }
+    }
+
     /* ---- faces ----
        The engine is injected, so none of this needs a network or a model: the
        detector is a thin adapter and everything that can be wrong -- grouping,

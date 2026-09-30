@@ -47,7 +47,7 @@ function renderPeople(){
   if (!all.length){
     box.append(Object.assign(el("span", "dim"), { textContent: FACES.faces.size
       ? "No groups yet — press Re-group."
-      : "No faces found yet. Press \\u201cFind faces\\u201d." }));
+      : "No faces found yet. Press “Find faces”." }));
     return;
   }
   $("#faceNote").textContent = FACES.faces.size + " faces in "
@@ -173,6 +173,12 @@ $("#btnFaceScan").onclick = async () => {
   if (RUN.active){ toast("Stop the scan first."); return; }
   const host = $("#faceOut"); resetChecks(host);
   const st = step(host, "Find faces");
+  /* Do not leave "No faces found yet" sitting under a running step: it reads
+     as a result rather than a stale label. */
+  $("#peopleBox").textContent = "";
+  $("#peopleBox").append(Object.assign(el("span", "dim"),
+    { textContent: "Working — watch the line above. Walking a large folder over "
+      + "a network share can take several minutes before any photo is read." }));
   let p;
   try {
     await st.note("Loading the face model (first run downloads it)…");
@@ -187,9 +193,9 @@ $("#btnFaceScan").onclick = async () => {
     return;
   }
   if (!confirm("Look for faces in " + p.files.length + " photo"
-      + (p.files.length === 1 ? "" : "s") + "?\\n\\nThis re-reads the originals and "
+      + (p.files.length === 1 ? "" : "s") + "?\n\nThis re-reads the originals and "
       + "costs no model time. Roughly "
-      + fmtDur(p.files.length * 0.15) + ".\\n\\nNothing is named automatically.")) return;
+      + fmtDur(p.files.length * 0.15) + ".\n\nNothing is named automatically.")) return;
 
   try {
     const r = await runFaceScan(p.files);
@@ -222,9 +228,9 @@ $("#btnRecluster").onclick = async () => {
 };
 
 $("#btnFaceWipe").onclick = async () => {
-  if (!confirm("Delete ALL face data?\\n\\nEvery face vector, group and name you "
+  if (!confirm("Delete ALL face data?\n\nEvery face vector, group and name you "
     + "assigned is removed from .photoindex/faces/. Your photos, captions, dates "
-    + "and search index are not touched.\\n\\nThis cannot be undone.")) return;
+    + "and search index are not touched.\n\nThis cannot be undone.")) return;
   try {
     await deleteAllFaceData();
     rebuildDerived();

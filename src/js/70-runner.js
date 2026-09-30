@@ -656,8 +656,18 @@ async function planFaceScan(onPhase, signal){
   const done = new Set();
   for (const f of FACES.faces.values()) done.add(f.photo_id);
 
-  await say("Finding the originals…");
-  const plan = await buildPlan(null, signal);
+  /* Reuse a plan that is already current. Walking and stat-ing the library over
+     a share is the longest step here by far, and doing it a second time when
+     the Scan tab just did it is pure waiting. */
+  let plan = (S.plan && !S.planStale && !S.plan.folderLooksEmpty) ? S.plan : null;
+  if (plan) await say("Using the current plan (" + plan.total + " photos)…");
+  else {
+    await say("Finding the originals — this walks the whole folder…");
+    /* Pass the progress through. Without it this step says nothing at all for
+       however many minutes the walk takes, which is indistinguishable from
+       being stuck -- and on a share it IS minutes. */
+    plan = await buildPlan(async m => { await say(m); }, signal);
+  }
   const files = [];
   for (const g of ["ok","stale","changed","failed","moved"])
     for (const f of plan[g])
