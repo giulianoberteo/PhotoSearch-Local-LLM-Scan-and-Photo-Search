@@ -1863,6 +1863,74 @@ async function selfTest(){
         ok("without losing its faces",
            FACES.clusters.some(c => c.face_ids.length === wasCount));
 
+        /* ---- the detector's confidence must come from the right field ----
+           faceScore is produced by the mesh model, which is switched off, so it
+           is always 0. Preferring it scored every face 0 and the minimum-score
+           filter then threw away every single face -- the feature would have
+           found nothing at all, silently. */
+        {
+          eq("a zero faceScore does not mask the real confidence",
+             faceScoreOf({ boxScore:0.53, score:0.53, faceScore:0 }), 0.53);
+          eq("boxScore is preferred when present",
+             faceScoreOf({ boxScore:0.81, score:0.4, faceScore:0 }), 0.81);
+          eq("score is used when boxScore is absent",
+             faceScoreOf({ score:0.62, faceScore:0 }), 0.62);
+          eq("faceScore is still used when it is the only one",
+             faceScoreOf({ faceScore:0.7 }), 0.7);
+          eq("nothing usable yields zero, not NaN", faceScoreOf({}), 0);
+          ok("the default floor does not exceed what the detector accepts",
+             S.faces.minScore <= 0.4, String(S.faces.minScore));
+        }
+
+        /* ---- a missing model must say so ----
+           The first version of this pointed modelBasePath at a package that
+           does not exist. TensorFlow.js does not report a 404: it parses the
+           error page as a graph and dies later on "Cannot read properties of
+           undefined (reading 'inputNodes')", which tells the user nothing. */
+        {
+          let e404 = null;
+          try {
+            await checkFaceModels("https://example.invalid/models/",
+              async () => ({ ok:false, status:404, text: async () => "not found" }));
+          } catch (e){ e404 = e; }
+          ok("a missing face model fails with a readable message", !!e404);
+          ok("naming the URL and the status",
+             !!e404 && /blazeface\.json/.test(e404.message) && /404/.test(e404.message),
+             e404 && e404.message);
+
+          let eHtml = null;
+          try {
+            await checkFaceModels("https://example.invalid/models/",
+              async () => ({ ok:true, status:200, text: async () => "<html>nope</html>" }));
+          } catch (e){ eHtml = e; }
+          ok("an error page served as 200 is caught too", !!eHtml,
+             eHtml && eHtml.message);
+
+          let eShape = null;
+          try {
+            await checkFaceModels("https://example.invalid/models/",
+              async () => ({ ok:true, status:200, text: async () => '{"hello":1}' }));
+          } catch (e){ eShape = e; }
+          ok("valid JSON that is not a graph model is rejected", !!eShape,
+             eShape && eShape.message);
+
+          let good = false;
+          try {
+            good = await checkFaceModels("https://example.invalid/models/",
+              async () => ({ ok:true, status:200,
+                text: async () => '{"format":"graph-model","modelTopology":{}}' }));
+          } catch {}
+          ok("a real graph model passes the check", good === true);
+
+          let eNet = null;
+          try {
+            await checkFaceModels("https://example.invalid/models/",
+              async () => { throw new TypeError("Failed to fetch"); });
+          } catch (e){ eNet = e; }
+          ok("being offline says so, and says it is a one-off download",
+             !!eNet && /first time only/.test(eNet.message), eNet && eNet.message);
+        }
+
         /* ---- it survives a reload ---- */
         await namePerson(FACES.clusters.find(c => c.face_ids.length === wasCount).id, "Ben");
         FACES.loaded = false;

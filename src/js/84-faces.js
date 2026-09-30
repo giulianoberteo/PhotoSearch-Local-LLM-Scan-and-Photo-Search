@@ -44,12 +44,44 @@ let FACE_ENGINE = null;
 let FACE_ENGINE_NAME = null;
 function setFaceEngine(fn, name){ FACE_ENGINE = fn; FACE_ENGINE_NAME = name || "custom"; }
 
-const HUMAN_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/human@3.3.6/dist/human.esm.js";
-const HUMAN_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/human-models@3.0.5/models/";
+/* One version, used for BOTH the library and its weights: the models ship
+   inside the package itself, and pointing modelBasePath at a separate package
+   was a 404. TensorFlow.js does not report a missing model -- it parses the
+   error page as a graph and later dies on "Cannot read properties of undefined
+   (reading 'inputNodes')", which says nothing about what actually went wrong. */
+const HUMAN_VERSION = "3.3.6";
+const HUMAN_BASE = "https://cdn.jsdelivr.net/npm/@vladmandic/human@" + HUMAN_VERSION;
+const HUMAN_URL = HUMAN_BASE + "/dist/human.esm.js";
+const HUMAN_MODELS = HUMAN_BASE + "/models/";
+
+/* So a bad path fails with a sentence instead of a TensorFlow internal. */
+async function checkFaceModels(base, fetcher){
+  const f = fetcher || fetch;
+  const url = base + "blazeface.json";
+  let res;
+  try { res = await f(url); }
+  catch (e){
+    throw new Error("could not reach the face model at " + url + " (" + errText(e)
+      + "). It is downloaded once and then cached; a connection is needed the "
+      + "first time only.");
+  }
+  if (!res.ok)
+    throw new Error("the face model is not at " + url + " (HTTP " + res.status
+      + "). The CDN path has moved; nothing was downloaded.");
+  let meta;
+  try { meta = JSON.parse(await res.text()); }
+  catch { throw new Error("the face model at " + url + " is not a model file — "
+    + "the CDN returned something else, probably an error page."); }
+  if (!meta || !meta.format)
+    throw new Error("the file at " + url + " is not a TensorFlow graph model.");
+  return true;
+}
 
 async function loadHumanEngine(onPhase){
   if (FACE_ENGINE) return FACE_ENGINE;
   const say = async m => { if (onPhase) await onPhase(m); };
+  await say("Checking the face model…");
+  await checkFaceModels(HUMAN_MODELS);
   await say("Loading the face model…");
   const mod = await import(/* @vite-ignore */ HUMAN_URL);
   const Human = mod.default || mod.Human;
@@ -71,9 +103,12 @@ async function loadHumanEngine(onPhase){
     body: { enabled:false }, hand: { enabled:false },
     object: { enabled:false }, gesture: { enabled:false }, segmentation: { enabled:false }
   });
-  await say("Warming the face model…");
+  await say("Downloading the face model (first run only)…");
   await human.load();
-  await human.warmup();
+  /* A warmup failure must not stop the real work: it runs the models over a
+     sample image and is a smoke test, not a requirement. */
+  await say("Warming up…");
+  try { await human.warmup(); } catch (e){ console.warn("face warmup:", errText(e)); }
 
   setFaceEngine(async bitmap => {
     const res = await human.detect(bitmap);
@@ -86,13 +121,24 @@ async function loadHumanEngine(onPhase){
          f.gender and f.genderScore are deliberately dropped here. */
       out.push({
         box: [x / W, y / H, w / W, h / H].map(v => Math.max(0, Math.min(1, v))),
-        score: f.faceScore != null ? f.faceScore : (f.score || 0),
+        score: faceScoreOf(f),
         vec: Float32Array.from(f.embedding)
       });
     }
     return out;
   }, "human@3.3.6");
   return FACE_ENGINE;
+}
+
+/* The detector's confidence, whichever field carries it.
+   `faceScore` is ALWAYS 0 here because it comes from the mesh model, which is
+   deliberately disabled -- preferring it silently scored every face 0 and the
+   minimum-score filter then discarded the lot. Verified against the real
+   engine: score and boxScore both read 0.53 where faceScore read 0. */
+function faceScoreOf(f){
+  for (const v of [f.boxScore, f.score, f.faceScore])
+    if (typeof v === "number" && v > 0) return v;
+  return 0;
 }
 
 /* ---- vector maths ---- */

@@ -495,7 +495,9 @@ const S = {
   storage: { openMs:null, readMs:null, listMs:null, at:0, listTimedOut:false },
   /* threshold is cosine similarity between unit vectors: higher splits one
      person into several groups, lower merges different people together. */
-  faces: { enabled:false, threshold:0.55, minScore:0.5, maxPerPhoto:20 },
+  /* minScore matches the detector's own minConfidence: a second, stricter
+     floor on top of it just discards faces the detector already accepted. */
+  faces: { enabled:false, threshold:0.55, minScore:0.4, maxPerPhoto:20 },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null
 };
@@ -5631,12 +5633,44 @@ let FACE_ENGINE = null;
 let FACE_ENGINE_NAME = null;
 function setFaceEngine(fn, name){ FACE_ENGINE = fn; FACE_ENGINE_NAME = name || "custom"; }
 
-const HUMAN_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/human@3.3.6/dist/human.esm.js";
-const HUMAN_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/human-models@3.0.5/models/";
+/* One version, used for BOTH the library and its weights: the models ship
+   inside the package itself, and pointing modelBasePath at a separate package
+   was a 404. TensorFlow.js does not report a missing model -- it parses the
+   error page as a graph and later dies on "Cannot read properties of undefined
+   (reading 'inputNodes')", which says nothing about what actually went wrong. */
+const HUMAN_VERSION = "3.3.6";
+const HUMAN_BASE = "https://cdn.jsdelivr.net/npm/@vladmandic/human@" + HUMAN_VERSION;
+const HUMAN_URL = HUMAN_BASE + "/dist/human.esm.js";
+const HUMAN_MODELS = HUMAN_BASE + "/models/";
+
+/* So a bad path fails with a sentence instead of a TensorFlow internal. */
+async function checkFaceModels(base, fetcher){
+  const f = fetcher || fetch;
+  const url = base + "blazeface.json";
+  let res;
+  try { res = await f(url); }
+  catch (e){
+    throw new Error("could not reach the face model at " + url + " (" + errText(e)
+      + "). It is downloaded once and then cached; a connection is needed the "
+      + "first time only.");
+  }
+  if (!res.ok)
+    throw new Error("the face model is not at " + url + " (HTTP " + res.status
+      + "). The CDN path has moved; nothing was downloaded.");
+  let meta;
+  try { meta = JSON.parse(await res.text()); }
+  catch { throw new Error("the face model at " + url + " is not a model file — "
+    + "the CDN returned something else, probably an error page."); }
+  if (!meta || !meta.format)
+    throw new Error("the file at " + url + " is not a TensorFlow graph model.");
+  return true;
+}
 
 async function loadHumanEngine(onPhase){
   if (FACE_ENGINE) return FACE_ENGINE;
   const say = async m => { if (onPhase) await onPhase(m); };
+  await say("Checking the face model…");
+  await checkFaceModels(HUMAN_MODELS);
   await say("Loading the face model…");
   const mod = await import(/* @vite-ignore */ HUMAN_URL);
   const Human = mod.default || mod.Human;
@@ -5658,9 +5692,12 @@ async function loadHumanEngine(onPhase){
     body: { enabled:false }, hand: { enabled:false },
     object: { enabled:false }, gesture: { enabled:false }, segmentation: { enabled:false }
   });
-  await say("Warming the face model…");
+  await say("Downloading the face model (first run only)…");
   await human.load();
-  await human.warmup();
+  /* A warmup failure must not stop the real work: it runs the models over a
+     sample image and is a smoke test, not a requirement. */
+  await say("Warming up…");
+  try { await human.warmup(); } catch (e){ console.warn("face warmup:", errText(e)); }
 
   setFaceEngine(async bitmap => {
     const res = await human.detect(bitmap);
@@ -5673,13 +5710,24 @@ async function loadHumanEngine(onPhase){
          f.gender and f.genderScore are deliberately dropped here. */
       out.push({
         box: [x / W, y / H, w / W, h / H].map(v => Math.max(0, Math.min(1, v))),
-        score: f.faceScore != null ? f.faceScore : (f.score || 0),
+        score: faceScoreOf(f),
         vec: Float32Array.from(f.embedding)
       });
     }
     return out;
   }, "human@3.3.6");
   return FACE_ENGINE;
+}
+
+/* The detector's confidence, whichever field carries it.
+   `faceScore` is ALWAYS 0 here because it comes from the mesh model, which is
+   deliberately disabled -- preferring it silently scored every face 0 and the
+   minimum-score filter then discarded the lot. Verified against the real
+   engine: score and boxScore both read 0.53 where faceScore read 0. */
+function faceScoreOf(f){
+  for (const v of [f.boxScore, f.score, f.faceScore])
+    if (typeof v === "number" && v > 0) return v;
+  return 0;
 }
 
 /* ---- vector maths ---- */
@@ -8460,6 +8508,74 @@ async function selfTest(){
         eq("clearing a name unnames the group", FACES.people.length, 0);
         ok("without losing its faces",
            FACES.clusters.some(c => c.face_ids.length === wasCount));
+
+        /* ---- the detector's confidence must come from the right field ----
+           faceScore is produced by the mesh model, which is switched off, so it
+           is always 0. Preferring it scored every face 0 and the minimum-score
+           filter then threw away every single face -- the feature would have
+           found nothing at all, silently. */
+        {
+          eq("a zero faceScore does not mask the real confidence",
+             faceScoreOf({ boxScore:0.53, score:0.53, faceScore:0 }), 0.53);
+          eq("boxScore is preferred when present",
+             faceScoreOf({ boxScore:0.81, score:0.4, faceScore:0 }), 0.81);
+          eq("score is used when boxScore is absent",
+             faceScoreOf({ score:0.62, faceScore:0 }), 0.62);
+          eq("faceScore is still used when it is the only one",
+             faceScoreOf({ faceScore:0.7 }), 0.7);
+          eq("nothing usable yields zero, not NaN", faceScoreOf({}), 0);
+          ok("the default floor does not exceed what the detector accepts",
+             S.faces.minScore <= 0.4, String(S.faces.minScore));
+        }
+
+        /* ---- a missing model must say so ----
+           The first version of this pointed modelBasePath at a package that
+           does not exist. TensorFlow.js does not report a 404: it parses the
+           error page as a graph and dies later on "Cannot read properties of
+           undefined (reading 'inputNodes')", which tells the user nothing. */
+        {
+          let e404 = null;
+          try {
+            await checkFaceModels("https://example.invalid/models/",
+              async () => ({ ok:false, status:404, text: async () => "not found" }));
+          } catch (e){ e404 = e; }
+          ok("a missing face model fails with a readable message", !!e404);
+          ok("naming the URL and the status",
+             !!e404 && /blazeface\.json/.test(e404.message) && /404/.test(e404.message),
+             e404 && e404.message);
+
+          let eHtml = null;
+          try {
+            await checkFaceModels("https://example.invalid/models/",
+              async () => ({ ok:true, status:200, text: async () => "<html>nope</html>" }));
+          } catch (e){ eHtml = e; }
+          ok("an error page served as 200 is caught too", !!eHtml,
+             eHtml && eHtml.message);
+
+          let eShape = null;
+          try {
+            await checkFaceModels("https://example.invalid/models/",
+              async () => ({ ok:true, status:200, text: async () => '{"hello":1}' }));
+          } catch (e){ eShape = e; }
+          ok("valid JSON that is not a graph model is rejected", !!eShape,
+             eShape && eShape.message);
+
+          let good = false;
+          try {
+            good = await checkFaceModels("https://example.invalid/models/",
+              async () => ({ ok:true, status:200,
+                text: async () => '{"format":"graph-model","modelTopology":{}}' }));
+          } catch {}
+          ok("a real graph model passes the check", good === true);
+
+          let eNet = null;
+          try {
+            await checkFaceModels("https://example.invalid/models/",
+              async () => { throw new TypeError("Failed to fetch"); });
+          } catch (e){ eNet = e; }
+          ok("being offline says so, and says it is a one-off download",
+             !!eNet && /first time only/.test(eNet.message), eNet && eNet.message);
+        }
 
         /* ---- it survives a reload ---- */
         await namePerson(FACES.clusters.find(c => c.face_ids.length === wasCount).id, "Ben");

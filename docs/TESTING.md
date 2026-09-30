@@ -7,7 +7,7 @@ in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it 
 responses and an [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
 scratch folder, so your real photos and index are never touched.
 
-**385 assertions** covering:
+**397 assertions** covering:
 
 - pure logic — Easter/occasion dates, singularisation, validation caps, enum checks
 - `image_type` correction from filename, EXIF, dimensions and caption
@@ -107,6 +107,35 @@ deadline, which is the point of asserting against it — so set `S.io.deadlineCa
 (a few hundred ms) for the duration of such a test, and restore it afterwards. Never let a
 hang happen inside `exclusive()`: that lock serialises every index write, and a wedged
 chain would stall the rest of the suite.
+
+### The face model needs a live check
+
+The self-test injects the face engine, so it never loads the real one. That is deliberate
+-- no test should need a 15 MB download -- but it means a whole class of failure is
+invisible to it, and two of them shipped:
+
+- `modelBasePath` pointed at a package that does not exist. TensorFlow.js does not report
+  a 404; it parses the error page as a graph and dies later on **"Cannot read properties
+  of undefined (reading 'inputNodes')"**, which names nothing. `checkFaceModels()` now
+  fetches the detector manifest first and fails with a sentence.
+- The confidence was read from `faceScore`, which is produced by the **mesh** model. Mesh
+  is deliberately disabled, so it is always `0`; the minimum-score filter then discarded
+  every face. The feature would have found nothing, silently. Real confidence lives in
+  `boxScore`/`score`.
+
+`tools/face-smoke.mjs` drives a real browser against the real model and reports the model
+base, the preflight, the load, a blank image (0 faces expected) and a drawn face. **Check
+the score is non-zero** — that is the assertion that would have caught the second bug:
+
+```
+drawn face : DETECTED 1 | vec dim 1024 | score 0.46 | box 0.20,0.29,0.56,0.56
+             | adapter keys: box,score,vec
+```
+
+`adapter keys: box,score,vec` is the privacy boundary holding against the *real* engine,
+which does return `age`, `gender`, `genderScore` and `emotion` on its raw objects.
+
+Run it after touching anything in `84-faces.js` above the vector maths.
 
 ### Prove the test can fail
 

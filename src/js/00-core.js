@@ -56,7 +56,9 @@ const S = {
   storage: { openMs:null, readMs:null, listMs:null, at:0, listTimedOut:false },
   /* threshold is cosine similarity between unit vectors: higher splits one
      person into several groups, lower merges different people together. */
-  faces: { enabled:false, threshold:0.55, minScore:0.5, maxPerPhoto:20 },
+  /* minScore matches the detector's own minConfidence: a second, stricter
+     floor on top of it just discards faces the detector already accepted. */
+  faces: { enabled:false, threshold:0.55, minScore:0.4, maxPerPhoto:20 },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null
 };
