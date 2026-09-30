@@ -517,16 +517,32 @@ function faceIdFor(photoId, box){
   return photoId + "-f" + box.map(v => Math.round(v * 1000)).join("_");
 }
 
+/* Reads run in parallel because they are latency-bound on a share; detection
+   does NOT, because one Human instance is not re-entrant. Parallel readers
+   feeding a serialised detector is the shape that fits both. */
+let faceDetectChain = Promise.resolve();
+function detectFacesSerial(photoId, bitmap){
+  const run = faceDetectChain.then(
+    () => detectFacesIn(photoId, bitmap),
+    () => detectFacesIn(photoId, bitmap));
+  faceDetectChain = run.then(() => {}, () => {});
+  return run;
+}
+
 /* One photo, already decoded. Returns the face rows written. */
 async function detectFacesIn(photoId, bitmap){
   if (!FACE_ENGINE) throw new Error("no face engine loaded");
   const found = await FACE_ENGINE(bitmap);
   /* A face 30 pixels across carries no identity: the descriptor returns
      something, it just is not about this person, and one such face poisons a
-     whole group. Judged on the longer side of the box relative to the image. */
+     whole group. Measured in PIXELS, not as a fraction, because the same photo
+     is read at 384px from a thumbnail or 1024px from the original and "are
+     there enough pixels here" has one answer either way. */
+  const W = bitmap.width || 1, H = bitmap.height || 1;
+  const facePx = f => Math.max(f.box[2] * W, f.box[3] * H);
   const keep = found
     .filter(f => (f.score || 0) >= S.faces.minScore)
-    .filter(f => Math.max(f.box[2], f.box[3]) >= S.faces.minRelSize)
+    .filter(f => facePx(f) >= S.faces.minFacePx)
     .sort((a, b) => (b.score || 0) - (a.score || 0))
     .slice(0, S.faces.maxPerPhoto);
   if (!keep.length) return [];
@@ -535,7 +551,7 @@ async function detectFacesIn(photoId, bitmap){
     const id = faceIdFor(photoId, f.box);
     if (FACES.faces.has(id)) continue;
     rows.push({ id, photo_id: photoId, box: f.box.map(v => +v.toFixed(4)),
-                score: +(f.score || 0).toFixed(4),
+                score: +(f.score || 0).toFixed(4), px: Math.round(facePx(f)),
                 engine: FACE_ENGINE_NAME, detected_at: new Date().toISOString() });
     pairs.push({ id, vec: f.vec });
   }

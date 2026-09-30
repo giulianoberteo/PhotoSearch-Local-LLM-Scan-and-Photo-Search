@@ -440,7 +440,9 @@ function updateProgress(){
     + (avgTok ? Math.round(avgTok) + " tok/image   " : "")
     + ((RUN.errorCount || RUN.errors.length) ? (RUN.errorCount || RUN.errors.length) + " errors" : "");
   const left = RUN.total - RUN.done;
-  const conc = Math.max(1, Math.min(4, S.scan.concurrency));
+  const conc = RUN.mode === "faces"
+    ? Math.max(1, Math.min(8, S.faces.readConcurrency))
+    : Math.max(1, Math.min(4, S.scan.concurrency));
   $("#progEta").textContent = (RUN.active && avg && left)
     ? "About " + fmtDur(left * avg / conc) + " remaining."
     : (RUN.active ? "Estimating…" : "");

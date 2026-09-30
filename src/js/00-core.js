@@ -62,10 +62,13 @@ const S = {
      poses scores ~0.93 and two different faces ~0.59, so 0.75 sits between
      them. Adjustable in the People tab, because only you can judge your own
      library -- and re-grouping is instant, the vectors are already on disk.
-     minRelSize: a face smaller than this fraction of the image is too few
-     pixels to describe, and one such face poisons a whole group. */
-  faces: { enabled:false, threshold:0.75, minScore:0.4, minRelSize:0.05,
-           maxPerPhoto:20 },
+     minFacePx: below this many pixels across there is nothing to describe.
+     source "thumbs" reads the 384px thumbnails already in the index -- for a
+     14 GB library on a 430 KB/s share that is 8 minutes against 9.7 HOURS of
+     re-reading originals, for the same photos. "originals" is the accurate
+     option, and should be pointed at a subset. */
+  faces: { enabled:false, threshold:0.75, minScore:0.4, minFacePx:40,
+           maxPerPhoto:20, source:"thumbs", readConcurrency:5 },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null
 };

@@ -1848,9 +1848,13 @@ async function selfTest(){
         const stored = JSON.stringify([...FACES.faces.values()]);
         ok("no age, gender, emotion or ethnicity is ever stored",
            !/age|gender|emotion|ethnic|race/i.test(stored), stored.slice(0, 160));
+        /* Deliberately an exact list rather than a denylist: any new field has
+           to be looked at and justified, which is how it should be for the one
+           record in this app that describes a person's face. px is the size of
+           the face in pixels -- geometry, like the box. */
         eq("a face row carries only geometry and provenance",
            Object.keys([...FACES.faces.values()][0]).sort().join(","),
-           "box,detected_at,engine,id,photo_id,score");
+           "box,detected_at,engine,id,photo_id,px,score");
 
         /* ---- grouping ---- */
         clusterFaces();
@@ -1941,19 +1945,44 @@ async function selfTest(){
           S.faces.threshold = keepT;
         }
 
-        /* ---- a face too small to describe is discarded ---- */
+        /* ---- a face too small to describe is discarded ----
+           The gate is in PIXELS, so the same photo read at 384px from a
+           thumbnail and at 1024px from the original gets the same answer about
+           whether there is enough of a face to describe. */
         {
-          const keepMin = S.faces.minRelSize;
-          S.faces.minRelSize = 0.1;
+          const keepMin = S.faces.minFacePx;
+          S.faces.minFacePx = 40;
           planted["tiny"] = [{ box:[0.5,0.5,0.02,0.02], score:0.99, vec: mkv(6, 0) }];
           IDX.records.set("tiny", { id:"tiny", name:"tiny.jpg", status:"ok", caption:"x" });
           const before = FACES.faces.size;
+          // 0.02 of 1000px = 20px: too few
           await detectFacesIn("tiny", { __id:"tiny", width:1000, height:800 });
-          eq("a face too small to describe is not stored", FACES.faces.size, before);
-          S.faces.minRelSize = 0.01;
-          await detectFacesIn("tiny", { __id:"tiny", width:1000, height:800 });
-          eq("but it is kept when the floor allows it", FACES.faces.size, before + 1);
-          S.faces.minRelSize = keepMin;
+          eq("a 20px face is not stored", FACES.faces.size, before);
+          // the same box on a 4000px image is 80px: enough
+          await detectFacesIn("tiny", { __id:"tiny", width:4000, height:3000 });
+          eq("the same box on a bigger image is kept", FACES.faces.size, before + 1);
+          const kept = [...FACES.faces.values()].find(f => f.photo_id === "tiny");
+          ok("and the face records how many pixels it had", kept && kept.px >= 40,
+             kept && String(kept.px));
+          S.faces.minFacePx = keepMin;
+        }
+
+        /* ---- detection must be serialised ----
+           Reads run in parallel because a share is latency-bound, but one Human
+           instance is not re-entrant, so detections must not overlap. */
+        {
+          let inFlight = 0, maxInFlight = 0;
+          const realEngine = FACE_ENGINE;
+          setFaceEngine(async bmp => {
+            inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+            await new Promise(r => setTimeout(r, 5));
+            inFlight--;
+            return planted[bmp.__id] || [];
+          }, FACE_ENGINE_ID);
+          await Promise.all(["p1","p2","p3","p5"].map(pid =>
+            detectFacesSerial(pid, { __id:pid, width:1000, height:800 })));
+          eq("detections never overlap", maxInFlight, 1);
+          FACE_ENGINE = realEngine;
         }
 
         /* ---- vectors from an older configuration must be flagged ----

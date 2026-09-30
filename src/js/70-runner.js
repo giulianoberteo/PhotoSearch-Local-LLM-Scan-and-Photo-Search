@@ -695,9 +695,29 @@ async function runFaceScan(files){
   updateProgress();
 
   const queue = files.slice();
-  let found = 0, looked = 0;
-  /* One at a time: the detector is the bottleneck and it already uses the GPU,
-     so overlapping copies fight each other rather than going faster. */
+  let found = 0, looked = 0, fromThumb = 0;
+
+  /* THE thing that decides whether this takes minutes or most of a day.
+     Detection costs 8-19 ms. Re-reading the originals costs 14.3 GB at the
+     measured 430 KB/s -- 9.7 hours -- for the same photos whose 384px
+     thumbnails are 214 MB, or 8 minutes. Read the thumbnail unless the user
+     has asked for the accuracy of the full-size original. */
+  async function imageFor(f){
+    if (S.faces.source !== "originals"){
+      try {
+        const dir = await thumbsDir();
+        const blob = await (await dir.getFileHandle(f.id + ".jpg")).getFile();
+        if (blob.size){ fromThumb++; return { blob, thumb: blob }; }
+      } catch {}          // no thumbnail for this one: fall back to the original
+    }
+    const file = await withRetry("read " + f.name, () => f.handle.getFile());
+    const img = await processImage(file, f.kind, { thumbOnly:false });
+    return { blob: img.big, thumb: img.thumb };
+  }
+
+  /* Reads overlap; detection does not (see detectFacesSerial). One stalled
+     photo must not wedge the run, so each gets its own deadline. */
+  const conc = Math.max(1, Math.min(8, S.faces.readConcurrency));
   async function loop(){
     for(;;){
       await waitIfPaused();
@@ -706,14 +726,15 @@ async function runFaceScan(files){
       if (!f) return;
       const t0 = performance.now();
       try {
-        const file = await withRetry("read " + f.name, () => f.handle.getFile());
-        const img = await processImage(file, f.kind, { thumbOnly:false });
-        const bmp = await createImageBitmap(img.big);
-        try {
-          const rows = await detectFacesIn(f.id, bmp);
-          found += rows.length;
-        } finally { bmp.close(); }
-        showCurrent(img.thumb, f.path);
+        await withDeadline("looking at " + f.name, ioDeadline(6, 60000), (async () => {
+          const got = await imageFor(f);
+          const bmp = await createImageBitmap(got.blob);
+          try {
+            const rows = await detectFacesSerial(f.id, bmp);
+            found += rows.length;
+          } finally { bmp.close(); }
+          showCurrent(got.thumb, f.path);
+        })());
         looked++;
         RUN.times.push((performance.now() - t0) / 1000);
       } catch (e){
@@ -727,7 +748,7 @@ async function runFaceScan(files){
       updateProgress();
     }
   }
-  try { await loop(); }
+  try { await Promise.all(Array.from({ length: conc }, loop)); }
   finally {
     RUN.active = false;
     releaseWakeLock();
@@ -735,5 +756,5 @@ async function runFaceScan(files){
     updateProgress();
     renderErrors();
   }
-  return { looked, found, failed: RUN.errorCount, stopped: RUN.stop };
+  return { looked, found, fromThumb, failed: RUN.errorCount, stopped: RUN.stop };
 }

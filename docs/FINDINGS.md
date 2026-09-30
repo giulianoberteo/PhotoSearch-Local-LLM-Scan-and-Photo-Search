@@ -310,7 +310,34 @@ about that person, and one of them poisons a whole group.
 
 ---
 
-## 11. Index size
+## 11. Cost the I/O, not the computation
+
+The face backfill was estimated at "~20 minutes for 6,635 photos" from a measurement of the
+detector: 8–19 ms per image, no degradation over hundreds of calls. That number was real
+and completely beside the point.
+
+| what is actually read | volume | at the measured 430 KB/s |
+|---|---:|---:|
+| the original photos | **14.3 GB** (2.2 MB average) | **9.7 hours** |
+| the 384px thumbnails already in the index | **214 MB** | **8 minutes** |
+
+The same photos, 69× less data. Detection was never the bottleneck; getting the pixels off
+the share was the entire job, and the first version read every original one at a time.
+
+Three corrections follow from this, and they generalise:
+
+- **Read what you already have.** Thumbnails are in the index, are the right shape for a
+  detector, and cost nothing to produce. They only lose faces that are small in the frame,
+  which is a trade worth offering rather than deciding silently.
+- **Overlap latency-bound reads.** A share answers one request at a time but happily
+  handles several in flight. Reads run five-wide; detection stays serial because one
+  TensorFlow instance is not re-entrant.
+- **Size a gate in the unit that matters.** "A face must be 5% of the frame" means 51 px on
+  an original and 19 px on a thumbnail. In pixels the question has one answer.
+
+---
+
+## 12. Index size
 
 Measured on real photos, then projected:
 

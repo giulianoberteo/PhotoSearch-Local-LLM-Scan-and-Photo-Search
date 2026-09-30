@@ -7,7 +7,7 @@ in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it 
 responses and an [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
 scratch folder, so your real photos and index are never touched.
 
-**408 assertions** covering:
+**410 assertions** covering:
 
 - pure logic — Easter/occasion dates, singularisation, validation caps, enum checks
 - `image_type` correction from filename, EXIF, dimensions and caption

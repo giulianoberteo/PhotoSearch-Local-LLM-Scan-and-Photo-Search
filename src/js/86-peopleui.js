@@ -199,6 +199,13 @@ function renderFaceStale(){
 }
 
 /* ---- actions ---- */
+$("#sFaceSrc").onchange = () => {
+  S.faces.source = $("#sFaceSrc").value;
+  saveSettings();
+  toast(S.faces.source === "thumbs"
+    ? "Reading thumbnails: much faster, and misses faces that are small in the frame."
+    : "Reading originals: finds smaller faces, but re-reads every photo in full.");
+};
 $("#sFaceTh").oninput = () => {
   S.faces.threshold = +$("#sFaceTh").value;
   $("#sFaceThVal").textContent = S.faces.threshold.toFixed(2);
@@ -240,10 +247,27 @@ $("#btnFaceScan").onclick = async () => {
     renderFaceStale(); renderPeople();
     return;
   }
+  /* The old estimate was 0.15s per photo -- the cost of DETECTION, which is
+     8-19ms, not of getting the pixels off the share. Reading is the whole job:
+     size it from the measured storage speed and the bytes actually involved. */
+  const thumbs = S.faces.source !== "originals";
+  const bytes = thumbs
+    ? p.files.length * 33 * 1024
+    : p.files.reduce((a, f) => a + (f.size || 2.2 * 1048576), 0);
+  const unit = storageUnitMs();
+  const perFile = unit != null ? unit / 1000 : 0.05;       // latency per open
+  const rate = 430 * 1024;                                  // measured on this share
+  const conc = Math.max(1, Math.min(8, S.faces.readConcurrency));
+  const secs = (bytes / rate + p.files.length * perFile) / conc + p.files.length * 0.02;
   if (!confirm("Look for faces in " + p.files.length + " photo"
-      + (p.files.length === 1 ? "" : "s") + "?\n\nThis re-reads the originals and "
-      + "costs no model time. Roughly "
-      + fmtDur(p.files.length * 0.15) + ".\n\nNothing is named automatically.")) return;
+      + (p.files.length === 1 ? "" : "s") + "?\n\n"
+      + (thumbs
+          ? "Reading the " + (bytes / 1048576).toFixed(0) + " MB of thumbnails already "
+            + "in the index, not the originals."
+          : "Re-reading " + (bytes / 1073741824).toFixed(1) + " GB of originals — accurate, "
+            + "but slow over a network share.")
+      + "\n\nRoughly " + fmtDur(secs) + ". No model time is used.\n\n"
+      + "Nothing is named automatically.")) return;
 
   try {
     const r = await runFaceScan(p.files);
@@ -256,6 +280,7 @@ $("#btnFaceScan").onclick = async () => {
     renderPeople();
     const bits = [r.looked + " looked at", r.found + " faces found",
       FACES.clusters.length + FACES.people.length + " groups"];
+    if (r.fromThumb) bits.push(r.fromThumb + " read from thumbnails");
     if (r.failed) bits.push(r.failed + " could not be read");
     if (r.stopped) bits.push("stopped early — press Find faces again to carry on");
     (r.failed || r.stopped ? st.warn : st.ok)(bits.join(", ") + ".");
@@ -306,6 +331,7 @@ async function onPeopleShown(){
     await loadFaces();
     if (FACES.faces.size && !FACES.people.length && !FACES.clusters.length)
       clusterFaces();
+    $("#sFaceSrc").value = S.faces.source;
     $("#sFaceTh").value = String(S.faces.threshold);
     $("#sFaceThVal").textContent = S.faces.threshold.toFixed(2);
     renderFaceStale();

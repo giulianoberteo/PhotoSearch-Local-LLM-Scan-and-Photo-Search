@@ -265,6 +265,14 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
         <button class="btn sec" id="btnRecluster">Re-group</button>
         <button class="btn sec" id="btnFaceWipe">Delete all face data</button>
         <label class="hint" style="display:flex;align-items:center;gap:7px;margin-left:6px">
+          Read from
+          <select id="sFaceSrc" style="background:var(--panel2);border:1px solid var(--line);
+            color:var(--text);border-radius:6px;padding:3px 7px;font-size:12px;font-family:inherit">
+            <option value="thumbs">Thumbnails — fast</option>
+            <option value="originals">Originals — accurate, slow</option>
+          </select>
+        </label>
+        <label class="hint" style="display:flex;align-items:center;gap:7px;margin-left:6px">
           Grouping strictness
           <input type="range" id="sFaceTh" min="0.50" max="0.95" step="0.01" value="0.75"
                  style="width:150px">
