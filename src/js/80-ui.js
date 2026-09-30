@@ -447,9 +447,28 @@ function updateProgress(){
   $("#progEta").textContent = (RUN.active && avg && left)
     ? "About " + fmtDur(left * avg / conc) + " remaining."
     : (RUN.active ? "Estimating…" : "");
+  /* A face run is started from the People tab, but every element above lives
+     in the Scan tab -- which is hidden at the time. Without this the run gave
+     no sign of life at all on the tab it was launched from, and looked like it
+     had done nothing. */
+  if (RUN.mode === "faces"){
+    const fb = $("#facesBar");
+    if (fb) fb.style.width = pct + "%";
+    const fs = $("#facesStats");
+    if (fs) fs.textContent = RUN.done.toLocaleString() + " / "
+      + RUN.total.toLocaleString() + "  (" + pct + "%)"
+      + (avg ? "   " + avg.toFixed(2) + " s/photo" : "")
+      + (RUN.errorCount ? "   " + RUN.errorCount + " unreadable" : "");
+    const fe = $("#facesEta");
+    if (fe) fe.textContent = (RUN.active && avg && left)
+      ? "About " + fmtDur(left * avg / conc) + " remaining."
+      : (RUN.active ? "Estimating…" : "Finished.");
+  }
 }
 let curUrl = null, curSeq = 0;
 function showCurrent(blob, name){
+  const fn = $("#facesNow");
+  if (fn && RUN.mode === "faces") fn.textContent = name || "";
   const my = ++curSeq;                       // concurrency-safe: last start wins
   const u = URL.createObjectURL(blob);
   if (my !== curSeq){ URL.revokeObjectURL(u); return; }

@@ -199,6 +199,18 @@ function renderFaceStale(){
 }
 
 /* ---- actions ---- */
+$("#btnFacesPause").onclick = () => {
+  RUN.paused = !RUN.paused;
+  $("#btnFacesPause").textContent = RUN.paused ? "Resume" : "Pause";
+  $("#btnPause").textContent = $("#btnFacesPause").textContent;
+  if (RUN.paused) releaseWakeLock(); else acquireWakeLock();
+};
+$("#btnFacesStop").onclick = () => {
+  RUN.stop = true; RUN.paused = false;
+  if (RUN.abort) RUN.abort.abort();
+  toast("Stopping — what has been found is kept, and it resumes from here.");
+};
+
 $("#sFaceSrc").onchange = () => {
   S.faces.source = $("#sFaceSrc").value;
   saveSettings();
@@ -241,8 +253,10 @@ $("#btnFaceScan").onclick = async () => {
   } catch (e){ st.err(errText(e)); toast(errText(e)); return; }
 
   if (!p.files.length){
-    st.ok("All " + p.already + " photos have been looked at already. "
-      + FACES.faces.size + " faces found.");
+    st.ok("All " + p.already.toLocaleString() + " of " + p.total.toLocaleString()
+      + " photos have been looked at already — " + FACES.faces.size + " faces found."
+      + (p.notInFolder ? "  " + p.notInFolder + " are not in the folder you have open; "
+         + "switch \u2018Read from\u2019 to Thumbnails to cover the whole index." : ""));
     clusterFaces(); await savePeople(); rebuildDerived();
     renderFaceStale(); renderPeople();
     return;
@@ -270,6 +284,8 @@ $("#btnFaceScan").onclick = async () => {
       + "Nothing is named automatically.")) return;
 
   try {
+    await st.note("Looking at " + p.files.length.toLocaleString() + " of "
+      + p.total.toLocaleString() + " photos in " + (p.scope || "the index") + "…");
     const r = await runFaceScan(p.files);
     if (!r) return;
     await st.note("Grouping " + FACES.faces.size + " faces…");

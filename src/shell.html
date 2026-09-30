@@ -99,6 +99,8 @@ td.mono{font-family:var(--mono);font-size:12px}
 .grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:7px;border:1px solid var(--line);display:block;background:var(--panel2)}
 .grid figcaption{font-size:11px;color:var(--dim);margin-top:3px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
+#facesBar{height:100%;width:0;background:var(--accent);border-radius:inherit;
+  transition:width .2s}
 .tlbar{position:sticky;top:0;z-index:6;background:var(--panel);padding:6px 0 8px;
   border-bottom:1px solid var(--line);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .tlbar button{background:var(--panel2);border:1px solid var(--line);color:var(--text);
@@ -280,6 +282,17 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
         </label>
       </div>
       <div id="faceStale" class="note" hidden></div>
+      <div id="facesProg" hidden style="margin-top:12px;border:1px solid var(--line);
+        border-radius:9px;padding:12px;background:var(--panel2)">
+        <div class="bar"><div id="facesBar"></div></div>
+        <div id="facesStats" class="mono" style="margin-top:9px;font-size:13px"></div>
+        <div id="facesEta" class="hint"></div>
+        <div id="facesNow" class="hint" style="word-break:break-all"></div>
+        <div class="row" style="margin-top:9px">
+          <button class="btn sec" id="btnFacesPause">Pause</button>
+          <button class="btn sec" id="btnFacesStop">Stop</button>
+        </div>
+      </div>
       <div class="hint" id="faceNote">Faces are grouped by how alike they look.
         Nothing is named until you name it.</div>
       <div id="faceOut"></div>

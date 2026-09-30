@@ -99,6 +99,8 @@ td.mono{font-family:var(--mono);font-size:12px}
 .grid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:7px;border:1px solid var(--line);display:block;background:var(--panel2)}
 .grid figcaption{font-size:11px;color:var(--dim);margin-top:3px;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
+#facesBar{height:100%;width:0;background:var(--accent);border-radius:inherit;
+  transition:width .2s}
 .tlbar{position:sticky;top:0;z-index:6;background:var(--panel);padding:6px 0 8px;
   border-bottom:1px solid var(--line);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .tlbar button{background:var(--panel2);border:1px solid var(--line);color:var(--text);
@@ -280,6 +282,17 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
         </label>
       </div>
       <div id="faceStale" class="note" hidden></div>
+      <div id="facesProg" hidden style="margin-top:12px;border:1px solid var(--line);
+        border-radius:9px;padding:12px;background:var(--panel2)">
+        <div class="bar"><div id="facesBar"></div></div>
+        <div id="facesStats" class="mono" style="margin-top:9px;font-size:13px"></div>
+        <div id="facesEta" class="hint"></div>
+        <div id="facesNow" class="hint" style="word-break:break-all"></div>
+        <div class="row" style="margin-top:9px">
+          <button class="btn sec" id="btnFacesPause">Pause</button>
+          <button class="btn sec" id="btnFacesStop">Stop</button>
+        </div>
+      </div>
       <div class="hint" id="faceNote">Faces are grouped by how alike they look.
         Nothing is named until you name it.</div>
       <div id="faceOut"></div>
@@ -4193,6 +4206,7 @@ async function runFaceScan(files){
   await acquireWakeLock();
   scanUi(true);
   $("#progCard").hidden = false;
+  $("#facesProg").hidden = false;          // the tab this was actually started from
   updateProgress();
 
   const queue = files.slice();
@@ -4259,6 +4273,7 @@ async function runFaceScan(files){
     scanUi(false);
     updateProgress();
     renderErrors();
+    $("#facesProg").hidden = true;
   }
   return { looked, found, fromThumb, failed: RUN.errorCount, stopped: RUN.stop };
 }
@@ -4713,9 +4728,28 @@ function updateProgress(){
   $("#progEta").textContent = (RUN.active && avg && left)
     ? "About " + fmtDur(left * avg / conc) + " remaining."
     : (RUN.active ? "Estimating…" : "");
+  /* A face run is started from the People tab, but every element above lives
+     in the Scan tab -- which is hidden at the time. Without this the run gave
+     no sign of life at all on the tab it was launched from, and looked like it
+     had done nothing. */
+  if (RUN.mode === "faces"){
+    const fb = $("#facesBar");
+    if (fb) fb.style.width = pct + "%";
+    const fs = $("#facesStats");
+    if (fs) fs.textContent = RUN.done.toLocaleString() + " / "
+      + RUN.total.toLocaleString() + "  (" + pct + "%)"
+      + (avg ? "   " + avg.toFixed(2) + " s/photo" : "")
+      + (RUN.errorCount ? "   " + RUN.errorCount + " unreadable" : "");
+    const fe = $("#facesEta");
+    if (fe) fe.textContent = (RUN.active && avg && left)
+      ? "About " + fmtDur(left * avg / conc) + " remaining."
+      : (RUN.active ? "Estimating…" : "Finished.");
+  }
 }
 let curUrl = null, curSeq = 0;
 function showCurrent(blob, name){
+  const fn = $("#facesNow");
+  if (fn && RUN.mode === "faces") fn.textContent = name || "";
   const my = ++curSeq;                       // concurrency-safe: last start wins
   const u = URL.createObjectURL(blob);
   if (my !== curSeq){ URL.revokeObjectURL(u); return; }
@@ -6490,6 +6524,18 @@ function renderFaceStale(){
 }
 
 /* ---- actions ---- */
+$("#btnFacesPause").onclick = () => {
+  RUN.paused = !RUN.paused;
+  $("#btnFacesPause").textContent = RUN.paused ? "Resume" : "Pause";
+  $("#btnPause").textContent = $("#btnFacesPause").textContent;
+  if (RUN.paused) releaseWakeLock(); else acquireWakeLock();
+};
+$("#btnFacesStop").onclick = () => {
+  RUN.stop = true; RUN.paused = false;
+  if (RUN.abort) RUN.abort.abort();
+  toast("Stopping — what has been found is kept, and it resumes from here.");
+};
+
 $("#sFaceSrc").onchange = () => {
   S.faces.source = $("#sFaceSrc").value;
   saveSettings();
@@ -6532,8 +6578,10 @@ $("#btnFaceScan").onclick = async () => {
   } catch (e){ st.err(errText(e)); toast(errText(e)); return; }
 
   if (!p.files.length){
-    st.ok("All " + p.already + " photos have been looked at already. "
-      + FACES.faces.size + " faces found.");
+    st.ok("All " + p.already.toLocaleString() + " of " + p.total.toLocaleString()
+      + " photos have been looked at already — " + FACES.faces.size + " faces found."
+      + (p.notInFolder ? "  " + p.notInFolder + " are not in the folder you have open; "
+         + "switch \u2018Read from\u2019 to Thumbnails to cover the whole index." : ""));
     clusterFaces(); await savePeople(); rebuildDerived();
     renderFaceStale(); renderPeople();
     return;
@@ -6561,6 +6609,8 @@ $("#btnFaceScan").onclick = async () => {
       + "Nothing is named automatically.")) return;
 
   try {
+    await st.note("Looking at " + p.files.length.toLocaleString() + " of "
+      + p.total.toLocaleString() + " photos in " + (p.scope || "the index") + "…");
     const r = await runFaceScan(p.files);
     if (!r) return;
     await st.note("Grouping " + FACES.faces.size + " faces…");
@@ -9045,6 +9095,33 @@ async function selfTest(){
         eq("and every face reloads with them", FACES.vec.ids.length, vecsBefore);
         ok("names still map to photos after a reload",
            faceNamesFor("p1").includes("Ben"), faceNamesFor("p1").join(","));
+
+        /* ---- a face run must be visible on the tab it was started from ----
+           Every progress element lives in the Scan tab, which is hidden while
+           the People tab is open. The run reported into it anyway, so a pass
+           over thousands of photos showed no sign of life at all and looked
+           like it had done nothing. */
+        {
+          const keepMode = RUN.mode, keepDone = RUN.done, keepTotal = RUN.total;
+          const keepActive = RUN.active, keepTimes = RUN.times;
+          RUN.mode = "faces"; RUN.active = true;
+          RUN.done = 1234; RUN.total = 6236; RUN.times = [0.4, 0.4, 0.4];
+          updateProgress();
+          const stats = $("#facesStats").textContent;
+          ok("the People tab shows how far along it is",
+             /1,234/.test(stats) && /6,236/.test(stats), stats);
+          ok("and how fast it is going", /s\/photo/.test(stats), stats);
+          ok("and how long is left", /remaining/.test($("#facesEta").textContent),
+             $("#facesEta").textContent);
+          ok("the bar moves", parseFloat($("#facesBar").style.width) > 0,
+             $("#facesBar").style.width);
+          showCurrent(new Blob(["x"]), "Sicily/IMG_0042.jpg");
+          ok("and which photo it is on",
+             /IMG_0042/.test($("#facesNow").textContent), $("#facesNow").textContent);
+          ok("it can be stopped from there", !!$("#btnFacesStop"));
+          RUN.mode = keepMode; RUN.done = keepDone; RUN.total = keepTotal;
+          RUN.active = keepActive; RUN.times = keepTimes;
+        }
 
         /* ---- the whole index is covered, not just the open folder ----
            Thumbnails are keyed by record id, so reading them needs no photo

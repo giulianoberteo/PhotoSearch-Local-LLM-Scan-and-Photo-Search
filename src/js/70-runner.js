@@ -706,6 +706,7 @@ async function runFaceScan(files){
   await acquireWakeLock();
   scanUi(true);
   $("#progCard").hidden = false;
+  $("#facesProg").hidden = false;          // the tab this was actually started from
   updateProgress();
 
   const queue = files.slice();
@@ -772,6 +773,7 @@ async function runFaceScan(files){
     scanUi(false);
     updateProgress();
     renderErrors();
+    $("#facesProg").hidden = true;
   }
   return { looked, found, fromThumb, failed: RUN.errorCount, stopped: RUN.stop };
 }

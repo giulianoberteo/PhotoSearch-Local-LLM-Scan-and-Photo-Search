@@ -232,6 +232,20 @@ index** to a local folder in Settings and re-scan; the photos stay where they ar
 | **Back up after every scan** | On by default. Keeps the last 3. |
 | **Rebuild thumbnails** (Scan tab) | Remakes missing thumbnails from the originals. No model time. |
 
+### Faces
+
+**People tab → Find faces.** With **Read from** on *Thumbnails* it covers the **whole
+index**, whatever folder happens to be connected — thumbnails are keyed by photo, not by
+folder. *Originals* is more accurate but can only reach the folder you have open, and on
+this NAS means re-reading 14.3 GB rather than 214 MB.
+
+It is resumable: photos already looked at are skipped, so stopping and pressing it again
+carries on. Progress, speed, time remaining and Pause/Stop are shown on the People tab
+itself while it runs.
+
+Names you assign are searchable immediately — in the search box, and in chat, where
+`list_people` tells the model which names exist.
+
 ### Picking a different photo folder
 
 Choosing another folder to scan does **not** move or replace your index. The two settings

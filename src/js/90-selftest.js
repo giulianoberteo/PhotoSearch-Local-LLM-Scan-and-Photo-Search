@@ -2111,6 +2111,33 @@ async function selfTest(){
         ok("names still map to photos after a reload",
            faceNamesFor("p1").includes("Ben"), faceNamesFor("p1").join(","));
 
+        /* ---- a face run must be visible on the tab it was started from ----
+           Every progress element lives in the Scan tab, which is hidden while
+           the People tab is open. The run reported into it anyway, so a pass
+           over thousands of photos showed no sign of life at all and looked
+           like it had done nothing. */
+        {
+          const keepMode = RUN.mode, keepDone = RUN.done, keepTotal = RUN.total;
+          const keepActive = RUN.active, keepTimes = RUN.times;
+          RUN.mode = "faces"; RUN.active = true;
+          RUN.done = 1234; RUN.total = 6236; RUN.times = [0.4, 0.4, 0.4];
+          updateProgress();
+          const stats = $("#facesStats").textContent;
+          ok("the People tab shows how far along it is",
+             /1,234/.test(stats) && /6,236/.test(stats), stats);
+          ok("and how fast it is going", /s\/photo/.test(stats), stats);
+          ok("and how long is left", /remaining/.test($("#facesEta").textContent),
+             $("#facesEta").textContent);
+          ok("the bar moves", parseFloat($("#facesBar").style.width) > 0,
+             $("#facesBar").style.width);
+          showCurrent(new Blob(["x"]), "Sicily/IMG_0042.jpg");
+          ok("and which photo it is on",
+             /IMG_0042/.test($("#facesNow").textContent), $("#facesNow").textContent);
+          ok("it can be stopped from there", !!$("#btnFacesStop"));
+          RUN.mode = keepMode; RUN.done = keepDone; RUN.total = keepTotal;
+          RUN.active = keepActive; RUN.times = keepTimes;
+        }
+
         /* ---- the whole index is covered, not just the open folder ----
            Thumbnails are keyed by record id, so reading them needs no photo
            folder. Planning from the walked folder meant a 6,635-photo library
