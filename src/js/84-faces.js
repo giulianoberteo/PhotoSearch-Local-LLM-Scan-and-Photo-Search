@@ -200,6 +200,7 @@ async function loadFaces(){
   await loadFaceVectors();
   await loadPeople();
   FACES.loaded = true;
+  faceNamesLoaded = true;
   return FACES.faces.size;
 }
 
@@ -323,6 +324,35 @@ function rebuildFaceNames(){
   FACES.namesByPhoto = m;
   return m;
 }
+/* Names must work everywhere -- chat, the search box, the timeline -- not only
+   after the People tab has been opened. This reads the two SMALL files and
+   deliberately not the vectors, which can be tens of megabytes and are needed
+   only for grouping. */
+let faceNamesLoaded = false;
+async function ensureFaceNames(){
+  if (faceNamesLoaded || FACES.loaded) return FACES.namesByPhoto;
+  faceNamesLoaded = true;
+  try {
+    const dir = await facesDir();
+    const text = await readTextIfAny(dir, "faces.jsonl");
+    if (text){
+      FACES.faces = new Map();
+      for (const ln of text.split("\n")){
+        if (!ln.trim()) continue;
+        try { const f = JSON.parse(ln); if (f && f.id && !f.removed) FACES.faces.set(f.id, f); }
+        catch {}
+      }
+      FACES.byPhoto = new Map();
+      for (const f of FACES.faces.values()){
+        if (!FACES.byPhoto.has(f.photo_id)) FACES.byPhoto.set(f.photo_id, []);
+        FACES.byPhoto.get(f.photo_id).push(f.id);
+      }
+    }
+    await loadPeople();
+  } catch {}
+  return FACES.namesByPhoto;
+}
+
 /* Faces described by a different engine configuration cannot be compared with
    the current ones, so say so rather than clustering nonsense together. */
 function staleFaceEngines(){
@@ -509,6 +539,7 @@ async function deleteAllFaceData(){
   FACES.vec = { dim:0, ids:[], rows:null, index:new Map() };
   FACES.people = []; FACES.clusters = []; FACES.clusteredAt = null;
   FACES.loaded = false;
+  faceNamesLoaded = false;
   return true;
 }
 

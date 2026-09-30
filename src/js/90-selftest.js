@@ -1764,7 +1764,11 @@ async function selfTest(){
         moved:[], missing:[], unreadable:[], counts:{}, total:0, scope:"" });
       let tickType = null, calls = 0;
       buildPlan = async (onTick) => { calls++; tickType = typeof onTick; return emptyPlan(); };
+      const keepSrc = S.faces.source;
       try {
+        /* Only the originals path walks a folder; thumbnails are keyed by
+           record id and cover the index without one. */
+        S.faces.source = "originals";
         S.plan = null; S.planStale = true;
         await planFaceScan(() => {});
         eq("the walk is given a progress callback", tickType, "function");
@@ -1782,6 +1786,7 @@ async function selfTest(){
         eq("but a stale plan is not trusted", calls, 1);
       } finally {
         buildPlan = realPlan; S.plan = keepPlan; S.planStale = keepStale;
+        S.faces.source = keepSrc;
       }
     }
 
@@ -1887,6 +1892,34 @@ async function selfTest(){
         ok("the name is searchable as ordinary text too",
            recordTerms(IDX.records.get("p1")).includes("anna"),
            recordTerms(IDX.records.get("p1")).join(" "));
+
+        /* ---- chat must be able to find a named person ----
+           The person filter existed in searchPhotos but was never exposed as a
+           tool parameter, so the model had no way to use a name at all: asking
+           for photos of someone returned whatever the words happened to match. */
+        {
+          const tools = JSON.stringify(TOOLS);
+          ok("the search tool exposes a person filter", /"person"/.test(tools));
+          ok("and a way to discover which names exist",
+             /list_people/.test(tools));
+
+          const listed = await runTool("list_people", {});
+          eq("list_people reports the named person", listed.count, 1);
+          eq("with their name", listed.people[0].name, "Anna");
+          eq("and how many photos they are in", listed.people[0].photos, 2);
+
+          const viaTool = await runTool("search_photos", { query:"", person:["Anna"] });
+          eq("searching by person through the tool works", viaTool.count, 2);
+          const viaFilter = await runTool("filter_photos", { person:["Anna"] });
+          eq("and through the metadata filter too", viaFilter.count, 2);
+          const none = await runTool("filter_photos", { person:["Nobody"] });
+          eq("an unknown name returns nothing", none.count, 0);
+
+          const detail = await runTool("get_photo", { photo_id:"p1" });
+          ok("a photo's details say who is in it",
+             (detail.named_people || []).includes("Anna"),
+             JSON.stringify(detail.named_people));
+        }
 
         /* ---- re-grouping must never destroy a name ---- */
         clusterFaces();
@@ -2077,6 +2110,28 @@ async function selfTest(){
         eq("and every face reloads with them", FACES.vec.ids.length, vecsBefore);
         ok("names still map to photos after a reload",
            faceNamesFor("p1").includes("Ben"), faceNamesFor("p1").join(","));
+
+        /* ---- the whole index is covered, not just the open folder ----
+           Thumbnails are keyed by record id, so reading them needs no photo
+           folder. Planning from the walked folder meant a 6,635-photo library
+           got faces for only the few hundred in whatever folder was connected. */
+        {
+          const keepSource = S.faces.source;
+          S.faces.source = "thumbs";
+          await deleteAllFaceData();
+          await loadFaces();
+          const pl = await planFaceScan();
+          const inIndex = [...IDX.records.values()]
+            .filter(r => !r.deleted && r.status !== "error" && !r.probe).length;
+          eq("planning covers every photo in the index", pl.files.length, inIndex);
+          eq("and says that is what it did", pl.scope, "the whole index");
+          /* The records under test are synthetic and have no file on disk at
+             all, so a folder walk could not have produced any of them. */
+          ok("without needing a file handle",
+             pl.files.every(f => f.handle === null));
+          ok("which a folder walk could not have found", inIndex > 0);
+          S.faces.source = keepSource;
+        }
 
         /* ---- deleting everything ---- */
         await deleteAllFaceData();

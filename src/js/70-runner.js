@@ -656,16 +656,30 @@ async function planFaceScan(onPhase, signal){
   const done = new Set();
   for (const f of FACES.faces.values()) done.add(f.photo_id);
 
-  /* Reuse a plan that is already current. Walking and stat-ing the library over
-     a share is the longest step here by far, and doing it a second time when
-     the Scan tab just did it is pure waiting. */
+  const everything = [...IDX.records.values()]
+    .filter(r => !r.deleted && r.status !== "error" && !r.probe);
+  const outstanding = everything.filter(r => !done.has(r.id));
+
+  /* THUMBNAILS NEED NO PHOTO FOLDER. They are keyed by record id and live in
+     .photoindex/thumbs/, so this covers the ENTIRE index rather than whatever
+     folder happens to be open. Walking the picked folder instead meant a
+     library of 6,635 photos got faces for only the 400 in the folder currently
+     connected -- the rest were simply never looked at. */
+  if (S.faces.source !== "originals"){
+    await say("Reading the index — " + outstanding.length + " photos to look at…");
+    return { files: outstanding.map(r => ({ id:r.id, name:r.name || r.id,
+               path:r.path || r.name || r.id, kind:r.kind, size:r.size, handle:null })),
+             already: done.size, total: everything.length,
+             faces: FACES.faces.size, people: FACES.people.length,
+             scope: "the whole index" };
+  }
+
+  /* Originals need file handles, so the folder has to be walked. Only photos in
+     the folder that is open can be done this way. */
   let plan = (S.plan && !S.planStale && !S.plan.folderLooksEmpty) ? S.plan : null;
   if (plan) await say("Using the current plan (" + plan.total + " photos)…");
   else {
-    await say("Finding the originals — this walks the whole folder…");
-    /* Pass the progress through. Without it this step says nothing at all for
-       however many minutes the walk takes, which is indistinguishable from
-       being stuck -- and on a share it IS minutes. */
+    await say("Finding the originals — this walks the open folder…");
     plan = await buildPlan(async m => { await say(m); }, signal);
   }
   const files = [];
@@ -675,10 +689,10 @@ async function planFaceScan(onPhase, signal){
 
   /* Photos already looked at are not looked at again, so this is resumable:
      stop it half way and the next run picks up where it left off. */
-  const total = [...IDX.records.values()]
-    .filter(r => !r.deleted && r.status !== "error").length;
-  return { files, already: done.size, total,
-           faces: FACES.faces.size, people: FACES.people.length };
+  return { files, already: done.size, total: everything.length,
+           faces: FACES.faces.size, people: FACES.people.length,
+           scope: "the folder you have open",
+           notInFolder: outstanding.length - files.length };
 }
 
 async function runFaceScan(files){
@@ -710,6 +724,9 @@ async function runFaceScan(files){
         if (blob.size){ fromThumb++; return { blob, thumb: blob }; }
       } catch {}          // no thumbnail for this one: fall back to the original
     }
+    if (!f.handle)
+      throw new Error("no thumbnail, and the original is not in the folder you "
+        + "have open — open that folder, or run a scan to build its thumbnail");
     const file = await withRetry("read " + f.name, () => f.handle.getFile());
     const img = await processImage(file, f.kind, { thumbOnly:false });
     return { blob: img.big, thumb: img.thumb };

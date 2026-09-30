@@ -19,6 +19,9 @@ const TOOLS = [
         description:"Objects or activities that must ALL be present." },
       image_type:{ type:"string", enum:TPL.enums.image_type },
       occasion:{ type:"string", description:"e.g. easter, christmas, halloween." },
+      person:{ type:"array", items:{type:"string"},
+        description:"Names of people who must ALL appear, as named in the People tab. "
+          + "Call list_people first to see which names exist." },
       limit:{ type:"integer", description:"Max results, default 12." } },
       required:["query"] } } },
   { type:"function", function:{ name:"filter_photos",
@@ -27,8 +30,14 @@ const TOOLS = [
       date_from:{type:"string"}, date_to:{type:"string"}, place:{type:"string"},
       image_type:{ type:"string", enum:TPL.enums.image_type },
       occasion:{type:"string"}, entities:{ type:"array", items:{type:"string"} },
+      person:{ type:"array", items:{type:"string"} },
       text:{type:"string"}, has_text:{type:"boolean"},
       limit:{type:"integer"} }, required:[] } } },
+  { type:"function", function:{ name:"list_people",
+    description:"The names assigned to face groups in the People tab, with how many photos "
+      + "each appears in. Use this whenever the user names a person, to check the spelling "
+      + "before filtering. Returns nothing if no one has been named yet.",
+    parameters:{ type:"object", properties:{}, required:[] } } },
   { type:"function", function:{ name:"find_similar",
     description:"Photos that look like the given one.",
     parameters:{ type:"object", properties:{ photo_id:{type:"string"},
@@ -59,6 +68,10 @@ const TOOLS = [
 
 async function runTool(name, args){
   args = args || {};
+  /* Names come from the People tab but must work from anywhere, so make sure
+     they are loaded before any tool that can use them runs. */
+  if (/^(search_photos|filter_photos|list_people|get_photo)$/.test(name))
+    await ensureFaceNames();
   switch (name){
     case "search_photos": {
       const r = await searchPhotos({ ...args, signal: CHAT.abort && CHAT.abort.signal });
@@ -69,6 +82,23 @@ async function runTool(name, args){
       const r = await searchPhotos({ ...args, query:"" });
       return { how:r.used, count:r.results.length,
         results:r.results.map(x => compact(x.rec, null)) };
+    }
+    case "list_people": {
+      const out = [];
+      for (const p of FACES.people){
+        if (!p.name) continue;
+        const ids = new Set();
+        for (const fid of p.face_ids){
+          const f = FACES.faces.get(fid);
+          if (f) ids.add(f.photo_id);
+        }
+        out.push({ name:p.name, photos:ids.size });
+      }
+      out.sort((a,b) => b.photos - a.photos);
+      return out.length ? { count:out.length, people:out }
+        : { count:0, people:[],
+            note:"No one has been named yet. Faces are grouped in the People tab and "
+               + "the user assigns the names." };
     }
     case "find_similar": {
       const list = findSimilar(args.photo_id, Math.min(40, args.limit || 8));
@@ -82,6 +112,7 @@ async function runTool(name, args){
         when:r.when_phrase, place:r.place, camera:r.camera, type:r.image_type,
         scene:r.scene_type, setting:r.setting, caption:r.caption, description:r.description,
         objects:r.objects, activities:r.activities, people:r.people,
+        named_people: faceNamesFor(r.id),
         text_in_image:r.text_chars ? textOf(r) : null,
         text_chars:r.text_chars || 0, text_source:r.text_source,
         colors:r.dominant_colors, mood:r.mood };

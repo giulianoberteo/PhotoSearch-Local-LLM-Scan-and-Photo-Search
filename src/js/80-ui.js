@@ -285,6 +285,7 @@ async function refreshPlan(){
     }
     rebuildDerived();
     S.planStale = false;
+    await ensureFaceNames();        // so names are searchable without opening People
     st.ok(p.total + " images · " + IDX.records.size + " records");
     /* This used to say "everything will look new -- use a separate index per
        library", which was true only before photos were matched by content.

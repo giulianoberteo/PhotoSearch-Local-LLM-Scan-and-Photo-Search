@@ -4143,16 +4143,30 @@ async function planFaceScan(onPhase, signal){
   const done = new Set();
   for (const f of FACES.faces.values()) done.add(f.photo_id);
 
-  /* Reuse a plan that is already current. Walking and stat-ing the library over
-     a share is the longest step here by far, and doing it a second time when
-     the Scan tab just did it is pure waiting. */
+  const everything = [...IDX.records.values()]
+    .filter(r => !r.deleted && r.status !== "error" && !r.probe);
+  const outstanding = everything.filter(r => !done.has(r.id));
+
+  /* THUMBNAILS NEED NO PHOTO FOLDER. They are keyed by record id and live in
+     .photoindex/thumbs/, so this covers the ENTIRE index rather than whatever
+     folder happens to be open. Walking the picked folder instead meant a
+     library of 6,635 photos got faces for only the 400 in the folder currently
+     connected -- the rest were simply never looked at. */
+  if (S.faces.source !== "originals"){
+    await say("Reading the index — " + outstanding.length + " photos to look at…");
+    return { files: outstanding.map(r => ({ id:r.id, name:r.name || r.id,
+               path:r.path || r.name || r.id, kind:r.kind, size:r.size, handle:null })),
+             already: done.size, total: everything.length,
+             faces: FACES.faces.size, people: FACES.people.length,
+             scope: "the whole index" };
+  }
+
+  /* Originals need file handles, so the folder has to be walked. Only photos in
+     the folder that is open can be done this way. */
   let plan = (S.plan && !S.planStale && !S.plan.folderLooksEmpty) ? S.plan : null;
   if (plan) await say("Using the current plan (" + plan.total + " photos)…");
   else {
-    await say("Finding the originals — this walks the whole folder…");
-    /* Pass the progress through. Without it this step says nothing at all for
-       however many minutes the walk takes, which is indistinguishable from
-       being stuck -- and on a share it IS minutes. */
+    await say("Finding the originals — this walks the open folder…");
     plan = await buildPlan(async m => { await say(m); }, signal);
   }
   const files = [];
@@ -4162,10 +4176,10 @@ async function planFaceScan(onPhase, signal){
 
   /* Photos already looked at are not looked at again, so this is resumable:
      stop it half way and the next run picks up where it left off. */
-  const total = [...IDX.records.values()]
-    .filter(r => !r.deleted && r.status !== "error").length;
-  return { files, already: done.size, total,
-           faces: FACES.faces.size, people: FACES.people.length };
+  return { files, already: done.size, total: everything.length,
+           faces: FACES.faces.size, people: FACES.people.length,
+           scope: "the folder you have open",
+           notInFolder: outstanding.length - files.length };
 }
 
 async function runFaceScan(files){
@@ -4197,6 +4211,9 @@ async function runFaceScan(files){
         if (blob.size){ fromThumb++; return { blob, thumb: blob }; }
       } catch {}          // no thumbnail for this one: fall back to the original
     }
+    if (!f.handle)
+      throw new Error("no thumbnail, and the original is not in the folder you "
+        + "have open — open that folder, or run a scan to build its thumbnail");
     const file = await withRetry("read " + f.name, () => f.handle.getFile());
     const img = await processImage(file, f.kind, { thumbOnly:false });
     return { blob: img.big, thumb: img.thumb };
@@ -4534,6 +4551,7 @@ async function refreshPlan(){
     }
     rebuildDerived();
     S.planStale = false;
+    await ensureFaceNames();        // so names are searchable without opening People
     st.ok(p.total + " images · " + IDX.records.size + " records");
     /* This used to say "everything will look new -- use a separate index per
        library", which was true only before photos were matched by content.
@@ -5069,6 +5087,9 @@ const TOOLS = [
         description:"Objects or activities that must ALL be present." },
       image_type:{ type:"string", enum:TPL.enums.image_type },
       occasion:{ type:"string", description:"e.g. easter, christmas, halloween." },
+      person:{ type:"array", items:{type:"string"},
+        description:"Names of people who must ALL appear, as named in the People tab. "
+          + "Call list_people first to see which names exist." },
       limit:{ type:"integer", description:"Max results, default 12." } },
       required:["query"] } } },
   { type:"function", function:{ name:"filter_photos",
@@ -5077,8 +5098,14 @@ const TOOLS = [
       date_from:{type:"string"}, date_to:{type:"string"}, place:{type:"string"},
       image_type:{ type:"string", enum:TPL.enums.image_type },
       occasion:{type:"string"}, entities:{ type:"array", items:{type:"string"} },
+      person:{ type:"array", items:{type:"string"} },
       text:{type:"string"}, has_text:{type:"boolean"},
       limit:{type:"integer"} }, required:[] } } },
+  { type:"function", function:{ name:"list_people",
+    description:"The names assigned to face groups in the People tab, with how many photos "
+      + "each appears in. Use this whenever the user names a person, to check the spelling "
+      + "before filtering. Returns nothing if no one has been named yet.",
+    parameters:{ type:"object", properties:{}, required:[] } } },
   { type:"function", function:{ name:"find_similar",
     description:"Photos that look like the given one.",
     parameters:{ type:"object", properties:{ photo_id:{type:"string"},
@@ -5109,6 +5136,10 @@ const TOOLS = [
 
 async function runTool(name, args){
   args = args || {};
+  /* Names come from the People tab but must work from anywhere, so make sure
+     they are loaded before any tool that can use them runs. */
+  if (/^(search_photos|filter_photos|list_people|get_photo)$/.test(name))
+    await ensureFaceNames();
   switch (name){
     case "search_photos": {
       const r = await searchPhotos({ ...args, signal: CHAT.abort && CHAT.abort.signal });
@@ -5119,6 +5150,23 @@ async function runTool(name, args){
       const r = await searchPhotos({ ...args, query:"" });
       return { how:r.used, count:r.results.length,
         results:r.results.map(x => compact(x.rec, null)) };
+    }
+    case "list_people": {
+      const out = [];
+      for (const p of FACES.people){
+        if (!p.name) continue;
+        const ids = new Set();
+        for (const fid of p.face_ids){
+          const f = FACES.faces.get(fid);
+          if (f) ids.add(f.photo_id);
+        }
+        out.push({ name:p.name, photos:ids.size });
+      }
+      out.sort((a,b) => b.photos - a.photos);
+      return out.length ? { count:out.length, people:out }
+        : { count:0, people:[],
+            note:"No one has been named yet. Faces are grouped in the People tab and "
+               + "the user assigns the names." };
     }
     case "find_similar": {
       const list = findSimilar(args.photo_id, Math.min(40, args.limit || 8));
@@ -5132,6 +5180,7 @@ async function runTool(name, args){
         when:r.when_phrase, place:r.place, camera:r.camera, type:r.image_type,
         scene:r.scene_type, setting:r.setting, caption:r.caption, description:r.description,
         objects:r.objects, activities:r.activities, people:r.people,
+        named_people: faceNamesFor(r.id),
         text_in_image:r.text_chars ? textOf(r) : null,
         text_chars:r.text_chars || 0, text_source:r.text_source,
         colors:r.dominant_colors, mood:r.mood };
@@ -5847,6 +5896,7 @@ async function loadFaces(){
   await loadFaceVectors();
   await loadPeople();
   FACES.loaded = true;
+  faceNamesLoaded = true;
   return FACES.faces.size;
 }
 
@@ -5970,6 +6020,35 @@ function rebuildFaceNames(){
   FACES.namesByPhoto = m;
   return m;
 }
+/* Names must work everywhere -- chat, the search box, the timeline -- not only
+   after the People tab has been opened. This reads the two SMALL files and
+   deliberately not the vectors, which can be tens of megabytes and are needed
+   only for grouping. */
+let faceNamesLoaded = false;
+async function ensureFaceNames(){
+  if (faceNamesLoaded || FACES.loaded) return FACES.namesByPhoto;
+  faceNamesLoaded = true;
+  try {
+    const dir = await facesDir();
+    const text = await readTextIfAny(dir, "faces.jsonl");
+    if (text){
+      FACES.faces = new Map();
+      for (const ln of text.split("\n")){
+        if (!ln.trim()) continue;
+        try { const f = JSON.parse(ln); if (f && f.id && !f.removed) FACES.faces.set(f.id, f); }
+        catch {}
+      }
+      FACES.byPhoto = new Map();
+      for (const f of FACES.faces.values()){
+        if (!FACES.byPhoto.has(f.photo_id)) FACES.byPhoto.set(f.photo_id, []);
+        FACES.byPhoto.get(f.photo_id).push(f.id);
+      }
+    }
+    await loadPeople();
+  } catch {}
+  return FACES.namesByPhoto;
+}
+
 /* Faces described by a different engine configuration cannot be compared with
    the current ones, so say so rather than clustering nonsense together. */
 function staleFaceEngines(){
@@ -6156,6 +6235,7 @@ async function deleteAllFaceData(){
   FACES.vec = { dim:0, ids:[], rows:null, index:new Map() };
   FACES.people = []; FACES.clusters = []; FACES.clusteredAt = null;
   FACES.loaded = false;
+  faceNamesLoaded = false;
   return true;
 }
 
@@ -8619,7 +8699,11 @@ async function selfTest(){
         moved:[], missing:[], unreadable:[], counts:{}, total:0, scope:"" });
       let tickType = null, calls = 0;
       buildPlan = async (onTick) => { calls++; tickType = typeof onTick; return emptyPlan(); };
+      const keepSrc = S.faces.source;
       try {
+        /* Only the originals path walks a folder; thumbnails are keyed by
+           record id and cover the index without one. */
+        S.faces.source = "originals";
         S.plan = null; S.planStale = true;
         await planFaceScan(() => {});
         eq("the walk is given a progress callback", tickType, "function");
@@ -8637,6 +8721,7 @@ async function selfTest(){
         eq("but a stale plan is not trusted", calls, 1);
       } finally {
         buildPlan = realPlan; S.plan = keepPlan; S.planStale = keepStale;
+        S.faces.source = keepSrc;
       }
     }
 
@@ -8742,6 +8827,34 @@ async function selfTest(){
         ok("the name is searchable as ordinary text too",
            recordTerms(IDX.records.get("p1")).includes("anna"),
            recordTerms(IDX.records.get("p1")).join(" "));
+
+        /* ---- chat must be able to find a named person ----
+           The person filter existed in searchPhotos but was never exposed as a
+           tool parameter, so the model had no way to use a name at all: asking
+           for photos of someone returned whatever the words happened to match. */
+        {
+          const tools = JSON.stringify(TOOLS);
+          ok("the search tool exposes a person filter", /"person"/.test(tools));
+          ok("and a way to discover which names exist",
+             /list_people/.test(tools));
+
+          const listed = await runTool("list_people", {});
+          eq("list_people reports the named person", listed.count, 1);
+          eq("with their name", listed.people[0].name, "Anna");
+          eq("and how many photos they are in", listed.people[0].photos, 2);
+
+          const viaTool = await runTool("search_photos", { query:"", person:["Anna"] });
+          eq("searching by person through the tool works", viaTool.count, 2);
+          const viaFilter = await runTool("filter_photos", { person:["Anna"] });
+          eq("and through the metadata filter too", viaFilter.count, 2);
+          const none = await runTool("filter_photos", { person:["Nobody"] });
+          eq("an unknown name returns nothing", none.count, 0);
+
+          const detail = await runTool("get_photo", { photo_id:"p1" });
+          ok("a photo's details say who is in it",
+             (detail.named_people || []).includes("Anna"),
+             JSON.stringify(detail.named_people));
+        }
 
         /* ---- re-grouping must never destroy a name ---- */
         clusterFaces();
@@ -8932,6 +9045,28 @@ async function selfTest(){
         eq("and every face reloads with them", FACES.vec.ids.length, vecsBefore);
         ok("names still map to photos after a reload",
            faceNamesFor("p1").includes("Ben"), faceNamesFor("p1").join(","));
+
+        /* ---- the whole index is covered, not just the open folder ----
+           Thumbnails are keyed by record id, so reading them needs no photo
+           folder. Planning from the walked folder meant a 6,635-photo library
+           got faces for only the few hundred in whatever folder was connected. */
+        {
+          const keepSource = S.faces.source;
+          S.faces.source = "thumbs";
+          await deleteAllFaceData();
+          await loadFaces();
+          const pl = await planFaceScan();
+          const inIndex = [...IDX.records.values()]
+            .filter(r => !r.deleted && r.status !== "error" && !r.probe).length;
+          eq("planning covers every photo in the index", pl.files.length, inIndex);
+          eq("and says that is what it did", pl.scope, "the whole index");
+          /* The records under test are synthetic and have no file on disk at
+             all, so a folder walk could not have produced any of them. */
+          ok("without needing a file handle",
+             pl.files.every(f => f.handle === null));
+          ok("which a folder walk could not have found", inIndex > 0);
+          S.faces.source = keepSource;
+        }
 
         /* ---- deleting everything ---- */
         await deleteAllFaceData();

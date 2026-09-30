@@ -5,7 +5,7 @@ Written 29 September 2026, after 6,635 photos were indexed and searchable.
 What exists today is the *hard* half: every photo has a caption, a description, objects,
 activities, transcribed text, a dated and confidence-scored timestamp, an offline place
 name, an occasion, and a 768-dimension embedding. Search fuses BM25 and cosine similarity,
-and chat drives eight tools over it.
+and chat drives nine tools over it.
 
 What is missing is mostly **browsing** and **two whole media types**, not intelligence.
 This document says what to add, in what order, and what each one actually costs.

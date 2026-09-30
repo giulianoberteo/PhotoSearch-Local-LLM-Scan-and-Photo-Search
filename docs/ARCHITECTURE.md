@@ -183,6 +183,12 @@ like the photo vectors), and `people.json` (groups and the names you gave them).
   asked not to; both are dropped at the adapter boundary, a face row is built field by
   field rather than spread, and a test asserts neither ever reaches storage. Emotion, iris,
   antispoof and liveness are switched off outright.
+- **Thumbnails need no photo folder.** They are keyed by record id, so a face pass covers
+  the whole index regardless of which folder is connected. Only the "originals" source
+  needs a walk, and it can therefore only reach the folder that is open.
+- **Names work everywhere**, not only in the People tab: `ensureFaceNames()` reads the two
+  small files (not the vectors, which are tens of megabytes) so chat and the search box can
+  filter by a name without loading the grouping machinery.
 - **One action deletes all of it**, leaving the rest of the index untouched.
 
 ## Known gaps

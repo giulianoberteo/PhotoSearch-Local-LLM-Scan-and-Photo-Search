@@ -167,7 +167,7 @@ No database. Everything is loaded into memory from `records.jsonl` and `vectors.
   nothing rather than confident junk.
 - **`"quoted phrases"`** must match exactly.
 
-Chat sends your question plus eight tool definitions to the model. The model chooses which
+Chat sends your question plus nine tool definitions to the model. The model chooses which
 tool to call; **the tools run locally** and return only small summaries — the model never
 sees your index. The one exception is `look_at_photos`, which sends up to six thumbnails
 back for a visual question.
