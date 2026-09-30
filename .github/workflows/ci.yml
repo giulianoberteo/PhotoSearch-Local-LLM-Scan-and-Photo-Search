@@ -41,9 +41,28 @@ jobs:
             --headless=new --disable-gpu --no-sandbox \
             --user-data-dir="$RUNNER_TEMP/chrome-selftest" \
             --remote-debugging-port=9222 \
-            --allow-file-access-from-files about:blank &
+            --allow-file-access-from-files about:blank \
+            > "$RUNNER_TEMP/chrome.log" 2>&1 &
           CHROME_PID=$!
           trap 'kill $CHROME_PID 2>/dev/null || true' EXIT
-          sleep 5
+
+          # Wait for devtools to actually answer rather than guessing with a
+          # fixed sleep: a loaded runner can take well over five seconds, and
+          # "could not reach devtools" then looks like a test failure when it
+          # is really a race against Chrome starting.
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:9222/json/version > /dev/null; then
+              echo "devtools up after ${i}s"; break
+            fi
+            if ! kill -0 $CHROME_PID 2>/dev/null; then
+              echo "Chrome exited during startup:"; cat "$RUNNER_TEMP/chrome.log"; exit 1
+            fi
+            sleep 1
+          done
+          if ! curl -sf http://127.0.0.1:9222/json/version > /dev/null; then
+            echo "devtools never came up. Chrome log:"; cat "$RUNNER_TEMP/chrome.log"; exit 1
+          fi
+
           node tools/selftest-runner.mjs \
-            "file://$PWD/PhotoSearch.html#selftest" "window.__selftest" 600000
+            "file://$PWD/PhotoSearch.html#selftest" "window.__selftest" 600000 \
+            || { echo "--- chrome log ---"; cat "$RUNNER_TEMP/chrome.log"; exit 1; }
