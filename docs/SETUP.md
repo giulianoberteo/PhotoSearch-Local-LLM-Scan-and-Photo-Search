@@ -167,9 +167,11 @@ geo/             cached place-name data
 backups/         verified copies, pruned to a keep count
 ```
 
-`.photoindex` is **hidden** on macOS because of the leading dot. To open it, run
-`open /path/to/photos/.photoindex`, or use Finder → Cmd+Shift+G. A fuller description of each
-file is in [OPERATIONS.md](OPERATIONS.md#where-the-files-are).
+`.photoindex` is **hidden** on macOS because of the leading dot, and it sits inside your photo
+folder (or the folder you chose under *Where to save the index*). To open it, press
+**Cmd+Shift+.** in Finder to show hidden files, or run `open "/path/to/that/folder/.photoindex"`
+in Terminal. How to find the right folder, and a description of each file, is in
+[OPERATIONS.md](OPERATIONS.md#finding-your-index).
 
 [↑ Back to Index](#index)
 

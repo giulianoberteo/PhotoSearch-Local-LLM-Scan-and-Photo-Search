@@ -1,15 +1,18 @@
 # Operations
 
 Operating notes: where everything lives, how to back up by hand, how a scan behaves when it
-is interrupted, and what to do when network storage misbehaves. The numbers and paths come
-from the reference library (6,635 photos on an SMB NAS mounted at `/Volumes/Photos`); use
-your own paths in their place.
+is interrupted, and what to do when network storage misbehaves.
+
+The numbers come from the reference library (6,635 photos on an SMB NAS). Where a command
+needs a path, it uses `/Volumes/Photos` as a stand-in for **your own photo folder**; replace
+it with your own, as explained in [Finding your index](#finding-your-index).
 
 ## Index
 <!-- index:start -->
 - [Where the files are](#where-the-files-are)
   - [The app](#the-app)
   - [The index: your scanned data](#the-index-your-scanned-data)
+  - [Finding your index](#finding-your-index)
 - [Backing up by hand](#backing-up-by-hand)
   - [Thumbnails are deliberately not backed up](#thumbnails-are-deliberately-not-backed-up)
   - [Restoring](#restoring)
@@ -38,7 +41,9 @@ Chrome and a model server.
 
 ### The index: your scanned data
 
-By default this is **`/Volumes/Photos/.photoindex/`** (hidden because of the leading dot).
+The index is a folder named **`.photoindex`**, hidden because of the leading dot. In the
+reference library that was `/Volumes/Photos/.photoindex/`. Yours is wherever
+[Finding your index](#finding-your-index) says.
 
 | file | size | what it is |
 |---|---:|---|
@@ -53,11 +58,31 @@ By default this is **`/Volumes/Photos/.photoindex/`** (hidden because of the lea
 | `geo/` | 3.8 MB | Cached place-name data (170,540 cities), so GPS becomes "Staines, GB" offline. |
 | `backups/` | | Copies made by the app. |
 
-To open it in Finder:
+### Finding your index
 
-```bash
-open /Volumes/Photos/.photoindex
-```
+The index is always a folder called `.photoindex` **inside one parent folder**, and which
+parent depends on a setting:
+
+| *Where to save the index* in Settings | the index is at |
+|---|---|
+| **Beside the photos** (the default) | `<the photo folder you picked>/.photoindex` |
+| **A folder I choose** | `<the folder you chose>/.photoindex` |
+
+Settings shows this as "Saving the index to *name*/.photoindex/". It shows only the folder's
+**name**, not its full path, because a browser does not reveal full paths to a page. You
+already know where that folder is, so:
+
+- **In Terminal**, give `open` the full path to *your* folder:
+  ```bash
+  open "/path/to/your/photo-folder/.photoindex"
+  ```
+  For example `open "/Volumes/Photos/.photoindex"` if your photos are in `/Volumes/Photos`.
+- **In Finder**, open your photo (or index) folder and press **Cmd+Shift+.** to show hidden
+  files, then open `.photoindex`. Or press **Cmd+Shift+G** and type the path.
+- **Without leaving the app**, *Settings → What's in it?* lists every file in the index with
+  its size.
+
+A bare `open .photoindex` only works if your terminal is already inside the parent folder.
 
 [↑ Back to Index](#index)
 
@@ -69,14 +94,16 @@ The in-app button can be unreliable against a slow NAS (see
 [Known problem: slow network storage](#known-problem-slow-network-storage)). This always works:
 
 ```bash
+INDEX="/Volumes/Photos/.photoindex"        # change this to YOUR index folder
 DEST=~/PhotoSearch-backups/$(date +%Y-%m-%d_%H%M)
 mkdir -p "$DEST"
-cp -p /Volumes/Photos/.photoindex/{records.jsonl,vectors.bin,vectors.json,config.json,runs.jsonl} "$DEST"/
+cp -p "$INDEX"/{records.jsonl,vectors.bin,vectors.json,config.json,runs.jsonl} "$DEST"/
 ls -la "$DEST"
 ```
 
-If your shell cannot read `/Volumes/Photos` (macOS privacy restrictions), use Finder instead:
-open `/Volumes/Photos/.photoindex` with Cmd+Shift+G and drag those five files somewhere.
+If your shell cannot read that folder (macOS privacy restrictions), use Finder instead: open
+the index folder (see [Finding your index](#finding-your-index)) and drag those five files
+somewhere.
 
 **Verify that a backup is readable:**
 
@@ -120,7 +147,7 @@ before the rebuild itself starts.
 
 ### Restoring
 
-Copy the files back into `/Volumes/Photos/.photoindex/`, overwriting; then reload the app,
+Copy the files back into your index folder, overwriting; then reload the app,
 reconnect the folder and press **Refresh plan**.
 
 A backup made by the app contains four files: `records.jsonl`, `vectors.bin`, `vectors.json`
