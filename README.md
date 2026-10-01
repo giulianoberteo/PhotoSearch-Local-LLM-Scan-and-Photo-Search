@@ -1,17 +1,18 @@
 # PhotoSearch
 
-**Search your own photo library in plain English, entirely on your own machine.**
+**Search and browse your own photo library in plain English, entirely on your own machine.**
+
 One HTML file. No install, no server, no build step, no cloud.
 
 PhotoSearch scans a folder of photos with a local vision model, builds a searchable index
-next to the photos, and lets you browse it or talk to it: *"photos of children in a
-forest"*, *"anything from summer 2021"*, *"where was the one with the boat taken?"*
+next to the photos, and lets you browse it or talk to it:
 
-It works with **any local server that speaks the OpenAI API**:
-[LM Studio](https://lmstudio.ai), [Ollama](https://ollama.com), llama.cpp's server, vLLM
-and LocalAI. You point it at a URL and pick your models; nothing is specific to one product.
+> *"photos of children in a forest"* · *"anything from summer 2021"* · *"where was the one
+> with the boat taken?"*
 
-Nothing leaves your computer. No API keys, no accounts, no telemetry.
+It works with **any local server that speaks the OpenAI API**: [LM Studio](https://lmstudio.ai),
+[Ollama](https://ollama.com), llama.cpp's server, vLLM and LocalAI. You point it at a URL and
+pick your models; nothing is specific to one product.
 
 ```
 ┌── you ──────────┐      ┌── PhotoSearch.html ──────┐      ┌── your model server ─┐
@@ -23,43 +24,65 @@ Nothing leaves your computer. No API keys, no accounts, no telemetry.
                          (plain JSONL + a float32 blob)
 ```
 
----
+The current version is shown in the app's footer; the [ChangeLog](ChangeLog.md) says what changed and when.
+
+## Index
 
 ## Index
 <!-- index:start -->
+- [At a glance](#at-a-glance)
 - [Quick start](#quick-start)
-  - [With LM Studio](#with-lm-studio)
-  - [With Ollama](#with-ollama)
-  - [Then, whichever you chose](#then-whichever-you-chose)
-- [Why structured output matters](#why-structured-output-matters)
-- [Choosing models](#choosing-models)
-- [What it does](#what-it-does)
+  - [1. Start a model server](#1-start-a-model-server)
+  - [2. Open the app](#2-open-the-app)
+  - [3. Connect, then scan](#3-connect-then-scan)
 - [Using the app](#using-the-app)
-- [Design decisions worth knowing](#design-decisions-worth-knowing)
+- [How it works](#how-it-works)
+- [Principles](#principles)
+- [Models and structured output](#models-and-structured-output)
 - [What it costs](#what-it-costs)
 - [Requirements](#requirements)
-- [Status](#status)
+- [FAQ](#faq)
 - [Documentation](#documentation)
+- [Status and roadmap](#status-and-roadmap)
 - [License](#license)
 <!-- index:end -->
+
+## At a glance
+
+| | |
+|---|---|
+| **Describes every photo** | caption, description, objects, activities, scene, visible text (OCR), date, camera, GPS and place |
+| **Finds by meaning** | keyword and semantic search merged together, exact `"phrases"`, filters by date, place, person and type |
+| **Browses like a photo app** | a zoomable Library grid, a full-window viewer, a day-by-day Timeline |
+| **Talks to your library** | a chat agent with nine tools that answers with the matching photos |
+| **Groups faces, never identifies them** | people appear as anonymous groups until *you* name them |
+| **Tidies safely** | remove photos from the library with undo; your files are never touched |
+| **Survives reality** | resumable scans, flaky-network-share tolerance, verified backups, a built-in self-test |
+| **Stays private** | no accounts, no API keys, no telemetry, no photo ever uploaded |
+
+[↑ Back to Index](#index)
+
+---
 
 ## Quick start
 
 You need a **vision model** (to describe photos) and ideally an **embedding model** (for
 meaning-based search). Use whichever server you already have.
 
-### With LM Studio
+### 1. Start a model server
 
-1. Download a vision model. `Qwen3.5-VL` is the reference, but any VLM works. Add an
-   embedding model such as `nomic-embed-text` for semantic search.
+**LM Studio**
+
+1. Download a vision model (`Qwen3.5-VL` is the reference; any VLM works) and an embedding
+   model such as `nomic-embed-text`.
 2. **Start the server with CORS enabled.** This is the step people miss:
    ```bash
    lms server start --cors --port 1234
    ```
    Or in the app: *Developer* tab → Status **Running** → tick **Enable CORS**.
-3. The URL to use in Settings is `http://localhost:1234`.
+3. The URL for Settings is `http://localhost:1234`.
 
-### With Ollama
+**Ollama**
 
 1. Pull a vision model and an embedding model:
    ```bash
@@ -71,97 +94,28 @@ meaning-based search). Use whichever server you already have.
    ```bash
    OLLAMA_ORIGINS='*' ollama serve
    ```
-   If Ollama runs as the macOS menu-bar app instead:
-   ```bash
-   launchctl setenv OLLAMA_ORIGINS '*'      # then quit and reopen Ollama
-   ```
-3. The URL to use in Settings is `http://localhost:11434`.
+   If Ollama runs as the macOS menu-bar app, use `launchctl setenv OLLAMA_ORIGINS '*'` and
+   restart it.
+3. The URL for Settings is `http://localhost:11434`.
 
-### Then, whichever you chose
+Other servers (llama.cpp, vLLM, LocalAI) are listed in [docs/SETUP.md](docs/SETUP.md).
 
-4. **Open `PhotoSearch.html`** in desktop Chrome or Edge. Double-click it; `file://` is fine.
-5. Go to *Settings* → **Test connection** → **Choose folder**, then *Scan* → **Refresh plan**
-   → **Scan**. Browse the results in *Library* while it runs.
+### 2. Open the app
 
-**Test connection** reports what it found: which server, which models, whether model types
-could be detected and, importantly, whether your server can enforce a **JSON schema**. See
-[Why structured output matters](#why-structured-output-matters).
+Double-click **`PhotoSearch.html`** in desktop Chrome or Edge. `file://` is fine; no web server
+is needed.
 
-Full detail, including running the server on another machine, is in
-**[docs/SETUP.md](docs/SETUP.md)**.
+### 3. Connect, then scan
 
-[↑ Back to Index](#index)
+1. *Settings* → **Test connection**. It reports the server it found, the models, and whether
+   the server can enforce a JSON schema (see [Models and structured output](#models-and-structured-output)).
+2. *Settings* → **Choose folder**, and pick your photos.
+3. *Scan* tab → **Refresh plan** → **Scan**.
+4. Open the **Library** tab and browse while it works. Newest photos are scanned first, so the
+   index is useful on day one.
 
----
-
-## Why structured output matters
-
-This is the one place where servers genuinely differ, so **Test connection** probes it and
-tells you which of three contracts you have:
-
-| what your server supports | what happens |
-|---|---|
-| **JSON schema** (LM Studio, recent Ollama, vLLM) | Best. Constrained decoding also stops a reasoning model from thinking out loud: **13 output tokens instead of 799** on the same prompt. |
-| **JSON only**, no schema | Works, with more tokens, more repair and occasional retries. |
-| **Neither** | Answers are parsed out of prose, and some photos will fail. |
-
-There is nothing to configure: the app detects the contract and adapts. It is worth knowing
-only because a server with schema support scans faster and cheaper.
-
-[↑ Back to Index](#index)
-
----
-
-## Choosing models
-
-If your server reports model types (LM Studio) or families (Ollama), the right models are
-detected automatically. Otherwise types are guessed from the name, and you can correct them
-under *Settings → Model roles*. The dropdowns list every model, so a vision model that was
-not recognised can always be chosen by hand.
-
-| role | what it is for | examples |
-|---|---|---|
-| **Scan (vision)** | describing every photo | Qwen3.5-VL, Gemma 3, llava, minicpm-v, moondream, Pixtral |
-| **Embeddings** | meaning-based search | nomic-embed-text, bge-m3, mxbai-embed-large |
-| **Chat agent** | answering questions over the index | any decent instruct model |
-
-Face grouping needs **no server at all**: it runs in the browser (see
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#faces)).
-
-[↑ Back to Index](#index)
-
----
-
-## What it does
-
-**Scanning.** Walks a folder, decodes each image in a Web Worker, and asks the vision model
-to fill a fixed JSON schema: observations first, caption last, "unknown" preferred over a
-guess. Reads EXIF for dates, camera and GPS, and resolves GPS to place names from an offline
-GeoNames extract. Everything is written to `.photoindex/` beside your photos.
-
-**Browsing.** The *Library* tab shows every photo in one zoomable grid. Click one and it
-opens full-window, growing out of its tile, with arrow-key stepping and a details panel. The
-*Timeline* tab groups photos by day, with places and occasions in the headings.
-
-**Searching.** BM25 over an inverted index and cosine similarity over embeddings, merged with
-reciprocal rank fusion. Exact phrases go in `"quotes"`. It all happens in the browser; there
-is no vector database.
-
-**Chatting.** A tool-calling agent with nine tools over the index (`search_photos`,
-`find_similar`, `list_people`, `list_events`, `look_at_photos` and others). Answers stream in
-with a grid of matching thumbnails; click one for the full image and its metadata. Models
-without tool support fall back to retrieve-then-answer automatically.
-
-**People.** Faces are detected and grouped *by resemblance*, in the browser. Groups stay
-anonymous until you name them, and names then work in search and chat.
-
-**Tidying.** Photos can be removed from the library, one at a time from the viewer or many in
-Select mode, with an Undo and a *Removed* list to restore from. This only hides them in the
-index: **your files are never touched.**
-
-**Surviving reality.** Resumable scans with a checkpoint, retries for flaky network shares,
-move detection so reorganising folders costs nothing, per-run backups with verified restore,
-and a self-test of about 500 assertions you can run in your own browser.
+Detail on every step, including running the server on another machine and troubleshooting, is
+in **[docs/SETUP.md](docs/SETUP.md)**.
 
 [↑ Back to Index](#index)
 
@@ -171,48 +125,104 @@ and a self-test of about 500 assertions you can run in your own browser.
 
 | tab | what it is for |
 |---|---|
-| **Library** | Every photo in one grid. Drag the **Size** slider to change density. Click a photo to open it; `←` `→` step through, `I` shows details, `Esc` closes. **Select** enables multi-select (click, shift-click for a range, `⌘/Ctrl+A`), then **Remove**. **Removed (N)** lists what you hid so you can **Restore** it. |
-| **Chat** | Ask about your photos in plain language. Shows which tools the model used and the photos it found. |
-| **Timeline** | Browse by day, newest first, with a year bar and a date picker. |
-| **People** | Find faces, group them, name them, merge and split groups. |
+| **Library** | Every photo in one grid. The **Size** slider changes density. Click a photo and it grows out of its tile into a full-window viewer: `←` `→` step through photos, `I` shows details, `Esc` closes. **Select** enables multi-select (click, shift-click for a range, `⌘/Ctrl+A`); **Remove** hides the selection, and **Removed (N)** lists what you hid so you can **Restore** it. |
+| **Chat** | Ask about your photos in plain language. Shows which tools the model used and the photos it found; click one for the full image and its metadata. |
+| **Timeline** | Browse by day, newest first, with places and occasions in the headings, a year bar and a date picker. |
+| **People** | Find faces, review the groups, name them, merge and split. Names then work in search and chat. |
 | **Scan** | The plan (what is new, changed, failed or missing), progress, retry, backups, thumbnail rebuild. |
 | **Settings** | Server URL and connection test, model roles, folder and index location, scan and date settings, backups, the self-test. |
+
+**Searching** takes plain words, `"exact phrases"` in quotes, and people by name once you have
+named them. The Library is for looking; Chat is for asking.
 
 [↑ Back to Index](#index)
 
 ---
 
-## Design decisions worth knowing
+## How it works
 
-**One file.** `PhotoSearch.html` is about 530 KB with everything inline. Copy it to any
-machine and it works. The source lives in `src/` and is assembled by `build.py`; see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+1. **Scan.** PhotoSearch walks the folder and decodes each image in a Web Worker. It asks the
+   vision model to fill a fixed JSON schema (observations first, caption last, "unknown"
+   preferred over a guess), reads EXIF for dates, camera and GPS, and resolves GPS to place
+   names from an offline GeoNames extract.
+2. **Index.** Everything is written to `.photoindex/` beside your photos: one JSON line per
+   photo, a float32 embedding file and 384px thumbnails. It is plain text you can `grep`.
+3. **Search.** BM25 over an inverted index and cosine similarity over the embeddings are merged
+   with reciprocal rank fusion. It all happens in the browser; there is no vector database.
+4. **Chat.** A tool-calling agent runs nine tools over the index locally. The model sees only
+   small summaries, never the index itself. Models without tool support fall back to
+   retrieve-then-answer automatically.
+5. **Faces.** Detection and recognition run in the browser, with no server involved. Faces are
+   clustered by resemblance and stay anonymous until named.
 
-**The index is plain text.** `records.jsonl` is one JSON object per line. You can `grep` it,
-diff it or process it with anything. There is no proprietary format and no lock-in.
+The full design is in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
-**Structured output suppresses "thinking".** Reasoning models burn hundreds of tokens
-planning before they answer. Sending a JSON schema in `response_format` constrains
-generation from the first token, so no reasoning pass happens: **799 tokens → 13** on the
-reference model. This one trick is what makes scanning viable. The catch, and the OCR
-workaround it required, are in [docs/FINDINGS.md](docs/FINDINGS.md).
+[↑ Back to Index](#index)
+
+---
+
+## Principles
+
+**Nothing about your photos leaves your computer.** No accounts, no API keys, no telemetry.
+The app talks only to the model server you point it at (by default on your own machine). A few
+public libraries and models are *downloaded* once and cached when first needed: image decoders
+for HEIC and TIFF, the face-recognition model, and the place-name list. Nothing is uploaded.
+
+**Your files are never modified.** The app writes only inside `.photoindex/`. Even "Remove"
+means "hide from the index"; the photo stays exactly where it is, and you can restore it.
+
+**People are grouped, never identified.** The extraction prompt forbids naming people or
+guessing ethnicity, religion or health, and describes them only by age group, clothing and
+action. Face grouping works the same way: it clusters faces that *look alike*, and every name
+comes from you. Age, gender and emotion estimates are discarded at the boundary, and a test
+asserts they never reach storage. This is a deliberate divergence from commercial photo
+managers.
+
+**The index is plain text.** `records.jsonl` is one JSON object per line. There is no
+proprietary format and no lock-in.
+
+**Photos are identified by content, not by path.** Scan a subfolder today and the whole library
+tomorrow: one index either way, no duplicates, nothing wrongly marked missing.
 
 **EXIF dates are not trusted blindly.** Exported and AI-generated files routinely carry the
 *processing* time in every date field. Records store `date_source` and `date_confidence`, and
 flag `date_suspect` when a date has no camera tags behind it.
 
-**Photos are identified by content, not by path.** Scan a subfolder today and the whole
-library tomorrow: one index either way, no duplicates, nothing wrongly marked missing.
+**One file.** `PhotoSearch.html` is about 530 KB with everything inline. Copy it to any machine
+and it works. The source lives in `src/` and is assembled by `build.py`; see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-**People are grouped, never identified.** The extraction prompt forbids naming people or
-guessing ethnicity, religion or health, and describes them only by age group, clothing and
-action. Face grouping works the same way: it clusters faces that *look alike*, and every name
-comes from you. Age, gender and emotion estimates are discarded at the boundary and a test
-asserts they never reach storage. This is a deliberate divergence from commercial photo
-managers.
+[↑ Back to Index](#index)
 
-**Removing is hiding.** The app never modifies anything outside `.photoindex/`, so
-"remove" means "hide from the index", and it is always reversible.
+---
+
+## Models and structured output
+
+If your server reports model types (LM Studio) or families (Ollama), the right models are
+detected automatically. Otherwise types are guessed from the name, and you can correct them
+under *Settings → Model roles*; the dropdowns list every model, so one that was not recognised
+can always be chosen by hand.
+
+| role | what it is for | examples |
+|---|---|---|
+| **Scan (vision)** | describing every photo | Qwen3.5-VL, Gemma 3, llava, minicpm-v, moondream, Pixtral |
+| **Embeddings** | meaning-based search | nomic-embed-text, bge-m3, mxbai-embed-large |
+| **Chat agent** | answering questions over the index | any decent instruct model |
+
+Set the embedding model **before** the first big scan, since adding one later means
+re-embedding every record. Without one, search is keyword-only.
+
+**Why structured output matters.** This is the one place where servers genuinely differ, so
+**Test connection** probes it and tells you which of three contracts you have:
+
+| what your server supports | what happens |
+|---|---|
+| **JSON schema** (LM Studio, recent Ollama, vLLM) | Best. Constrained decoding also stops a reasoning model thinking out loud: **13 output tokens instead of 799** on the same prompt. |
+| **JSON only**, no schema | Works, with more tokens, more repair and occasional retries. |
+| **Neither** | Answers are parsed out of prose, and some photos will fail. |
+
+Nothing needs configuring; the app detects the contract and adapts. The measurements and the
+catch (including an OCR workaround) are in [docs/FINDINGS.md](docs/FINDINGS.md).
 
 [↑ Back to Index](#index)
 
@@ -231,9 +241,11 @@ Measured on an M-series Mac with `Qwen3.5-9B` (MLX 4-bit) and 1024px input:
 
 Concurrency does not help. Most local servers process one request at a time unless told
 otherwise (LM Studio needs `--parallel`; Ollama needs `OLLAMA_NUM_PARALLEL`). Lowering the
-input resolution barely helps either, because generation dominates. A 100,000-photo library
-is a multi-week scan, so plan accordingly and scan newest-first, which makes the index
-useful on day one.
+input resolution barely helps either, because generation dominates. A 100,000-photo library is
+a multi-week scan, so plan for it. Scans are resumable, and newest-first by default.
+
+Face grouping is far cheaper because it needs no model call: about 8 minutes for 6,635 photos
+from thumbnails.
 
 [↑ Back to Index](#index)
 
@@ -244,9 +256,8 @@ useful on day one.
 - **Desktop Chrome or Edge.** The File System Access API has no equivalent in Firefox or
   Safari. The app detects this and says so rather than half-working.
 - **A local server that speaks the OpenAI API**, with a vision model loaded and CORS allowed
-  for this page. LM Studio, Ollama, llama.cpp's server, vLLM and LocalAI all work; only the
-  URL and the model names differ.
-- **An embedding model** is optional but recommended. Without one, search is keyword-only.
+  for this page.
+- **An embedding model** (optional but recommended).
 - **Nothing** for face grouping: the detector and recognition model run in the browser.
 
 Formats: JPEG, PNG, WebP, GIF, BMP and AVIF natively; HEIC/HEIF via libheif; TIFF via UTIF.
@@ -256,10 +267,34 @@ RAW, video and vector files are counted and skipped.
 
 ---
 
-## Status
+## FAQ
 
-Working software, used daily against a multi-terabyte NAS library. Rough edges remain; see
-[issues](../../issues). Contributions are welcome: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+**Does it upload my photos?** No. Photos are sent only to the model server you configure,
+which is normally on your own machine.
+
+**Does it change or delete my files?** No. It writes only to `.photoindex/`. Removing a photo in
+the Library hides it from the index and can be undone.
+
+**Does it recognise people?** It groups faces that look alike and shows them as "Group 1",
+"Group 2" and so on. It never decides who anyone is; every name is typed by you.
+
+**Can I use Ollama (or something other than LM Studio)?** Yes, any server that speaks the OpenAI
+API. See [Quick start](#quick-start).
+
+**Why does Test connection say "Failed to fetch"?** Almost always CORS: the app is a local file,
+so the browser sends `Origin: null`, and servers reject that by default. The fix for each
+server is in [docs/SETUP.md](docs/SETUP.md#choosing-a-server).
+
+**How long will my library take?** About 21.5 seconds per photo on an M-series Mac. See
+[What it costs](#what-it-costs).
+
+**Can I stop and resume?** Yes. The plan is rebuilt from what is on disk, so you never start
+from zero, even after a crash.
+
+**Where is my data?** In `.photoindex/` beside the photos, or a folder you choose in Settings.
+[docs/OPERATIONS.md](docs/OPERATIONS.md) lists every file and how to back it up by hand.
+
+**It does not work in Firefox or Safari.** Correct; they lack the File System Access API.
 
 [↑ Back to Index](#index)
 
@@ -277,6 +312,22 @@ Working software, used daily against a multi-terabyte NAS library. Rough edges r
 | [ROADMAP.md](docs/ROADMAP.md) | What is built, what is missing next, and what each costs |
 | [ChangeLog.md](ChangeLog.md) | What changed in each version |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, code style, how to propose changes |
+
+[↑ Back to Index](#index)
+
+---
+
+## Status and roadmap
+
+Working software, used daily against a multi-terabyte NAS library. Rough edges remain; see
+[issues](../../issues).
+
+Built so far: scanning, search, chat, Timeline, People, Library with a zoom viewer, remove and
+restore, and support for any OpenAI-compatible server. Next up: a perceptual hash for
+near-duplicates, smarter query parsing, video, and a map view. The full list, with costs and
+risks, is in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+Contributions are welcome: **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 [↑ Back to Index](#index)
 
