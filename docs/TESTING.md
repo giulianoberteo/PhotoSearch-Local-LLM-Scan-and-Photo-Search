@@ -58,6 +58,9 @@ scratch folder, so your real photos and index are never touched.
   thumbnails pinned then released, and the viewer's open, step, details and close cycle
 - **removing photos:** that a removal sets `hidden` and not `deleted`, leaves the library and
   search, appears in the Removed view, and is undone by restoring
+- **rotating photos:** that a turn is stored on the record and written to the index, wraps
+  at 360 degrees, applies to each photo from its own angle, survives three quick clicks, and
+  is drawn on the tile
 - **thumbnail rebuild:** missing ones are detected and remade, error stubs are not queued,
   orphans are reported but never deleted, and photos outside the open folder are reported
   rather than silently skipped

@@ -261,7 +261,8 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   font:inherit;font-weight:600;padding:4px 14px;border-radius:99px;cursor:pointer}
 .gtile{position:absolute;margin:0;overflow:hidden;cursor:pointer;background:var(--panel2);
   border-radius:2px}
-.gtile img{width:100%;height:100%;object-fit:cover;display:block;-webkit-user-drag:none}
+.gtile img{width:100%;height:100%;object-fit:cover;display:block;-webkit-user-drag:none;
+  transition:rotate .25s ease}
 .gtile:hover img{filter:brightness(1.07)}
 .gtile:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
 
@@ -272,7 +273,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 #vwImg{position:fixed;object-fit:cover;border-radius:2px;background:var(--panel2);
   box-shadow:0 8px 40px rgba(0,0,0,.25);transition:left .3s cubic-bezier(.2,.8,.2,1),
   top .3s cubic-bezier(.2,.8,.2,1),width .3s cubic-bezier(.2,.8,.2,1),
-  height .3s cubic-bezier(.2,.8,.2,1),opacity .2s}
+  height .3s cubic-bezier(.2,.8,.2,1),rotate .3s cubic-bezier(.2,.8,.2,1),opacity .2s}
 #vwImg.still{transition:none}
 .vwBar{position:absolute;top:0;left:0;right:0;height:52px;display:flex;align-items:center;
   gap:12px;padding:0 14px;z-index:2;opacity:0;transition:opacity .25s}
@@ -386,6 +387,8 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
       <span class="hint" id="galCount" style="margin:0"></span>
       <span class="spacer"></span>
       <span class="hint" id="galSelCount" style="margin:0" hidden></span>
+      <button id="galRotL" title="Rotate left (Shift+R)" aria-label="Rotate left" hidden>&#8634;</button>
+      <button id="galRotR" title="Rotate right (R)" aria-label="Rotate right" hidden>&#8635;</button>
       <button id="galAct" class="danger" hidden>Remove</button>
       <label class="hint" style="display:flex;align-items:center;gap:8px;margin:0">Size
         <input type="range" id="galSize" min="70" max="260" step="5" value="130"
@@ -614,6 +617,8 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
     <button class="vwBtn" id="vwClose" title="Close (Esc)" aria-label="Close">&#10005;</button>
     <div class="vwTitle"><b id="vwName"></b><span id="vwWhen"></span></div>
     <span class="spacer"></span>
+    <button class="vwBtn" id="vwRotL" title="Rotate left (Shift+R)" aria-label="Rotate left">&#8634;</button>
+    <button class="vwBtn" id="vwRotR" title="Rotate right (R)" aria-label="Rotate right">&#8635;</button>
     <button class="vwBtn txt" id="vwRemove" title="Remove from library (Delete)">Remove</button>
     <button class="vwBtn" id="vwInfoBtn" title="Info (I)" aria-label="Info">&#9432;</button>
   </div>

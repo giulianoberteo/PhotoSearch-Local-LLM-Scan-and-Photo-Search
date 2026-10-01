@@ -14,6 +14,14 @@ const GAL = { list:[], built:0, size:130, desc:true, gap:2, cols:1, cell:0, rows
               selMode:false, sel:new Set(), last:-1, removed:0 };
 try { const v = +localStorage.getItem("ps.galSize"); if (v >= 70 && v <= 260) GAL.size = v; } catch {}
 
+/* Rotation is a VIEW setting. The original file is never touched, so the angle
+   lives in the photo's record (degrees clockwise: 0, 90, 180 or 270) and is
+   applied when the picture is drawn. CSS `rotate` is used rather than
+   `transform` so it composes with the hover and selection scaling. */
+const normRot = d => ((Math.round(d / 90) * 90) % 360 + 360) % 360;
+const rotOdd = a => Math.abs(Math.round(a / 90)) % 2 === 1;
+function applyRotation(im, rec){ im.style.rotate = rec && rec.rotation ? rec.rotation + "deg" : ""; }
+
 /* Newest first, undated last in either direction. The clock time is used where
    it exists; a record with only a day falls back to midnight of that day. */
 function galSortKey(r){
@@ -88,6 +96,7 @@ function galTile(i){
   im.alt = r.caption || r.name || "";
   im.draggable = false;
   thumbPin(r.id);
+  applyRotation(im, r);
   thumbUrl(r.id).then(u => { if (u) im.src = u; });
   f.append(im);
   if (GAL.sel.has(r.id)) f.classList.add("sel");
@@ -131,6 +140,8 @@ function galBar(){
   $("#galSelect").textContent = GAL.selMode ? "Done" : "Select";
   $("#galSelCount").hidden = !GAL.selMode;
   $("#galSelCount").textContent = n ? n.toLocaleString() + " selected" : "Click photos to select";
+  $("#galRotL").hidden = $("#galRotR").hidden = !GAL.selMode;
+  $("#galRotL").disabled = $("#galRotR").disabled = !n;
   $("#galAct").hidden = !GAL.selMode;
   $("#galAct").disabled = !n;
   $("#galAct").textContent = removedView ? "Restore" : "Remove";
@@ -160,24 +171,37 @@ function galSelectMode(on){
   galPaint();
 }
 
+/* Every index change made from the Library goes through here: the record is
+   rewritten in full from disk (so the model's raw output survives), and memory
+   is updated only after the write succeeded, so a failed write leaves the
+   screen telling the truth. Calls are queued, because two quick clicks would
+   otherwise both start from the same old value and one would be lost. */
+let galIO = Promise.resolve();
+function galPersist(ids, change){
+  const run = async () => {
+    ids = [...ids].filter(id => IDX.records.has(id));
+    if (!ids.length) return 0;
+    await ensureIndex(null, { write:false });
+    const full = await readFullRecords(new Set(ids));
+    const lines = ids.map(id => change({ ...(full.get(id) || IDX.records.get(id)) }));
+    await appendLines("records.jsonl", lines);
+    for (const l of lines) IDX.records.set(l.id, lighten(l));
+    return lines.length;
+  };
+  const p = galIO.then(run, run);
+  galIO = p.catch(() => {});
+  return p;
+}
+
 /* Marks photos hidden (or brings them back). Only the index changes: the
-   original files are never touched. The record is rewritten in full from disk
-   so the model's raw output survives, and memory is updated only after the
-   write succeeded, so a failed write leaves the screen telling the truth. */
+   original files are never touched. */
 async function galApply(ids, hide, quiet){
   ids = [...ids].filter(id => IDX.records.has(id));
   if (!ids.length) return 0;
+  const at = new Date().toISOString();
   try {
-    await ensureIndex(null, { write:false });
-    const full = await readFullRecords(new Set(ids));
-    const at = new Date().toISOString();
-    const lines = ids.map(id => {
-      const base = full.get(id) || IDX.records.get(id);
-      return hide ? { ...base, hidden:true, hidden_at:at }
-                  : { ...base, hidden:false, hidden_at:undefined };
-    });
-    await appendLines("records.jsonl", lines);
-    for (const l of lines) IDX.records.set(l.id, lighten(l));
+    await galPersist(ids, base => hide ? { ...base, hidden:true, hidden_at:at }
+                                       : { ...base, hidden:false, hidden_at:undefined });
   } catch (e){
     toast("Could not " + (hide ? "remove" : "restore") + " — " + errText(e));
     return 0;
@@ -189,18 +213,51 @@ async function galApply(ids, hide, quiet){
   return ids.length;
 }
 
+/* Turns photos by `delta` degrees (multiples of 90, clockwise positive). Each
+   photo moves from its own current angle, so a mixed selection stays mixed and
+   the exact opposite turn is a perfect undo. */
+async function galRotate(ids, delta, quiet){
+  ids = [...ids].filter(id => IDX.records.has(id));
+  if (!ids.length) return 0;
+  try {
+    await galPersist(ids, base => {
+      const cur = IDX.records.get(base.id);
+      return { ...base, rotation: normRot(((cur && cur.rotation) || 0) + delta) };
+    });
+  } catch (e){
+    toast("Could not rotate — " + errText(e));
+    return 0;
+  }
+  const set = new Set(ids);
+  for (const x of GAL.list) if (set.has(x.r.id)) x.r = IDX.records.get(x.r.id);
+  for (const f of GAL.shown.values()) applyRotation(f.firstChild, IDX.records.get(f.dataset.id));
+  TL.built = 0;                       // the Timeline redraws its tiles next time it is shown
+  if (!quiet){
+    const n = ids.length, noun = n === 1 ? "1 photo" : n + " photos";
+    galSnack("Rotated " + noun + (delta > 0 ? " right" : " left") + ". The file is untouched.",
+             () => galRotate(ids, -delta, true));
+  }
+  return ids.length;
+}
+
+function galSnack(msg, undo){
+  const u = $("#undo");
+  $("#undoMsg").textContent = msg;
+  u.hidden = false;
+  $("#undoBtn").onclick = async () => { u.hidden = true; await undo(); };
+  clearTimeout(galSnack._t);
+  galSnack._t = setTimeout(() => { u.hidden = true; }, 9000);
+}
 function galUndo(ids, hide){
   const n = ids.length, noun = n === 1 ? "1 photo" : n + " photos";
-  const u = $("#undo");
-  $("#undoMsg").textContent = (hide ? "Removed " : "Restored ") + noun
-    + (hide ? " from the library. The file is untouched." : ".");
-  u.hidden = false;
-  $("#undoBtn").onclick = async () => {
-    u.hidden = true;
-    await galApply(ids, !hide, true);
-  };
-  clearTimeout(galUndo._t);
-  galUndo._t = setTimeout(() => { u.hidden = true; }, 9000);
+  galSnack((hide ? "Removed " : "Restored ") + noun
+             + (hide ? " from the library. The file is untouched." : "."),
+           () => galApply(ids, !hide, true));
+}
+
+async function galRotSel(delta){
+  const ids = [...GAL.sel];
+  if (ids.length) await galRotate(ids, delta);
 }
 
 async function galAct(){
@@ -258,6 +315,8 @@ $("#galSize").oninput = e => {
 };
 $("#galSelect").onclick = () => galSelectMode(!GAL.selMode);
 $("#galAct").onclick = galAct;
+$("#galRotL").onclick = () => galRotSel(-90);
+$("#galRotR").onclick = () => galRotSel(90);
 $("#galRemoved").onclick = () => {
   GAL.view = GAL.view === "all" ? "removed" : "all";
   GAL.sel.clear(); GAL.last = -1;
@@ -269,6 +328,8 @@ document.addEventListener("keydown", e => {
   if (e.target.closest && e.target.closest("input,textarea,select")) return;
   if (e.key === "Escape") galSelectMode(false);
   else if (e.key === "Delete" || e.key === "Backspace") galAct();
+  else if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey)
+    galRotSel(e.shiftKey ? -90 : 90);
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a"){
     for (const x of GAL.list) GAL.sel.add(x.r.id);
     galPaint();
@@ -287,17 +348,25 @@ window.addEventListener("resize", () => {
 });
 
 /* ---- viewer ---- */
-const VW = { open:false, i:-1, tok:0, url:null, info:false };
+const VW = { open:false, i:-1, tok:0, url:null, info:false, angle:0 };
 
 function vwRectFor(img){
   const availW = window.innerWidth - (VW.info ? 320 : 0), top = 56, availH = window.innerHeight - top - 16;
-  const ar = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
+  let ar = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
+  if (rotOdd(VW.angle)) ar = 1 / ar;            // a quarter turn swaps width and height
   const w = Math.min(availW - 32, availH * ar), h = w / ar;
   return { left:(availW - w) / 2, top:top + (availH - h) / 2, width:w, height:h };
 }
+/* `rc` is the box the photo should OCCUPY on screen. A quarter-turned element
+   is laid out with width and height swapped and the same centre, then turned.
+   VW.angle accumulates (90, 180, 270, 360 ...) so the animation takes the short
+   way round; it is equivalent to the record's 0-270 value modulo 360. */
 function vwSet(img, rc){
-  img.style.left = rc.left + "px"; img.style.top = rc.top + "px";
-  img.style.width = rc.width + "px"; img.style.height = rc.height + "px";
+  const odd = rotOdd(VW.angle), w = odd ? rc.height : rc.width, h = odd ? rc.width : rc.height;
+  img.style.width = w + "px"; img.style.height = h + "px";
+  img.style.left = (rc.left + (rc.width - w) / 2) + "px";
+  img.style.top = (rc.top + (rc.height - h) / 2) + "px";
+  img.style.rotate = VW.angle + "deg";
 }
 /* Fits the photo to the free space. Animated when the layout changes under it
    (opening the info panel), instant while the window itself is being resized. */
@@ -349,6 +418,7 @@ async function vwLoadOriginal(r, tok){
 async function vwShow(i){
   const tok = ++VW.tok, r = GAL.list[i].r, img = $("#vwImg");
   VW.i = i;
+  VW.angle = r.rotation || 0;
   vwFill(r);
   const u = await thumbUrl(r.id);
   if (tok !== VW.tok) return;
@@ -367,6 +437,7 @@ async function openViewer(i){
   v.hidden = false;
   const tok = ++VW.tok;
   VW.i = i;
+  VW.angle = GAL.list[i].r.rotation || 0;
   vwFill(GAL.list[i].r);
   const u = await thumbUrl(GAL.list[i].r.id);
   if (tok !== VW.tok) return;
@@ -431,6 +502,22 @@ async function vwRemove(){
   vwPlace(false);
 }
 $("#vwRemove").onclick = vwRemove;
+
+/* Turns the open photo at once, then saves it. If saving fails the picture
+   turns back, so what is on screen is what is stored. */
+async function vwRotate(dir){
+  if (!VW.open || !GAL.list[VW.i]) return;
+  const id = GAL.list[VW.i].r.id, was = VW.angle;
+  VW.angle = was + dir * 90;
+  vwPlace(true);
+  if (!await galRotate([id], dir * 90, true) && VW.open && GAL.list[VW.i]
+      && GAL.list[VW.i].r.id === id){
+    VW.angle = was;
+    vwPlace(true);
+  }
+}
+$("#vwRotL").onclick = () => vwRotate(-1);
+$("#vwRotR").onclick = () => vwRotate(1);
 $("#vwClose").onclick = closeViewer;
 $("#vwPrev").onclick = () => vwStep(-1);
 $("#vwNext").onclick = () => vwStep(1);
@@ -454,6 +541,8 @@ document.addEventListener("keydown", e => {
   else if (e.key === "ArrowRight") vwStep(1);
   else if (e.key === "i" || e.key === "I") $("#vwInfoBtn").click();
   else if (e.key === "Delete" || e.key === "Backspace") vwRemove();
+  else if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey)
+    vwRotate(e.shiftKey ? -1 : 1);
   else return;
   e.preventDefault();
 });

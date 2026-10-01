@@ -50,6 +50,7 @@ The gap was mostly **browsing** and **two whole media types**, not intelligence.
 | People (face grouping, named only by you) | **built**, 30 September 2026, ArcFace on 1 October |
 | Library (all photos in one grid, zoom viewer) | **built**, 1 October 2026 |
 | Remove from library (hide, undo, restore) | **built**, 1 October 2026 |
+| Rotate photos from the Library (view-only, undoable) | **built**, 1 October 2026 |
 | Any OpenAI-compatible server, not only LM Studio | **built**, 1 October 2026 |
 | Video | not started |
 | Perceptual hash, near-duplicates and bursts | not started |
@@ -267,7 +268,8 @@ search better or worse.
 | **Export** | Copy a selection or search result to a folder of your choice, or a contact-sheet HTML. Exporting to your own disk is not sharing. |
 | **Index integrity check** | Report orphaned vectors and thumbnails and records whose file is gone; repair only on confirmation. |
 | **Re-extract by version** | Offer to re-run extraction only for records made with an older prompt, to avoid a full rescan when the prompt improves. |
-| **One viewer everywhere** | Open the Library viewer from Chat and Timeline results too, so they gain arrow-key stepping and Remove. |
+| **One viewer everywhere** | Open the Library viewer from Chat and Timeline results too, so they gain arrow-key stepping, Remove and Rotate. (Their tiles already show the saved rotation.) |
+| **Write rotation to the file** | An opt-in "apply to the file" for users who want other apps to agree. It would be the first feature that modifies originals, so it needs its own safeguards. |
 | **Pets as first-class** | Google Photos groups pets. The same clustering machinery applied to the `animals` field. |
 | **RAW** | Lower value than it looks: most RAW files sit next to a JPEG that is already indexed. Better handled by pairing siblings than by decoding RAW in a browser. |
 | **Live/Motion photos** | Recognise the paired video and treat it as one item. |

@@ -23,6 +23,7 @@ anything non-trivial. For *measurements* behind these decisions, see
 - [The chat agent](#the-chat-agent)
 - [Browsing: Library and Timeline](#browsing-library-and-timeline)
   - [Library](#library)
+  - [Rotating photos](#rotating-photos)
   - [Removing photos](#removing-photos)
   - [Timeline](#timeline)
 - [Faces](#faces)
@@ -209,6 +210,9 @@ distinction matters:
 | `deleted: true` | the file is gone from disk ("missing") | **Mark missing** | treats it as absent, so the same file would be indexed again if it returned |
 | `hidden: true` | *you* removed it from the library | the Library | leaves it alone: still matched, never rescanned, never re-surfaced |
 
+A fourth field is a **view setting**, not a lifecycle state: `rotation` (0, 90, 180 or 270
+degrees clockwise), set from the Library and applied only when a picture is drawn.
+
 [↑ Back to Index](#index)
 
 
@@ -343,7 +347,35 @@ and a reverse-order toggle.
   Arrow keys step through the photos, `I` toggles the details panel, `Esc` closes, and closing
   animates back into the tile (or fades, if that tile has scrolled out of view). Formats a
   browser cannot display, such as HEIC and TIFF, stay on the thumbnail and say so.
-- **Select mode** allows click, shift-click range and select-all, then **Remove**.
+- **Select mode** allows click, shift-click range and select-all, then **Rotate** or **Remove**.
+- **Rotation** is non-destructive; see [Rotating photos](#rotating-photos).
+
+### Rotating photos
+
+Orientation is fixed once, at scan time: EXIF rotation is applied while decoding, so the
+thumbnail and the model both see the picture the right way up. A rotation made later in the
+Library is therefore a **correction on top of that**, and it is stored, not baked in.
+
+- **Where it lives.** A `rotation` field (0, 90, 180 or 270, clockwise) on the photo's record,
+  appended like any other change. Neither the original file nor the stored thumbnail is
+  rewritten, which keeps the rule that nothing outside `.photoindex/` is modified. The cost is
+  that other applications still show the file's own orientation.
+- **Where it is drawn.** Tiles in the Library, Timeline and chat results, and the viewer, apply
+  the angle with the CSS `rotate` property. That property composes with the `transform`
+  already used for hover and selection scaling, where setting `transform` itself would have
+  overridden them. A square, centre-cropped tile can simply be rotated: the centre square of a
+  turned image is the turned centre square of the original.
+- **The viewer** keeps an accumulating angle (90, 180, 270, 360 and so on), so each press
+  animates the short way round. A quarter turn swaps the photo's width and height when its
+  box is fitted to the window; the element is laid out with the dimensions swapped and the same
+  centre, then turned. `R` turns right and `Shift+R` turns left, in the viewer and in Select
+  mode, where the toolbar buttons turn every selected photo.
+- **Relative, so undoable.** A turn adds to each photo's own current angle (modulo 360), so a
+  mixed selection stays mixed and the opposite turn is an exact undo.
+- **Serialised writes.** Every Library change goes through one queue. Rotating twice quickly
+  would otherwise start both changes from the same old angle and lose one. Memory is updated
+  only after the write succeeds, and the viewer turns back if saving fails.
+- **Survives a rescan.** Like `hidden`, the angle is carried onto the rebuilt record.
 
 ### Removing photos
 

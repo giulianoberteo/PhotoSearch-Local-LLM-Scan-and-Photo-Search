@@ -91,6 +91,7 @@ function tlFill(section){
     const im = el("img");
     im.alt = r.caption || r.name || "";
     im.loading = "lazy";
+    applyRotation(im, r);
     thumbUrl(r.id).then(u => { if (u) im.src = u; });
     fig.append(im);
     const bits = [];

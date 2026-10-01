@@ -1809,6 +1809,32 @@ async function selfTest(){
           ok("restored records are no longer hidden", !IDX.records.get("L598").hidden);
           GAL.view = "all"; galBuild();
           eq("the library has one fewer removed photo", GAL.list.length, n0 - 1);
+
+          /* Rotation is a view setting kept in the record; the file is never
+             touched. Turns are relative to each photo's own angle, wrap at 360,
+             and queued so quick successive clicks cannot lose one. */
+          galClear(); galLayout();
+          const rid = GAL.list[0].r.id;
+          written.length = 0;
+          eq("rotating reports how many it turned", await galRotate([rid], 90, true), 1);
+          eq("a turn is stored on the record", IDX.records.get(rid).rotation, 90);
+          ok("and written to the index, not just held in memory",
+             written.length === 1 && written[0].rotation === 90 && !written[0].hidden);
+          await galRotate([rid], -180, true);
+          eq("turning left past zero wraps to 270", IDX.records.get(rid).rotation, 270);
+          await Promise.all([galRotate([rid], 90, true), galRotate([rid], 90, true),
+                             galRotate([rid], 90, true)]);
+          eq("three quick turns are all applied", IDX.records.get(rid).rotation, 180);
+          const rt = [...GAL.shown.values()].find(f => f.dataset.id === rid);
+          ok("the tile is drawn turned", !!rt && rt.firstChild.style.rotate === "180deg",
+             rt ? rt.firstChild.style.rotate : "no tile");
+          eq("the list sees the new angle", GAL.list[0].r.rotation, 180);
+          await galRotate([rid], 180, true);
+          eq("a half turn back returns to upright", IDX.records.get(rid).rotation, 0);
+          ok("an upright photo carries no turn on its tile",
+             rt.firstChild.style.rotate === "");
+          eq("turns snap to quarter turns", normRot(100), 90);
+          ok("odd quarter turns swap width and height", rotOdd(270) && rotOdd(-90) && !rotOdd(180));
         } finally {
           ensureIndex = real.ei; readFullRecords = real.rf; appendLines = real.al;
           GAL.view = "all";
