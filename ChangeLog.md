@@ -1,7 +1,9 @@
 # ChangeLog
 
 All notable changes to PhotoSearch, newest first. The format follows
-[Keep a Changelog](https://keepachangelog.com/), and versions are `MAJOR.MINOR.PATCH`.
+[Keep a Changelog](https://keepachangelog.com/), and versions are `MAJOR.MINOR.PATCH`. While the major version is 0, every change bumps the
+**patch** number (0.6.1, 0.6.2, …); the minor number only moves when the maintainer decides a
+milestone has been reached.
 
 The project had no version numbers before this file existed, so the history below was
 reconstructed from the git log and starts at **0.1.0**. While the major version is 0, the
@@ -15,7 +17,7 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.7.0 (2026-10-01)](#070-2026-10-01)
+- [0.6.1 (2026-10-01)](#061-2026-10-01)
   - [Added](#added)
   - [Changed](#changed)
 - [0.6.0 (2026-10-01)](#060-2026-10-01)
@@ -50,7 +52,7 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
 
-## 0.7.0 (2026-10-01)
+## 0.6.1 (2026-10-01)
 
 **Summary:** every tab now has its own link.
 
