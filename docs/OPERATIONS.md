@@ -21,7 +21,7 @@ it with your own, as explained in [Finding your index](#finding-your-index).
 - [How search works](#how-search-works)
 - [Known problem: slow network storage](#known-problem-slow-network-storage)
 - [Settings that matter](#settings-that-matter)
-  - [Library: removing and restoring photos](#library-removing-and-restoring-photos)
+  - [Library: rotating, removing and restoring photos](#library-rotating-removing-and-restoring-photos)
   - [Faces](#faces)
   - [Picking a different photo folder](#picking-a-different-photo-folder)
 - [Checklist after any interruption](#checklist-after-any-interruption)
@@ -296,7 +296,12 @@ they are.
 | **Back up after every scan** | On by default; keeps the last 3. |
 | **Rebuild thumbnails** (Scan tab) | Remakes missing thumbnails from the originals. No model time. |
 
-### Library: removing and restoring photos
+### Library: rotating, removing and restoring photos
+
+To turn a photo, open it and press `R` (right) or `Shift+R` (left), or use the arrows in the
+viewer toolbar. In Select mode, the same buttons turn every selected photo. The angle is saved
+in `records.jsonl`; the file is not changed, so other apps show the original orientation. An
+Undo bar offers to turn it back.
 
 In the **Library** tab, *Select* (or the viewer's *Remove* button) hides photos from the
 library, search, chat, the Timeline and People. It changes `records.jsonl` only; the files on

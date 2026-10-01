@@ -105,7 +105,7 @@ The current version is shown in the app's footer; the [ChangeLog](ChangeLog.md) 
 | **Browses like a photo app** | a zoomable Library grid, a full-window viewer, a day-by-day Timeline |
 | **Talks to your library** | a chat agent with nine tools that answers with the matching photos |
 | **Groups faces, never identifies them** | people appear as anonymous groups until *you* name them |
-| **Tidies safely** | remove photos from the library with undo; your files are never touched |
+| **Tidies safely** | rotate or remove photos from the Library, with undo; your files are never touched |
 | **Survives reality** | resumable scans, flaky-network-share tolerance, verified backups, a built-in self-test |
 | **Stays private** | no accounts, no API keys, no telemetry, no photo ever uploaded |
 
@@ -174,7 +174,7 @@ in **[docs/SETUP.md](docs/SETUP.md)**.
 
 | tab | what it is for |
 |---|---|
-| **Library** | Every photo in one grid. The **Size** slider changes density. Click a photo and it grows out of its tile into a full-window viewer: `←` `→` step through photos, `I` shows details, `Esc` closes. **Select** enables multi-select (click, shift-click for a range, `⌘/Ctrl+A`); **Remove** hides the selection, and **Removed (N)** lists what you hid so you can **Restore** it. |
+| **Library** | Every photo in one grid. The **Size** slider changes density. Click a photo and it grows out of its tile into a full-window viewer: `←` `→` step through photos, `R` rotates right, `Shift+R` rotates left, `I` shows details, `Esc` closes. **Select** enables multi-select (click, shift-click for a range, `⌘/Ctrl+A`); the rotate buttons turn the whole selection and **Remove** hides it. **Removed (N)** lists what you hid so you can **Restore** it. |
 | **Chat** | Ask about your photos in plain language. Shows which tools the model used and the photos it found; click one for the full image and its metadata. |
 | **Timeline** | Browse by day, newest first, with places and occasions in the headings, a year bar and a date picker. |
 | **People** | Find faces, review the groups, name them, merge and split. Names then work in search and chat. |
@@ -231,7 +231,7 @@ from them, and the app's own **settings**.
 |---|---|---|
 | **Your photos** | where they already are, untouched | the only copy of the full-size pixels |
 | **Metadata** (the index) | `.photoindex/`: beside the photos by default, or a folder you pick in Settings | captions, descriptions, objects, visible text, dates and where each date came from, camera, GPS and place name, embeddings, a content fingerprint, and the path back to each photo |
-| **Derived images** | inside the index | a 384px thumbnail per photo, and small aligned face crops |
+| **Derived images** | inside the index | a 384px thumbnail per photo, and small aligned face crops. Thumbnails are never rewritten when you rotate; the angle is stored beside the metadata |
 | **Settings** | the browser's own storage | server URL, model choices, scan options, Library size, and *pointers* to your last photo and index folders (not copies of anything) |
 | **The model server** | its own process, usually on your machine | receives a resized 1024px copy of each photo while it is scanned, and your chat questions; the app asks it to keep nothing |
 | **Downloaded helpers** | a public CDN, kept in the browser's cache | HEIC/TIFF decoders and the face models; place names go into `geo/` in the index |
@@ -248,7 +248,8 @@ original from your folder; if the folder is not connected, it shows the thumbnai
   [docs/OPERATIONS.md](docs/OPERATIONS.md#backing-up-by-hand).
 - Moving or renaming photos does not lose their metadata; photos are matched by content, not
   only by path.
-- Removing a photo in the Library only flags its record as hidden. The file stays put.
+- Removing a photo in the Library only flags its record as hidden, and rotating one only stores
+  an angle on its record. The file stays put either way.
 - Keeping the index on a local disk while the photos live on a NAS means browsing and
   search keep working while the NAS is asleep.
 - Chrome forgets folder access when the page reloads, so you re-approve the photo folder; the
@@ -267,8 +268,10 @@ The app talks only to the model server you point it at (by default on your own m
 public libraries and models are *downloaded* once and cached when first needed: image decoders
 for HEIC and TIFF, the face-recognition model, and the place-name list. Nothing is uploaded.
 
-**Your files are never modified.** The app writes only inside `.photoindex/`. Even "Remove"
-means "hide from the index"; the photo stays exactly where it is, and you can restore it.
+**Your files are never modified.** The app writes only inside `.photoindex/`. "Remove" means
+"hide from the index" and "Rotate" means "display it turned"; the photo stays exactly where it
+is, byte for byte, and both are undoable. Because rotation is a display setting, other apps
+will still show the original orientation.
 
 **People are grouped, never identified.** The extraction prompt forbids naming people or
 guessing ethnicity, religion or health, and describes them only by age group, clothing and

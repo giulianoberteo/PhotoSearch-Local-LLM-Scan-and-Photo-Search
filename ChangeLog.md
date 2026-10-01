@@ -15,34 +15,63 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.5.4 (2026-10-01)](#054-2026-10-01)
+- [0.6.0 (2026-10-01)](#060-2026-10-01)
+  - [Added](#added)
   - [Changed](#changed)
+- [0.5.4 (2026-10-01)](#054-2026-10-01)
+  - [Changed](#changed-1)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
-  - [Added](#added)
-  - [Changed](#changed-1)
-- [0.5.1 (2026-10-01)](#051-2026-10-01)
-  - [Changed](#changed-2)
-- [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-1)
+  - [Changed](#changed-2)
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-3)
-  - [Fixed](#fixed-1)
-- [0.4.0 (2026-10-01)](#040-2026-10-01)
+- [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-2)
   - [Changed](#changed-4)
-- [0.3.0 (2026-09-30)](#030-2026-09-30)
+  - [Fixed](#fixed-1)
+- [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-3)
   - [Changed](#changed-5)
-  - [Fixed](#fixed-2)
-- [0.2.0 (2026-09-29)](#020-2026-09-29)
+- [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-4)
   - [Changed](#changed-6)
+  - [Fixed](#fixed-2)
+- [0.2.0 (2026-09-29)](#020-2026-09-29)
+  - [Added](#added-5)
+  - [Changed](#changed-7)
   - [Fixed](#fixed-3)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
-  - [Added](#added-5)
+  - [Added](#added-6)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.0 (2026-10-01)
+
+**Summary:** photos can be rotated from the Library.
+
+### Added
+
+- **Rotate from the Library.** In the viewer: ↺ / ↻ buttons, `R` to turn right and `Shift+R` to
+  turn left, with an animated turn. In Select mode: the same buttons turn every selected photo.
+  An Undo bar follows each turn.
+- Saved rotation is shown on tiles in the **Library, Timeline and chat results**, and listed in
+  a photo's details.
+- Self-test assertions for rotation.
+
+### Changed
+
+- Rotation is **non-destructive**: it is a `rotation` view setting (0, 90, 180 or 270 degrees
+  clockwise) stored on the photo's record in the index. The original file and the stored
+  thumbnail are never rewritten, so other applications still show the original orientation.
+- All Library index changes (rotate, remove, restore) now go through one write queue, so quick
+  successive actions cannot overwrite each other. Removing and restoring behave as before.
+- A rescan keeps a photo's rotation, as it already did for hidden photos.
+
+[↑ Back to Index](#index)
+
+---
 
 ## 0.5.4 (2026-10-01)
 

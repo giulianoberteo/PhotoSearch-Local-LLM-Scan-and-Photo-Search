@@ -61,6 +61,7 @@ function renderGrid(host, recs, title){
   for (const r of recs){
     const fig = el("figure");
     const im = el("img"); im.alt = r.caption || r.name || ""; im.loading = "lazy";
+    applyRotation(im, r);
     thumbUrl(r.id).then(u => { if (u) im.src = u; });
     fig.append(im);
     const cap = el("figcaption", null,
@@ -129,6 +130,7 @@ function metaList(r){
     ? r.people.count_bucket + (r.people.description ? " — " + r.people.description : "") : null);
   add("text in image", r.visible_text && r.visible_text.has_text ? r.visible_text.text : null);
   add("colours", (r.dominant_colors || []).join(", "));
+  add("rotation", r.rotation ? r.rotation + "° clockwise (view only; the file is unchanged)" : null);
   add("file", r.path + (r.width && r.height ? "  ·  " + r.width + "x" + r.height : ""));
   return dl;
 }
