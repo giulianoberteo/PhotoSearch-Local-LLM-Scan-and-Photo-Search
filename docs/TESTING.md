@@ -58,6 +58,8 @@ scratch folder, so your real photos and index are never touched.
   thumbnails pinned then released, and the viewer's open, step, details and close cycle
 - **removing photos:** that a removal sets `hidden` and not `deleted`, leaves the library and
   search, appears in the Removed view, and is undone by restoring
+- **tab links:** that `#library` and its case, parameter, slash and encoded variants name the right
+  tab, that `#selftest` and unknown hashes are never tabs, and that showing a tab selects it
 - **rotating photos:** that a turn is stored on the record and written to the index, wraps
   at 360 degrees, applies to each photo from its own angle, survives three quick clicks, and
   is drawn on the tile

@@ -1,7 +1,9 @@
 # ChangeLog
 
 All notable changes to PhotoSearch, newest first. The format follows
-[Keep a Changelog](https://keepachangelog.com/), and versions are `MAJOR.MINOR.PATCH`.
+[Keep a Changelog](https://keepachangelog.com/), and versions are `MAJOR.MINOR.PATCH`. While the major version is 0, every change bumps the
+**patch** number (0.6.1, 0.6.2, …); the minor number only moves when the maintainer decides a
+milestone has been reached.
 
 The project had no version numbers before this file existed, so the history below was
 reconstructed from the git log and starts at **0.1.0**. While the major version is 0, the
@@ -15,37 +17,65 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.6.0 (2026-10-01)](#060-2026-10-01)
+- [0.6.1 (2026-10-01)](#061-2026-10-01)
   - [Added](#added)
   - [Changed](#changed)
-- [0.5.4 (2026-10-01)](#054-2026-10-01)
+- [0.6.0 (2026-10-01)](#060-2026-10-01)
+  - [Added](#added-1)
   - [Changed](#changed-1)
+- [0.5.4 (2026-10-01)](#054-2026-10-01)
+  - [Changed](#changed-2)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
-  - [Added](#added-1)
-  - [Changed](#changed-2)
-- [0.5.1 (2026-10-01)](#051-2026-10-01)
-  - [Changed](#changed-3)
-- [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-2)
+  - [Changed](#changed-3)
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-4)
-  - [Fixed](#fixed-1)
-- [0.4.0 (2026-10-01)](#040-2026-10-01)
+- [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-3)
   - [Changed](#changed-5)
-- [0.3.0 (2026-09-30)](#030-2026-09-30)
+  - [Fixed](#fixed-1)
+- [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-4)
   - [Changed](#changed-6)
-  - [Fixed](#fixed-2)
-- [0.2.0 (2026-09-29)](#020-2026-09-29)
+- [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-5)
   - [Changed](#changed-7)
+  - [Fixed](#fixed-2)
+- [0.2.0 (2026-09-29)](#020-2026-09-29)
+  - [Added](#added-6)
+  - [Changed](#changed-8)
   - [Fixed](#fixed-3)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
-  - [Added](#added-6)
+  - [Added](#added-7)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.1 (2026-10-01)
+
+**Summary:** every tab now has its own link.
+
+### Added
+
+- **Tab links.** `PhotoSearch.html#library`, `#chat`, `#timeline`, `#people`, `#scan` and
+  `#settings` open that tab directly. Choosing a tab updates the address, so views can be
+  bookmarked or shared, and Back and Forward step through the tabs visited. Names are
+  case-insensitive and ignore trailing parameters.
+- Self-test assertions for the link parsing.
+
+### Changed
+
+- When a folder or index location is connected after the page has loaded, the open tab now
+  refreshes itself. Previously a tab opened first, such as one reached by a link, could stay on
+  "connect a folder in Settings" until you switched away and back.
+- Tab switching is now a single `showTab()` function shared by clicks, links and the
+  browser's history.
+- `#selftest` is unchanged and is never treated as a tab.
+
+[↑ Back to Index](#index)
+
+---
 
 ## 0.6.0 (2026-10-01)
 

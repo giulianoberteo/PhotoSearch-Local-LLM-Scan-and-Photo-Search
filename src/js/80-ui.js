@@ -142,6 +142,7 @@ async function useDirectory(handle){
   await fillScopes();
   IDX.loaded = false;
   await refreshPlan();
+  refreshActiveTab();
 }
 function renderIndexWhere(){
   const n = $("#indexWhere");
@@ -167,6 +168,7 @@ $("#sIndexMode").onchange = async () => {
   }
   IDX.loaded = false;
   await refreshPlan();
+  refreshActiveTab();
 };
 $("#sOrder").onchange = () => { S.scanOrder = $("#sOrder").value; saveSettings();
   if (S.plan) renderPlan(S.plan); };

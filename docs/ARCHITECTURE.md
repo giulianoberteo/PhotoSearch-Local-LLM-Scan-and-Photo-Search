@@ -14,6 +14,7 @@ anything non-trivial. For *measurements* behind these decisions, see
   - [Browser storage holds settings, not data](#browser-storage-holds-settings-not-data)
   - [Downloads](#downloads)
   - [What can be rebuilt, and what cannot](#what-can-be-rebuilt-and-what-cannot)
+- [Navigation](#navigation)
 - [Source layout](#source-layout)
 - [The index](#the-index)
 - [Identifying a photo](#identifying-a-photo)
@@ -146,6 +147,30 @@ scan and why [OPERATIONS.md](OPERATIONS.md#backing-up-by-hand) has a command tha
 
 ---
 
+## Navigation
+
+The six tabs are addressed by the URL hash: `#library`, `#chat`, `#timeline`, `#people`, `#scan`
+and `#settings`. `tabFromHash()` turns a hash into a tab name (case-insensitive, tolerating a
+leading `/`, percent-encoding and trailing `&parameters`), and returns nothing for any other
+hash. That matters because the self-test is started with `#selftest`, which must never be
+mistaken for a tab.
+
+- **Choosing a tab** sets the hash (adding a history entry, so Back and Forward work) and calls
+  `showTab()`.
+- **Opening or changing an address** calls `showTab()` for a valid tab name, at boot and on
+  `hashchange`.
+- **`showTab()`** selects the button, hides the other tabs and runs the tab's "shown" hook
+  (the Library, Timeline and People build themselves on first view). It does not touch the
+  hash, so it can be called from either direction without looping.
+- **Deep links and reconnecting.** Chrome drops folder access on reload, so a page opened on
+  `#library` usually appears before its folder is connected. When a folder or index location is
+  connected afterwards, `refreshActiveTab()` re-runs the open tab's hook, so it fills in
+  without the user having to switch away and back.
+
+[↑ Back to Index](#index)
+
+---
+
 ## Source layout
 
 `PhotoSearch.html` is **generated**. The source lives in `src/js/` and `build.py`
@@ -154,7 +179,7 @@ earlier, never the reverse.
 
 | file | responsibility |
 |---|---|
-| `00-core.js` | helpers, settings, the model-server client, tab switching |
+| `00-core.js` | helpers, settings, the model-server client, tab switching and tab links |
 | `25-datetime.js` · `26-geo.js` · `35-exif.js` | dates and occasions, offline place names, EXIF and date confidence |
 | `30-worker.js` | the decode and resize worker |
 | `40-store.js` · `42-backup.js` | the `.photoindex/` reader and writer; backup and restore |
