@@ -37,6 +37,7 @@ The current version is shown in the app's footer; the [ChangeLog](ChangeLog.md) 
   - [3. Connect, then scan](#3-connect-then-scan)
 - [Using the app](#using-the-app)
 - [How it works](#how-it-works)
+- [Where your photos and data live](#where-your-photos-and-data-live)
 - [Principles](#principles)
 - [Models and structured output](#models-and-structured-output)
 - [What it costs](#what-it-costs)
@@ -156,6 +157,56 @@ named them. The Library is for looking; Chat is for asking.
    clustered by resemblance and stay anonymous until named.
 
 The full design is in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
+[↑ Back to Index](#index)
+
+---
+
+## Where your photos and data live
+
+PhotoSearch keeps three things strictly apart: your **photos**, the **metadata** it derives
+from them, and the app's own **settings**.
+
+```
+ YOUR PHOTO FOLDER                      THE INDEX  (.photoindex/)             THE BROWSER
+ e.g. /Volumes/Photos/                  beside the photos by default,         (this Chrome profile)
+                                        or a folder you choose
+   2021/IMG_0001.jpg   ── read only ─▶    records.jsonl   metadata            settings, plus a
+   2021/IMG_0002.heic                     vectors.bin     embeddings          remembered pointer
+   trip/IMG_0100.jpg                      thumbs/         384px previews      to each folder
+                                          faces/          face data
+   never copied, moved,                   backups/ geo/   copies, place names
+   edited or deleted
+```
+
+| what | where it lives | what is in it |
+|---|---|---|
+| **Your photos** | where they already are, untouched | the only copy of the full-size pixels |
+| **Metadata** (the index) | `.photoindex/`: beside the photos by default, or a folder you pick in Settings | captions, descriptions, objects, visible text, dates and where each date came from, camera, GPS and place name, embeddings, a content fingerprint, and the path back to each photo |
+| **Derived images** | inside the index | a 384px thumbnail per photo, and small aligned face crops |
+| **Settings** | the browser's own storage | server URL, model choices, scan options, Library size, and *pointers* to your last photo and index folders (not copies of anything) |
+| **The model server** | its own process, usually on your machine | receives a resized 1024px copy of each photo while it is scanned, and your chat questions; the app asks it to keep nothing |
+| **Downloaded helpers** | a public CDN, kept in the browser's cache | HEIC/TIFF decoders and the face models; place names go into `geo/` in the index |
+
+**How the two halves connect.** Each metadata record names its photo by relative path and by a
+content fingerprint, and holds no full-size pixels. The Library, Timeline, search and chat
+all work from the index alone. Only when you open a photo full-size does the app read the
+original from your folder; if the folder is not connected, it shows the thumbnail instead.
+
+**What follows from that**
+
+- Deleting `.photoindex/` leaves every photo untouched, but you lose the scan (about 21.5
+  seconds of model time per photo), so back it up. See
+  [docs/OPERATIONS.md](docs/OPERATIONS.md#backing-up-by-hand).
+- Moving or renaming photos does not lose their metadata; photos are matched by content, not
+  only by path.
+- Removing a photo in the Library only flags its record as hidden. The file stays put.
+- Keeping the index on a local disk while the photos live on a NAS means browsing and
+  search keep working while the NAS is asleep.
+- Chrome forgets folder access when the page reloads, so you re-approve the photo folder; the
+  index is not affected.
+
+Every file in the index is described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#where-data-lives).
 
 [↑ Back to Index](#index)
 
@@ -291,7 +342,8 @@ server is in [docs/SETUP.md](docs/SETUP.md#choosing-a-server).
 **Can I stop and resume?** Yes. The plan is rebuilt from what is on disk, so you never start
 from zero, even after a crash.
 
-**Where is my data?** In `.photoindex/` beside the photos, or a folder you choose in Settings.
+**Where is my data?** Photos stay where they are. The metadata is in `.photoindex/` beside the
+photos, or a folder you choose in Settings. See [Where your photos and data live](#where-your-photos-and-data-live);
 [docs/OPERATIONS.md](docs/OPERATIONS.md) lists every file and how to back it up by hand.
 
 **It does not work in Firefox or Safari.** Correct; they lack the File System Access API.

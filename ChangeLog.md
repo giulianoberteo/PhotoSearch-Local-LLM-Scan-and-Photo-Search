@@ -15,27 +15,54 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.5.1 (2026-10-01)](#051-2026-10-01)
-  - [Changed](#changed)
-- [0.5.0 (2026-10-01)](#050-2026-10-01)
+- [0.5.2 (2026-10-01)](#052-2026-10-01)
   - [Added](#added)
+  - [Changed](#changed)
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-1)
-  - [Fixed](#fixed)
-- [0.4.0 (2026-10-01)](#040-2026-10-01)
+- [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-1)
   - [Changed](#changed-2)
-- [0.3.0 (2026-09-30)](#030-2026-09-30)
+  - [Fixed](#fixed)
+- [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-2)
   - [Changed](#changed-3)
-  - [Fixed](#fixed-1)
-- [0.2.0 (2026-09-29)](#020-2026-09-29)
+- [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-3)
   - [Changed](#changed-4)
+  - [Fixed](#fixed-1)
+- [0.2.0 (2026-09-29)](#020-2026-09-29)
+  - [Added](#added-4)
+  - [Changed](#changed-5)
   - [Fixed](#fixed-2)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
-  - [Added](#added-4)
+  - [Added](#added-5)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.5.2 (2026-10-01)
+
+**Summary:** the README and Architecture now explain where photos live, where the metadata
+lives, and how the two are joined. Documentation only; no behaviour changed.
+
+### Added
+
+- README section **Where your photos and data live**: a diagram and a table separating the
+  photo folder, the index, derived images, browser settings, the model server and downloaded
+  helpers, plus what follows from that (what survives deleting the index, moving photos, or a
+  sleeping NAS).
+- Architecture section **Where data lives**: the six places data can be, how the photo folder
+  and the index are joined (`path` + `library_root` and a content fingerprint), which views
+  need the index and which need the photo folder, what the model server and the browser each
+  hold, and what can be rebuilt and at what cost.
+
+### Changed
+
+- The README FAQ answer to "Where is my data?" now links to that section.
+
+[↑ Back to Index](#index)
+
+---
 
 ## 0.5.1 (2026-10-01)
 
