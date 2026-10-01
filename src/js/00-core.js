@@ -1,6 +1,6 @@
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.0";
+const APP_VERSION = "0.7.0";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -164,20 +164,45 @@ async function idbGet(k){ const db = await idb(); return new Promise((res, rej) 
   const t = db.transaction("kv","readonly"); const q = t.objectStore("kv").get(k);
   q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
 
-/* ================= tabs ================= */
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+/* ================= tabs =================
+   Each tab has an address: PhotoSearch.html#library, #chat, #timeline, #people,
+   #scan or #settings. Choosing a tab updates the address (so Back and Forward
+   work, and a tab can be bookmarked or shared), and opening or changing an
+   address chooses the tab. Hashes that are not a tab, such as #selftest, are
+   left alone. */
+const TABS = ["library","chat","timeline","people","scan","settings"];
+let curTab = "settings";
+function tabFromHash(hash){
+  let h = hash == null ? location.hash : hash;
+  try { h = decodeURIComponent(h); } catch {}
+  h = h.replace(/^#\/?/, "").toLowerCase().split(/[&?\/]/)[0];
+  return TABS.includes(h) ? h : null;
+}
+/* Some tabs read the whole index, so they are built when first shown rather
+   than at boot: opening the app must not wait for them. */
+function tabShownHook(name){
+  if (name === "library" && typeof onLibraryShown === "function") onLibraryShown();
+  if (name === "timeline" && typeof onTimelineShown === "function") onTimelineShown();
+  if (name === "people" && typeof onPeopleShown === "function") onPeopleShown();
+}
+function showTab(name){
+  curTab = name;
   document.querySelectorAll('nav button').forEach(x =>
-    x.setAttribute("aria-selected", String(x === b)));
-  ["library","chat","timeline","people","scan","settings"].forEach(t =>
-    $("#tab-" + t).hidden = (t !== b.dataset.tab));
-  /* The timeline reads the whole index, so it is built on first view rather
-     than at boot -- opening the app must not wait for it. */
-  if (b.dataset.tab === "library" && typeof onLibraryShown === "function")
-    onLibraryShown();
-  if (b.dataset.tab === "timeline" && typeof onTimelineShown === "function")
-    onTimelineShown();
-  if (b.dataset.tab === "people" && typeof onPeopleShown === "function")
-    onPeopleShown();
+    x.setAttribute("aria-selected", String(x.dataset.tab === name)));
+  TABS.forEach(t => $("#tab-" + t).hidden = (t !== name));
+  tabShownHook(name);
+}
+/* A folder connecting after the page loaded (Chrome drops access on reload, so
+   this is the normal order) must not leave the open tab on "connect a folder". */
+function refreshActiveTab(){ tabShownHook(curTab); }
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  const t = b.dataset.tab;
+  if (tabFromHash() !== t) location.hash = t;      // adds a history entry
+  showTab(t);
+});
+window.addEventListener("hashchange", () => {
+  const t = tabFromHash();
+  if (t && t !== curTab) showTab(t);
 });
 
 /* ================= browser gate ================= */

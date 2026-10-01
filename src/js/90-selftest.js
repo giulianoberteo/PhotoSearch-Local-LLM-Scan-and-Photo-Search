@@ -1908,6 +1908,28 @@ async function selfTest(){
       S.baseUrl = keepUrl; S.structuredMode = keepMode; S.provider = null;
     }
 
+    /* ---- tab links ----
+       PhotoSearch.html#library and friends open a tab directly. The address is
+       shared with #selftest, which must never be mistaken for a tab. */
+    {
+      eq("#library names the Library tab", tabFromHash("#library"), "library");
+      eq("tab names are case-insensitive", tabFromHash("#Timeline"), "timeline");
+      eq("extra parameters after a tab are ignored", tabFromHash("#people&x=1"), "people");
+      eq("a leading slash is tolerated", tabFromHash("#/settings"), "settings");
+      eq("percent-encoding is decoded", tabFromHash("#%63hat"), "chat");
+      eq("#selftest is not a tab", tabFromHash("#selftest"), null);
+      eq("nor is #selftest with parameters", tabFromHash("#selftest&heic=file:///x.heic"), null);
+      eq("an unknown name is not a tab", tabFromHash("#nonsense"), null);
+      eq("an empty address is not a tab", tabFromHash(""), null);
+      eq("every tab has a link name", TABS.length, document.querySelectorAll("nav button").length);
+      const was = curTab;
+      showTab("scan");
+      ok("showing a tab selects it and hides the others",
+         $("#tab-scan").hidden === false && $("#tab-chat").hidden === true
+         && document.querySelector('nav button[data-tab="scan"]').getAttribute("aria-selected") === "true");
+      showTab(was);
+    }
+
     /* ---- escape sequences must never reach the screen ----
        "Press \u201cFind faces\u201d" rendered literally, backslashes and all,
        because the source carried an escaped backslash. It is invisible to every

@@ -181,6 +181,11 @@ in **[docs/SETUP.md](docs/SETUP.md)**.
 | **Scan** | The plan (what is new, changed, failed or missing), progress, retry, backups, thumbnail rebuild. |
 | **Settings** | Server URL and connection test, model roles, folder and index location, scan and date settings, backups, the self-test. |
 
+**Links to tabs.** Every tab has its own address, so you can bookmark or share a view:
+`PhotoSearch.html#library`, `#chat`, `#timeline`, `#people`, `#scan` or `#settings`. Opening a
+link goes straight to that tab, choosing a tab updates the address, and the browser's Back and
+Forward buttons step through the tabs you visited. (`#selftest` is reserved for the self-test.)
+
 **Searching** takes plain words, `"exact phrases"` in quotes, and people by name once you have
 named them. The Library is for looking; Chat is for asking.
 
