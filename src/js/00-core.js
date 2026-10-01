@@ -1,6 +1,6 @@
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.5";
+const APP_VERSION = "0.6.6";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -110,7 +110,12 @@ function loadSettings(){
     }
     const d = JSON.parse(raw || "{}");
     if (d.baseUrl){ S.baseUrl = d.baseUrl; $("#baseUrl").value = d.baseUrl; }
-    if (d.roles) S.roles = { ...S.roles, ...d.roles };
+    if (d.roles){
+      // Earlier self-test runs could save their mock roles; they are never a real choice.
+      const r = { ...d.roles };
+      for (const k of Object.keys(r)) if (/^mock-/.test(String(r[k])) && !d.mock) delete r[k];
+      S.roles = { ...S.roles, ...r };
+    }
     if (d.scan)  S.scan  = { ...S.scan,  ...d.scan };
     if (d.date)  S.date  = { ...S.date,  ...d.date };
     if (d.events) S.events = { ...S.events, ...d.events };

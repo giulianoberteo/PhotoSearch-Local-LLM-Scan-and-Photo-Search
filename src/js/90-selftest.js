@@ -2887,6 +2887,7 @@ async function selfTest(){
   } finally {
     $("#mock").checked = wasMock;
     S.dirHandle = savedDir; S.roles = savedRoles;
+    saveSettings();   // the run saved its mock roles; put the real ones back
     IDX.loaded = false;
   }
   T.tick = null;
