@@ -15,25 +15,47 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
+  - [Changed](#changed)
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added)
-  - [Changed](#changed)
+  - [Changed](#changed-1)
   - [Fixed](#fixed)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-1)
-  - [Changed](#changed-1)
+  - [Changed](#changed-2)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-2)
-  - [Changed](#changed-2)
+  - [Changed](#changed-3)
   - [Fixed](#fixed-1)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
   - [Added](#added-3)
-  - [Changed](#changed-3)
+  - [Changed](#changed-4)
   - [Fixed](#fixed-2)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
   - [Added](#added-4)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.5.1 (2026-10-01)
+
+**Summary:** the README was restructured for first-time readers. Documentation only; no
+behaviour changed.
+
+### Changed
+
+- README reorganised around the reader's path: a short pitch, **At a glance**, a three-step
+  **Quick start**, a tour of each tab in **Using the app**, **How it works**, **Principles**,
+  models and costs, and requirements.
+- Added a **FAQ** covering uploads, file safety, people, Ollama, CORS errors, scan time,
+  resuming and where the data lives.
+- The privacy statement is now precise: photos are never uploaded, while decoders, the face
+  model and the place-name list are downloaded once and cached.
+- The version is no longer repeated in the README; the footer and this file are the sources.
+
+[↑ Back to Index](#index)
+
+---
 
 ## 0.5.0 (2026-10-01)
 
