@@ -190,8 +190,10 @@ Forward buttons step through the tabs you visited. (`#selftest` is reserved for 
 the one in the Photos app. Click it and you see your people; type and you get suggestions grouped
 as **People** (with their face), **Dates** (`2021`, `june`, `june 2021`, occasions such as
 Easter), **Places**, **Kinds of picture** (screenshots, documents) and **In the picture**
-(`boat`, `cake`, `forest`). Pick one and it becomes a chip; add more to narrow the search, such
-as *Anna* + *Sicily* + *2022*. Press Enter on the first row to search the words themselves by
+(`boat`, `cake`, `forest`). Pick one and it becomes a token inside the field; keep typing and pick more to narrow the
+search, such as *Anna* + *Sicily* + *2022*. `Backspace` on an empty field removes the last
+token, and `+` or `,` finishes a word. Several people at once can also be typed as `mum + dad`
+(or `&`, `,`, `and`) when each name matches a person; the results are photos with all of them. Press Enter on the first row to search the words themselves by
 keyword and meaning. Results appear in the Library, so you can open, step through, select,
 rotate and remove them. Remove a chip, or **Clear search**, to widen it again.
 

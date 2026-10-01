@@ -387,6 +387,16 @@ view instead of building a second grid.
   *Dates* (`2021`, `june`, `june 2021` in any order, and occasions), *Places*, *Kinds of
   picture* and *In the picture* (objects, activities, keywords, animals, settings). The facts
   behind them are cached and rebuilt only when the index or the people change.
+- **Tokens live inside the field.** Picking a suggestion adds a token to the search field and
+  leaves the field focused with the list open, so "Mum" then "Dad" is two keystrokes and a pick
+  each; results update behind it. `Backspace` on an empty field removes the last token and
+  `+` or `,` finishes the current word. Words typed for the text search are tokens too, joined
+  into one ranked query.
+- **Several people from one phrase.** `mum + dad` (also `&`, `,`, `and`) is parsed by
+  `sgPeopleParts()`: every part but the last must name exactly one person (exact name, then a
+  unique prefix) and the last may still be partial, so `mum + da` already suggests `Mum + Dad`.
+  The result is one suggestion that adds both person chips, and a finished all-people phrase
+  is offered before the plain text search so Enter does the sensible thing.
 - **A choice becomes a chip.** Each chip maps onto a filter `searchPhotos` already understood,
   and two new ones: `month` (any year) and `photo_sets`, a list of photo-id sets that must all
   contain the photo. A person chip uses the **set of that person's photos**, not the name, so

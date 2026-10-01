@@ -235,7 +235,7 @@ async function sendChat(){
         await ensureIndex(null, { write:false });
         await loadRecords(); await loadVectors(); rebuildDerived();
       }
-    } catch (e){ renderMarkdown("**Could not open the index:** " + errText(e), u0.body); return; }
+    } catch (e){ renderMarkdown("**Could not open the index:** " + humanError(e), u0.body); return; }
     u0.box.remove();
     if (!IDX.records.size){
       const u1 = bubble("assistant");
@@ -273,7 +273,7 @@ async function sendChat(){
     if (e.name === "AbortError") renderMarkdown(acc + "\n\n_(stopped)_", textHost);
     /* Keep whatever streamed: discarding a partial answer on a late failure
        loses the only useful part. errText because DOMException.message is empty. */
-    else renderMarkdown((acc ? deIdify(acc) + "\n\n" : "") + "**Error:** " + errText(e), textHost);
+    else renderMarkdown((acc ? deIdify(acc) + "\n\n" : "") + "**Error:** " + humanError(e), textHost);
   } finally {
     CHAT.busy = false;
     $("#chatSend").disabled = false; $("#chatStop").hidden = true;
@@ -299,5 +299,5 @@ $("#chatSave").onclick = async () => {
     await writeFile(await dir.getFileHandle(name, { create:true }),
       JSON.stringify({ saved_at:new Date().toISOString(), turns:CHAT.turns }, null, 1));
     toast("Saved to .photoindex/chats/" + name);
-  } catch (e){ toast("Could not save: " + errText(e)); }
+  } catch (e){ toast("Could not save: " + humanError(e)); }
 };

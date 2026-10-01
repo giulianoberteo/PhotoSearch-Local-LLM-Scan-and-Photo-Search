@@ -7,6 +7,8 @@ library.
 ## Index
 <!-- index:start -->
 - [The self-test](#the-self-test)
+- [Running the self-test in your own Chrome](#running-the-self-test-in-your-own-chrome)
+  - [Reading the report](#reading-the-report)
 - [Running it headlessly](#running-it-headlessly)
 - [Verifying a build](#verifying-a-build)
 - [Testing against storage that misbehaves](#testing-against-storage-that-misbehaves)
@@ -58,7 +60,8 @@ scratch folder, so your real photos and index are never touched.
   thumbnails pinned then released, and the viewer's open, step, details and close cycle
 - **removing photos:** that a removal sets `hidden` and not `deleted`, leaves the library and
   search, appears in the Removed view, and is undone by restoring
-- **header search:** the month and photo-set filters; suggestions for people, places, dates, kinds
+- **header search:** the month and photo-set filters; several people from one phrase (`anna + ben`,
+  `&`, `and`, partial last name, unique prefix); tokens in the field and Backspace; suggestions for people, places, dates, kinds
   and things (and that hidden photos are not counted); how chips become filters, including the
   replace-not-add rule and the exact person photo set; and that results keep ranked order and
   never include a removed photo
@@ -80,6 +83,40 @@ PhotoSearch.html#selftest&heic=file:///path/to/sample.heic
 [↑ Back to Index](#index)
 
 ---
+
+## Running the self-test in your own Chrome
+
+The self-test builds a scratch folder in Chrome's private file area (OPFS), and Chrome does not
+give that to a page opened from disk (`file://`). Depending on the version, you either see
+**"SecurityError: It was determined that certain files are unsafe for access within a Web
+application, or that too many calls are being made on file resources"** or nothing happens at
+all. It means only this; your photos and index are fine, and the app itself works from a file.
+The self-test now checks first and explains it, instead of failing deep inside.
+
+Pick one:
+
+1. **Start Chrome with a flag.** Quit Chrome completely (it ignores the flag if it is already
+   running), then:
+   ```bash
+   open -a "Google Chrome" --args --allow-file-access-from-files
+   ```
+   and open `PhotoSearch.html#selftest`.
+2. **Serve the file.** In the folder containing `PhotoSearch.html`:
+   ```bash
+   python3 -m http.server 8000
+   ```
+   and open `http://localhost:8000/PhotoSearch.html#selftest`.
+
+### Reading the report
+
+The result opens with a verdict, for example "All 562 checks passed" or "3 of 562 checks
+failed". Failures come first, each with what it got and what it wanted. The passed checks are
+folded away. If the run stops early, the report says what happened in words, which check was the
+last to complete (the problem is in what runs after it), and what to do. **Copy report** puts a
+plain-text version on the clipboard for an issue.
+
+[↑ Back to Index](#index)
+
 
 ## Running it headlessly
 

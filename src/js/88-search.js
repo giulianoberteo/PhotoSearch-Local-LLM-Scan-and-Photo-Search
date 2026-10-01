@@ -53,6 +53,37 @@ function sgFacts(){
 
 const sgTop = (map, n) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
 
+/* "mum + dad", "mum & dad", "mum, dad", "mum and dad": several people at once.
+   Every part but the last must name exactly one person (exact name first, then
+   a unique prefix); the last may still be partial. Returns the people for the
+   finished parts and the candidates for the last, or null if this is not that. */
+const SG_JOIN = /\s*(?:\+|&|,|\band\b)\s*/i;
+function sgPeopleParts(raw){
+  if (!/[+&,]|\band\b/i.test(raw)) return null;
+  const parts = raw.split(SG_JOIN).map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const people = sgFacts().people.filter(p => p.ids.size);
+  const used = new Set(), done = [];
+  for (const w of parts.slice(0, -1)){
+    let m = people.filter(p => !used.has(p.id) && p.label.toLowerCase() === w);
+    if (m.length !== 1) m = people.filter(p => !used.has(p.id) && p.label.toLowerCase().startsWith(w));
+    if (m.length !== 1) return null;
+    used.add(m[0].id); done.push(m[0]);
+  }
+  const last = parts[parts.length - 1];
+  const cand = people.filter(p => !used.has(p.id) && p.label.toLowerCase().includes(last))
+    .sort((a, b) => (b.label.toLowerCase() === last) - (a.label.toLowerCase() === last)
+                    || b.label.toLowerCase().startsWith(last) - a.label.toLowerCase().startsWith(last)
+                    || b.ids.size - a.ids.size);
+  return { done, last, cand };
+}
+function sgPeopleItem(list){
+  const ids = list.map(p => p.ids);
+  const both = [...ids[0]].filter(id => ids.every(s => s.has(id))).length;
+  return { kind:"people", icon:"\uD83D\uDC65", label:list.map(p => p.label).join(" + "),
+           sub:both.toLocaleString(), chips:list.map(p => ({ kind:"person", id:p.id, label:p.label })) };
+}
+
 /* Suggestions for what has been typed so far: [{ title, items:[...] }]. An
    item carries the chips it would add, so choosing it needs no further work. */
 function sgSuggest(raw){
@@ -60,10 +91,16 @@ function sgSuggest(raw){
   const pass = str => !q || String(str).toLowerCase().includes(q);
   const starts = str => String(str).toLowerCase().startsWith(q);
 
+  const multi = sgPeopleParts(raw);
+  const combos = multi ? multi.cand.slice(0, 6).map(c => sgPeopleItem([...multi.done, c])) : [];
+  /* A phrase that is entirely people is a people search first, a text search second. */
+  const exact = multi && multi.cand.length && multi.cand[0].label.toLowerCase() === multi.last;
+  if (combos.length && exact) out.push({ title:"People together", items:[combos[0]] });
   if (q) out.push({ title:"", items:[{ kind:"text", icon:"🔎", label:"Search for “" + raw.trim() + "”",
                                          sub:"words and meaning" }] });
 
-  const ppl = F.people.filter(p => p.ids.size && pass(p.label))
+  if (combos.length) out.push({ title:exact ? "" : "People together", items:exact ? combos.slice(1) : combos });
+  const ppl = (multi ? [] : F.people).filter(p => p.ids.size && pass(p.label))
     .sort((a, b) => (b.named - a.named) || (b.ids.size - a.ids.size)).slice(0, q ? 6 : 8);
   const faceItems = ppl.map(p => ({ kind:"person", face:bestFaceOf(p.group), label:p.label,
     sub:p.ids.size.toLocaleString(), chips:[{ kind:"person", id:p.id, label:p.label }] }));
@@ -170,13 +207,49 @@ function sgAddChip(c){
   if (!GAL.chips.some(x => x.kind === c.kind && x.id === c.id && x.value === c.value))
     GAL.chips.push(c);
 }
+/* Tokens live inside the field, as in the Photos app: pick Mum, it becomes a
+   token, keep typing Dad. Picking leaves the field focused and the list open
+   for the next one, and the results update behind it. */
 function sgPick(it){
   const input = $("#gSearch");
-  if (it.kind === "text") GAL.text = input.value.trim();
-  else for (const c of it.chips) sgAddChip(c);
+  if (it.kind === "text"){
+    const w = input.value.trim();
+    if (w && !GAL.texts.includes(w)) GAL.texts.push(w);
+  } else for (const c of it.chips) sgAddChip(c);
   input.value = "";
-  sgClose();
+  sgRenderChips();
+  if (document.activeElement === input){ SG.sel = 0; sgRender(); } else sgClose();
   runSearch();
+}
+
+/* Everything in the search, as tokens in the field: chips first, then words. */
+function sgRenderChips(){
+  const host = $("#sgChips");
+  if (!host) return;
+  host.textContent = "";
+  const tok = (label, drop, title) => {
+    const t = el("span", "sgChip");
+    t.append(document.createTextNode(label));
+    const x = el("button", "x", "\u2715");
+    x.title = title; x.setAttribute("aria-label", title);
+    x.onmousedown = e => { e.preventDefault(); drop(); };
+    t.append(x);
+    host.append(t);
+  };
+  GAL.chips.forEach((c, i) => tok(c.label, () => galDropChip(i), "Remove " + c.label));
+  GAL.texts.forEach((w, i) => tok("\u201c" + w + "\u201d", () => galDropText(i), "Remove \u201c" + w + "\u201d"));
+  const has = GAL.chips.length + GAL.texts.length > 0;
+  $("#sgField").classList.toggle("has", has);
+  $(".sgWrap").classList.toggle("has", has);
+  const f = $("#sgField"); f.scrollLeft = f.scrollWidth;
+}
+/* Backspace on an empty field removes the last token. */
+function sgPop(){
+  if (GAL.texts.length) GAL.texts.pop();
+  else if (GAL.chips.length) GAL.chips.pop();
+  else return false;
+  sgRenderChips();
+  return true;
 }
 
 /* The filters a set of chips stands for, in the form searchPhotos takes. */
@@ -196,13 +269,13 @@ function sgArgs(){
   if (types.length) a.image_type = types;
   if (things.length) a.entities = things;
   if (occ.length) a.occasion = occ;
-  if (GAL.text) a.query = GAL.text;
+  if (GAL.texts.length) a.query = GAL.texts.join(" ");
   return a;
 }
 
 async function runSearch(){
   const tok = ++SG.run;
-  if (!GAL.chips.length && !GAL.text){ clearSearch(); return; }
+  if (!GAL.chips.length && !GAL.texts.length){ clearSearch(); return; }
   if (tabFromHash() !== "library") location.hash = "library";
   showTab("library");
   await onLibraryShown();
@@ -220,18 +293,18 @@ async function runSearch(){
     galMessage(GAL.list.length ? "" : "No photos match this search.");
     window.scrollTo(0, 0);
   } catch (e){
-    toast("Search failed: " + errText(e));
+    toast("Search failed: " + humanError(e));
   }
 }
 function clearSearch(){
   SG.run++;
-  GAL.chips = []; GAL.text = ""; GAL.results = [];
+  GAL.chips = []; GAL.texts = []; GAL.results = [];
   if (GAL.view === "search") GAL.view = "all";
   galBuild(); galBar(); galClear(); galLayout();
   galMessage(GAL.list.length ? "" : "Nothing indexed yet — run a scan first.");
 }
-function galDropChip(i){ GAL.chips.splice(i, 1); runSearch(); }
-function galDropText(){ GAL.text = ""; runSearch(); }
+function galDropChip(i){ GAL.chips.splice(i, 1); sgRenderChips(); runSearch(); }
+function galDropText(i){ GAL.texts.splice(i, 1); sgRenderChips(); runSearch(); }
 $("#galClearSearch").onclick = clearSearch;
 
 /* ---- the field ---- */
@@ -246,10 +319,20 @@ $("#galClearSearch").onclick = clearSearch;
   input.addEventListener("keydown", e => {
     if (e.key === "ArrowDown"){ e.preventDefault(); if (!SG.open) sgOpen(); else sgMove(SG.sel + 1, true); }
     else if (e.key === "ArrowUp"){ e.preventDefault(); sgMove(SG.sel - 1, true); }
+    else if (e.key === "Backspace" && !input.value){ if (sgPop()){ e.preventDefault(); runSearch(); } }
+    else if ((e.key === "," || e.key === "+") && input.value.trim()){
+      /* a separator finishes the word: the exact match if there is one, else the words */
+      e.preventDefault();
+      const w = input.value.trim().toLowerCase();
+      const it = SG.items.find(i => i.kind !== "text" && i.kind !== "people" && String(i.label).toLowerCase() === w)
+              || SG.items.find(i => i.kind === "text");
+      if (it) sgPick(it);
+    }
     else if (e.key === "Enter"){
       e.preventDefault();
       const it = SG.items[SG.sel];
       if (it) sgPick(it);
+      else if (!input.value && (GAL.chips.length || GAL.texts.length)) sgClose();
     } else if (e.key === "Escape"){
       if (SG.open) sgClose();
       else if (input.value) input.value = "";
@@ -267,3 +350,5 @@ $("#galClearSearch").onclick = clearSearch;
     if ((slash || k) && !VW.open){ e.preventDefault(); input.focus(); input.select(); }
   });
 }
+
+sgRenderChips();

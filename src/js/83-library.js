@@ -11,7 +11,7 @@
 const GAL = { list:[], built:0, size:130, desc:true, gap:2, cols:1, cell:0, rows:0,
               shown:new Map(), raf:0, loading:false,
               view:"all",                     // "all", "removed" or "search"
-              chips:[], text:"", results:[],    // the header search, shown as a view of this grid
+              chips:[], texts:[], results:[],    // the header search, shown as a view of this grid
               selMode:false, sel:new Set(), last:-1, removed:0 };
 try { const v = +localStorage.getItem("ps.galSize"); if (v >= 70 && v <= 260) GAL.size = v; } catch {}
 
@@ -143,28 +143,8 @@ function galRender(){
   host.append(frag);
 }
 
-/* The active search, as removable chips plus the typed words. */
-function galChips(){
-  const host = $("#galChips");
-  host.textContent = "";
-  if (GAL.view !== "search") return;
-  GAL.chips.forEach((c, i) => {
-    const b = el("button", "chip");
-    b.append(document.createTextNode(c.label + " "));
-    b.append(el("span", "x", "\u2715"));
-    b.title = "Remove this filter";
-    b.onclick = () => galDropChip(i);
-    host.append(b);
-  });
-  if (GAL.text){
-    const b = el("button", "chip");
-    b.append(document.createTextNode("\u201c" + GAL.text + "\u201d "));
-    b.append(el("span", "x", "\u2715"));
-    b.title = "Remove these words";
-    b.onclick = () => galDropText();
-    host.append(b);
-  }
-}
+/* The active search is shown as tokens inside the search field (88-search.js). */
+function galChips(){ if (typeof sgRenderChips === "function") sgRenderChips(); }
 function galBar(){
   const removedView = GAL.view === "removed", searchView = GAL.view === "search";
   galChips();
@@ -248,7 +228,7 @@ async function galApply(ids, hide, quiet){
     await galPersist(ids, base => hide ? { ...base, hidden:true, hidden_at:at }
                                        : { ...base, hidden:false, hidden_at:undefined });
   } catch (e){
-    toast("Could not " + (hide ? "remove" : "restore") + " — " + errText(e));
+    toast("Could not " + (hide ? "remove" : "restore") + " — " + humanError(e));
     return 0;
   }
   rebuildDerived();
@@ -270,7 +250,7 @@ async function galRotate(ids, delta, quiet){
       return { ...base, rotation: normRot(((cur && cur.rotation) || 0) + delta) };
     });
   } catch (e){
-    toast("Could not rotate — " + errText(e));
+    toast("Could not rotate — " + humanError(e));
     return 0;
   }
   const set = new Set(ids);
@@ -355,7 +335,7 @@ async function libLoad(force){
     galClear();
     galLayout();
   } catch (e){
-    galMessage(errText(e));
+    galMessage(humanError(e));
   }
 }
 
@@ -462,7 +442,7 @@ async function vwLoadOriginal(r, tok){
     $("#vwImg").src = url;
     vwPlace(false);
   } catch (e){
-    note("Original not reachable (" + errText(e) + ") — showing the thumbnail.");
+    note("Original not reachable (" + humanError(e) + ") — showing the thumbnail.");
   }
 }
 

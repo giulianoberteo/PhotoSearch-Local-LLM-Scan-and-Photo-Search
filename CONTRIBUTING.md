@@ -24,7 +24,9 @@ python3 build.py --check    # verifies the committed file is current
 
 `build.py` concatenates `src/js/*.js` into `src/shell.html` in a fixed order (later files
 depend on earlier ones, so a new file must be added to the list in `build.py`), then checks
-the result with `node --check` if Node is installed.
+the result with `node --check` if Node is installed. Without Node the check is skipped and the
+build says so; `brew install node` fixes that, and is worth doing, because a syntax error in the
+built page shows no message at all.
 
 `src/template.py` is the **single source of truth** for the extraction schema and prompt.
 The JavaScript constant is generated from it, so the app and any offline harness cannot drift.

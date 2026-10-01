@@ -231,6 +231,6 @@ async function onTimelineShown(force){
     renderTimeline();
   } catch (e){
     body.textContent = "";
-    body.append(Object.assign(el("div", "note"), { textContent: errText(e) }));
+    body.append(Object.assign(el("div", "note"), { textContent: humanError(e) }));
   } finally { tlLoading = false; }
 }
