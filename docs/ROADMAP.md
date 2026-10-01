@@ -15,7 +15,7 @@ Written on 29 September 2026, after 6,635 photos were indexed and searchable, an
   - [1. LM Studio cannot embed images](#1-lm-studio-cannot-embed-images)
   - [2. The precedent for that already exists](#2-the-precedent-for-that-already-exists)
   - [3. nomic-embed-vision-v1.5 shares the embedding space the index already uses](#3-nomic-embed-vision-v15-shares-the-embedding-space-the-index-already-uses)
-  - [4. Video and RAW are classified and then silently dropped](#4-video-and-raw-are-classified-and-then-silently-dropped)
+  - [4. Video is classified and then silently dropped](#4-video-is-classified-and-then-silently-dropped)
   - [5. A second pass over the originals is cheap; a second pass through the model is not](#5-a-second-pass-over-the-originals-is-cheap-a-second-pass-through-the-model-is-not)
 - [Phase 1: People, and the browsing you already have the data for](#phase-1-people-and-the-browsing-you-already-have-the-data-for)
   - [1.1 People (face grouping): built](#11-people-face-grouping-built)
@@ -104,10 +104,9 @@ which means shipping *two* encoders and a second vector file. ONNX weights for t
 model exist; Transformers.js support has historically been awkward, so plan on
 `onnxruntime-web` directly.
 
-### 4. Video and RAW are classified and then silently dropped
+### 4. Video is classified and then silently dropped
 
-`classifyFile()` already labels them, and the plan counts them ("38 RAW counted, skipped").
-Nothing else happens. For a library with any phone video in it, a meaningful share of the
+`classifyFile()` already labels it, and the plan counts it. Nothing else happens (RAW is now read through its embedded preview). For a library with any phone video in it, a meaningful share of the
 collection is simply invisible to search and to the Library.
 
 ### 5. A second pass over the originals is cheap; a second pass through the model is not
@@ -277,7 +276,7 @@ search better or worse.
 | **One viewer everywhere** | Open the Library viewer from Chat and Timeline results too, so they gain arrow-key stepping, Remove and Rotate. (Their tiles already show the saved rotation.) |
 | **Write rotation to the file** | An opt-in "apply to the file" for users who want other apps to agree. It would be the first feature that modifies originals, so it needs its own safeguards. |
 | **Pets as first-class** | Google Photos groups pets. The same clustering machinery applied to the `animals` field. |
-| **RAW** | Lower value than it looks: most RAW files sit next to a JPEG that is already indexed. Better handled by pairing siblings than by decoding RAW in a browser. |
+| **True RAW decoding** | RAW files are read through their embedded JPEG preview (0.6.5). Decoding the sensor data in a browser is not planned. |
 | **Live/Motion photos** | Recognise the paired video and treat it as one item. |
 | **Audio transcription for video** | Whisper via LM Studio. Big payoff for home video, but its own project. |
 

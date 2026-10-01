@@ -17,48 +17,69 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.6.4 (2026-10-02)](#064-2026-10-02)
+- [0.6.5 (2026-10-02)](#065-2026-10-02)
   - [Added](#added)
-- [0.6.3 (2026-10-01)](#063-2026-10-01)
+- [0.6.4 (2026-10-02)](#064-2026-10-02)
   - [Added](#added-1)
+- [0.6.3 (2026-10-01)](#063-2026-10-01)
+  - [Added](#added-2)
   - [Changed](#changed)
 - [0.6.2 (2026-10-01)](#062-2026-10-01)
-  - [Added](#added-2)
+  - [Added](#added-3)
   - [Changed](#changed-1)
 - [0.6.1 (2026-10-01)](#061-2026-10-01)
-  - [Added](#added-3)
+  - [Added](#added-4)
   - [Changed](#changed-2)
 - [0.6.0 (2026-10-01)](#060-2026-10-01)
-  - [Added](#added-4)
+  - [Added](#added-5)
   - [Changed](#changed-3)
 - [0.5.4 (2026-10-01)](#054-2026-10-01)
   - [Changed](#changed-4)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
-  - [Added](#added-5)
+  - [Added](#added-6)
   - [Changed](#changed-5)
 - [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-6)
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
-  - [Added](#added-6)
+  - [Added](#added-7)
   - [Changed](#changed-7)
   - [Fixed](#fixed-1)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
-  - [Added](#added-7)
+  - [Added](#added-8)
   - [Changed](#changed-8)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
-  - [Added](#added-8)
+  - [Added](#added-9)
   - [Changed](#changed-9)
   - [Fixed](#fixed-2)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
-  - [Added](#added-9)
+  - [Added](#added-10)
   - [Changed](#changed-10)
   - [Fixed](#fixed-3)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
-  - [Added](#added-10)
+  - [Added](#added-11)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.5 (2026-10-02)
+
+**Summary:** RAW files (NEF and other cameras) are now scanned.
+
+### Added
+
+- **RAW support through the embedded preview.** NEF, NRW, CR2, CR3, ARW, DNG, ORF, RW2, RAF, PEF
+  and the rest of the RAW family are indexed by reading the full-size JPEG the camera stores
+  inside the file. The sensor data is not decoded, so the Library shows the camera's own
+  rendering, not a RAW development. The camera's orientation is applied. EXIF date, camera
+  and GPS come from the RAW file as for any photo. Only NEF has been tried by construction in
+  the self-test; the other brands use the same TIFF layout (or a byte scan) and are best effort.
+- A RAW that sits beside a same-named JPEG is not scanned twice: the JPEG is used and the plan
+  reports "N RAW beside a JPEG".
+- Self-test assertions for the preview, the orientation and a RAW with no preview.
+
+[↑ Back to Index](#index)
+
 
 ## 0.6.4 (2026-10-02)
 

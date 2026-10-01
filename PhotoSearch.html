@@ -738,7 +738,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.4";
+const APP_VERSION = "0.6.5";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -1902,7 +1902,9 @@ function nearestPlace(lat, lon){
 /* ================= file-format policy =================
    Chromium decodes jpeg/png/webp/gif/bmp/avif natively. HEIC and TIFF need a
    decoder, loaded lazily from a pinned CDN and skipped cleanly when offline.
-   RAW, vector and video files are counted and reported but never sent to a model. */
+   RAW files (NEF, CR2, ARW, DNG ...) are read through the full-size JPEG preview that the
+   camera embeds in them; the sensor data is never decoded. Vector and video files are
+   counted and reported but never sent to a model. */
 const FMT = {
   native: /\.(jpe?g|jpe|jfif|pjpeg|png|apng|webp|gif|bmp|avif)$/i,
   heic:   /\.(heic|heif|hif)$/i,
@@ -1911,7 +1913,7 @@ const FMT = {
   raw:    /\.(cr2|cr3|nef|nrw|arw|srf|sr2|dng|orf|rw2|raf|pef|ptx|srw|3fr|fff|iiq|x3f|erf|mef|mos|mrw|kdc|dcr)$/i,
   video:  /\.(mp4|mov|m4v|avi|mkv|webm|mpg|mpeg|wmv|3gp|mts|m2ts)$/i,
 };
-const isScannable = n => FMT.native.test(n) || FMT.heic.test(n) || FMT.tiff.test(n);
+const isScannable = n => FMT.native.test(n) || FMT.heic.test(n) || FMT.tiff.test(n) || FMT.raw.test(n);
 function classifyFile(name){
   if (FMT.native.test(name)) return "native";
   if (FMT.heic.test(name)) return "heic";
@@ -1981,6 +1983,88 @@ async function tiffBitmap(buf){
   if (!w || !h) throw new Error("TIFF has no dimensions");
   return createImageBitmap(new ImageData(new Uint8ClampedArray(rgba), w, h));
 }
+/* A RAW file is a TIFF container (CR3 and RAF are not, and use the byte scan below) that
+   carries one or more JPEG previews. Walk IFD0, its chained IFDs and its SubIFDs, collect
+   every JPEG the tags point at, and use the largest. */
+function rawPreviews(buf){
+  const n = buf.byteLength, dv = new DataView(buf), out = [];
+  let orient = 1;
+  const le = n > 8 && dv.getUint16(0) === 0x4949;
+  if (n > 8 && (le || dv.getUint16(0) === 0x4D4D)){
+    const u16 = o => dv.getUint16(o, le), u32 = o => dv.getUint32(o, le);
+    const seen = new Set();
+    const ifd = (off, top) => {
+      if (!off || off + 2 > n || seen.has(off) || seen.size > 64) return;
+      seen.add(off);
+      const cnt = u16(off), subs = [];
+      let comp = 0, jOff = 0, jLen = 0, sOff = 0, sLen = 0;
+      for (let i = 0; i < cnt; i++){
+        const e = off + 2 + i * 12;
+        if (e + 12 > n) break;
+        const tag = u16(e), type = u16(e + 2), c = u32(e + 4);
+        const val = type === 3 ? u16(e + 8) : u32(e + 8);
+        const first = () => c === 1 ? val : (val + 4 <= n ? (type === 3 ? u16(val) : u32(val)) : 0);
+        if (tag === 0x0112 && top) orient = val;
+        else if (tag === 0x0103) comp = val;
+        else if (tag === 0x0201) jOff = val;
+        else if (tag === 0x0202) jLen = val;
+        else if (tag === 0x0111) sOff = first();
+        else if (tag === 0x0117) sLen = c === 1 ? val : first();
+        else if (tag === 0x014A){
+          for (let k = 0; k < Math.min(c, 8); k++)
+            subs.push(c === 1 ? val : (val + k * 4 + 4 <= n ? u32(val + k * 4) : 0));
+        }
+      }
+      if (jOff && jLen) out.push([jOff, jLen]);
+      if ((comp === 6 || comp === 7) && sOff && sLen) out.push([sOff, sLen]);
+      if (e2(off + 2 + cnt * 12)) ifd(u32(off + 2 + cnt * 12), false);
+      subs.forEach(s => ifd(s, false));
+    };
+    const e2 = o => o + 4 <= n;
+    try { ifd(u32(4), true); } catch (e) {}
+  }
+  const u8 = new Uint8Array(buf);
+  const good = out.filter(([o, l]) => l > 1000 && o + l <= n && u8[o] === 0xFF && u8[o + 1] === 0xD8)
+                  .sort((a, b) => b[1] - a[1]);
+  if (!good.length){
+    // No usable tags: take every JPEG start-of-image in the file, biggest span first.
+    const starts = [];
+    for (let i = u8.indexOf(0xFF); i >= 0 && i + 3 < n; i = u8.indexOf(0xFF, i + 1))
+      if (u8[i + 1] === 0xD8 && u8[i + 2] === 0xFF) starts.push(i);
+    starts.forEach((o, k) => good.push([o, (k + 1 < starts.length ? starts[k + 1] : n) - o]));
+    good.sort((a, b) => b[1] - a[1]);
+  }
+  return { spans: good.slice(0, 3), orient };
+}
+async function rotBitmap(bmp, o){
+  const w = bmp.width, h = bmp.height, swap = o === 6 || o === 8;
+  const c = new OffscreenCanvas(swap ? h : w, swap ? w : h), cx = c.getContext("2d");
+  if (o === 6){ cx.translate(h, 0); cx.rotate(Math.PI / 2); }
+  else if (o === 8){ cx.translate(0, w); cx.rotate(-Math.PI / 2); }
+  else { cx.translate(w, h); cx.rotate(Math.PI); }
+  cx.drawImage(bmp, 0, 0);
+  bmp.close();
+  return createImageBitmap(c);
+}
+async function rawBitmap(buf){
+  const { spans, orient } = rawPreviews(buf);
+  if (!spans.length) throw new Error("RAW file has no embedded JPEG preview");
+  let last = null;
+  for (const [o, l] of spans){
+    const bytes = buf.slice(o, o + l);
+    try {
+      const bmp = await createImageBitmap(new Blob([bytes], { type:"image/jpeg" }),
+                                          { imageOrientation:"from-image" });
+      // Most previews carry no EXIF of their own; the camera's turn is in IFD0.
+      let hasExif = false;
+      const head = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 4096));
+      for (let i = 0; i + 4 < head.length; i++)
+        if (head[i] === 0x45 && head[i + 1] === 0x78 && head[i + 2] === 0x69 && head[i + 3] === 0x66){ hasExif = true; break; }
+      return (!hasExif && (orient === 3 || orient === 6 || orient === 8)) ? rotBitmap(bmp, orient) : bmp;
+    } catch (e){ last = e; }
+  }
+  throw new Error("RAW preview would not decode: " + String(last && last.message || last));
+}
 function fit(w, h, max){
   if (w <= max && h <= max) return [w, h];
   return w >= h ? [max, Math.round(h * max / w)] : [Math.round(w * max / h), max];
@@ -2006,6 +2090,8 @@ self.onmessage = async e => {
     } else if (kind === "tiff"){
       try { bmp = await createImageBitmap(file, { imageOrientation:"from-image" }); }
       catch { bmp = await tiffBitmap(await file.arrayBuffer()); decoder = "utif"; }
+    } else if (kind === "raw"){
+      bmp = await rawBitmap(await file.arrayBuffer()); decoder = "raw-preview";
     } else {
       throw new Error("unsupported kind: " + kind);
     }
@@ -2940,9 +3026,10 @@ const SKIP_DIR = new Set([".photoindex","@eaDir",".AppleDouble",".Trashes","#rec
 
 async function walk(dir, onTick, signal){
   const files = [];
-  const counts = { raw:0, vector:0, video:0, other:0, skippedDirs:0 };
+  const counts = { raw:0, rawPaired:0, vector:0, video:0, other:0, skippedDirs:0 };
   async function rec(h, prefix, depth){
     if (depth > 24) return;                         // guard against pathological nesting
+    const raws = [], stems = new Set();
     for await (const [name, ent] of h.entries()){
       if (signal && signal.aborted) throw new DOMException("aborted","AbortError");
       if (ent.kind === "directory"){
@@ -2951,11 +3038,18 @@ async function walk(dir, onTick, signal){
       } else {
         if (name.startsWith("._")) continue;        // AppleDouble sidecars
         const kind = classifyFile(name);
-        if (kind === "native" || kind === "heic" || kind === "tiff"){
+        if (kind === "raw") raws.push({ path: prefix + name, name, handle: ent, kind });
+        else if (kind === "native" || kind === "heic" || kind === "tiff"){
+          stems.add(name.replace(/\.[^.]*$/, "").toLowerCase());
           files.push({ path: prefix + name, name, handle: ent, kind });
           if (onTick && files.length % 100 === 0) await onTick(files.length);
         } else counts[kind === "other" ? "other" : kind]++;
       }
+    }
+    // A RAW with a same-named JPEG beside it is the same shot: the JPEG is scanned, not both.
+    for (const r of raws){
+      if (stems.has(r.name.replace(/\.[^.]*$/, "").toLowerCase())) counts.rawPaired++;
+      else files.push(r);
     }
   }
   await rec(dir, "", 0);
@@ -5137,7 +5231,7 @@ $("#btnWriteTest").onclick = async () => {
     st.ok("append + seek to end works");
     st = step(host, "Read the folder"); await st.paint();
     const { files, counts } = await walk(S.dirHandle, n => st.note(n + " images so far…"));
-    st.ok(files.length + " scannable images · " + counts.raw + " RAW, " + counts.video + " video, "
+    st.ok(files.length + " scannable images · " + counts.rawPaired + " RAW beside a JPEG, " + counts.video + " video, "
       + counts.vector + " vector skipped · " + fmtDur((performance.now()-t0)/1000));
     checksBox(host).append(checkRow({ status:"ok", title:"Index is writable",
       detail:"Open the Scan tab to see the plan." }));
@@ -5242,7 +5336,7 @@ function renderPlan(p){
   box.append(stat);
   const c = p.counts;
   const bits = [];
-  if (c.raw) bits.push(c.raw + " RAW counted, skipped");
+  if (c.rawPaired) bits.push(c.rawPaired + " RAW beside a JPEG, not scanned twice");
   if (c.video) bits.push(c.video + " video skipped");
   if (c.vector) bits.push(c.vector + " vector/PDF skipped");
   if (p.unreadable.length) bits.push(p.unreadable.length + " unreadable");
@@ -9462,8 +9556,32 @@ async function selfTest(){
     await writeInto(scratch, "three.webp", await makeImage(300, 300, "#44cc88", "image/webp"));
     await writeInto(sub, "four.png", await makeImage(200, 400, "#cc4488"));
     await writeInto(scratch, "notes.txt", new Blob(["hello"]));
-    await writeInto(scratch, "raw.CR2", new Blob([new Uint8Array(10)]));
+    await writeInto(scratch, "one.CR2", new Blob([new Uint8Array(10)]));
     await writeInto(scratch, "clip.mp4", new Blob([new Uint8Array(10)]));
+
+    /* ---- RAW through its embedded preview ---- */
+    {
+      const jpg = new Uint8Array(await (await makeImage(640, 480, "#ccaa44", "image/jpeg")).arrayBuffer());
+      const mk = orient => {
+        const t = new Uint8Array(68 + jpg.length), d = new DataView(t.buffer);
+        t.set([0x49, 0x49, 42, 0], 0); d.setUint32(4, 8, true);
+        d.setUint16(8, 2, true);                                   // IFD0: orientation + SubIFD
+        d.setUint16(10, 0x0112, true); d.setUint16(12, 3, true); d.setUint32(14, 1, true); d.setUint16(18, orient, true);
+        d.setUint16(22, 0x014A, true); d.setUint16(24, 4, true); d.setUint32(26, 1, true); d.setUint32(30, 38, true);
+        d.setUint16(38, 2, true);                                  // SubIFD: JPEG offset + length
+        d.setUint16(40, 0x0201, true); d.setUint16(42, 4, true); d.setUint32(44, 1, true); d.setUint32(48, 68, true);
+        d.setUint16(52, 0x0202, true); d.setUint16(54, 4, true); d.setUint32(56, 1, true); d.setUint32(60, jpg.length, true);
+        t.set(jpg, 68);
+        return new File([t], "shot.NEF");
+      };
+      const up = await processImage(mk(1), "raw");
+      eq("NEF: reads the embedded JPEG preview", [up.srcW, up.srcH, up.decoder], [640, 480, "raw-preview"]);
+      const turned = await processImage(mk(6), "raw");
+      eq("NEF: applies the camera's orientation", [turned.srcW, turned.srcH], [480, 640]);
+      let bad = "";
+      try { await processImage(new File([new Uint8Array(500)], "x.NEF"), "raw"); } catch (e){ bad = String(e.message || e); }
+      ok("NEF with no preview fails with a clear reason", /no embedded JPEG/.test(bad), bad);
+    }
 
     /* ---- worker decode ---- */
     await st.note("Decoding through the worker…");
@@ -9504,7 +9622,7 @@ async function selfTest(){
     await loadRecords(); await loadVectors(); await loadCheckpoint();
     let plan = await buildPlan();
     eq("plan finds 4 scannable images", plan.total, 4);
-    eq("plan counts RAW", plan.counts.raw, 1);
+    eq("RAW beside a same-named JPEG/PNG is not scanned twice", plan.counts.rawPaired, 1);
     eq("plan counts video", plan.counts.video, 1);
     eq("plan ignores .txt", plan.counts.other, 1);
     eq("all four are new", plan.new.length, 4);

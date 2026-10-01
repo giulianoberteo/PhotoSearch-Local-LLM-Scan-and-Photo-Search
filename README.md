@@ -380,7 +380,7 @@ from thumbnails.
 - **Nothing** for face grouping: the detector and recognition model run in the browser.
 
 Formats: JPEG, PNG, WebP, GIF, BMP and AVIF natively; HEIC/HEIF via libheif; TIFF via UTIF.
-RAW, video and vector files are counted and skipped.
+RAW files (NEF, CR2, ARW, DNG and others) are read through the full-size JPEG preview the camera embeds in them, so you see the camera's rendering, not a RAW development; a RAW beside a same-named JPEG is not scanned twice. Video and vector files are counted and skipped.
 
 [↑ Back to Index](#index)
 
