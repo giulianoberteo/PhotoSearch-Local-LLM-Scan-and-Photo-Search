@@ -157,6 +157,22 @@ round trip measured 24 seconds when the drives were asleep, and a directory list
 - **Writes are verified by length.** `appendLines` and `appendVectors` both re-read the
   file and refuse to report success unless it grew by exactly what was written.
 
+## The model server
+
+Any server that speaks the OpenAI API. Detection goes from most informative to least:
+LM Studio's `/api/v0/models` (type and load state), Ollama's `/api/tags` (model families,
+where `clip`/`mllama` identifies a vision model as a fact rather than a guess), then plain
+`/v1/models` where only ids exist and types are guessed from the name — always overridable
+by hand.
+
+Native endpoints resolve against the **root**, not the base URL, so a pasted `.../v1` does
+not demote a recognised server to the generic path.
+
+**Structured output is probed, not assumed.** A JSON schema is what stops a reasoning model
+spending its whole budget thinking, so the connection test asks the server whether it can
+enforce one and the app degrades in steps: schema → JSON-only → prose. Which one is in play
+is reported, because the weaker the contract the more the validator has to repair.
+
 ## Faces
 
 Detection and embedding run **in the browser** — LM Studio's embeddings endpoint is

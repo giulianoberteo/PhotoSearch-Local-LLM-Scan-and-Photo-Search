@@ -7,7 +7,7 @@ $("#btnTest").onclick = async () => {
   saveSettings();
   const checks = [], isFile = location.protocol === "file:";
   checks.push({ status:"ok", title:"Page origin",
-    detail: isFile ? "file:// — requests carry Origin: null, so LM Studio must allow it"
+    detail: isFile ? "file:// — requests carry Origin: null, which the server must allow"
                    : location.origin });
   if ($("#mock").checked)
     checks.push({ status:"warn", title:"Mock mode is ON", detail:"No server is contacted." });
@@ -17,29 +17,56 @@ $("#btnTest").onclick = async () => {
     const netErr = /Failed to fetch|NetworkError|load failed/i.test(r.error || "");
     checks.push({ status:"err", title:"Server reachable at " + S.baseUrl, detail:r.error });
     checks.push({ status:"err", title:"What to switch on", detail: netErr
-      ? "Run:  lms server start --cors --port 1234   — or in LM Studio open the Developer tab, "
-        + "set Status to Running and tick 'Enable CORS'."
-      : "Check the URL and that LM Studio's server is running." });
+      ? corsHint() + "   — any OpenAI-compatible server works; the default URL is "
+        + "LM Studio's 1234, Ollama's is 11434."
+      : "Check the URL and that the server is running." });
     if (!/^https?:\/\/(localhost|127\.0\.0\.1)/.test(S.baseUrl))
-      checks.push({ status:"warn", title:"Remote LM Studio",
-        detail:"Also enable 'Serve on Local Network'. Chrome may prompt for local-network access." });
+      checks.push({ status:"warn", title:"Server is not local",
+        detail:"Allow connections from the network as well as CORS. Chrome may prompt "
+          + "for local-network access." });
     renderChecks($("#diag"), checks);
     btn.disabled = false; btn.textContent = "Test connection"; return;
   }
   S.connected = true; setConn("on","Connected");
-  checks.push({ status:"ok", title:"Server reachable", detail:S.baseUrl });
+  checks.push({ status:"ok", title:"Server reachable",
+    detail:(S.provider ? S.provider + " at " : "") + S.baseUrl });
   checks.push({ status:"ok", title:"CORS allows this page",
     detail:"Model list fetched from " + (isFile ? "file://" : location.origin) });
   checks.push({ status:S.nativeApi ? "ok" : "warn", title:"Loaded-model detection",
     detail:S.nativeApi ? "Using " + S.nativeApi + " — reports type and load state."
-                       : "Fell back to /v1/models (no type or state)." });
+                       : "Fell back to /v1/models — only model ids, so types are "
+                         + "guessed from the name. Correct them under Model roles." });
   const vlm = S.models.filter(m => m.type === "vlm");
   checks.push({ status:vlm.length ? "ok" : "err", title:"Vision model for scanning",
     detail:vlm.length ? vlm.map(m => m.id + " (" + m.state + ")").join(", ")
-                      : "No vision model found. Download Qwen3.5-9B in LM Studio." });
+                      : "No vision model found. Load one that can read images — "
+                        + "Qwen3.5-VL, Gemma 3, llava, minicpm-v, moondream. If one IS "
+                        + "loaded but not listed here, pick it by hand under Model roles." });
   const emb = S.models.filter(m => m.type === "embeddings");
   checks.push({ status:emb.length ? "ok" : "warn", title:"Embedding model",
     detail:emb.length ? emb.map(m => m.id).join(", ") : "None — search falls back to keywords." });
+  /* Ask the server whether it can actually enforce a schema. Everything about
+     scan cost depends on it, and a server that ignores the field looks fine
+     until every photo comes back as prose. */
+  const scanModel = S.roles.scan
+    || (vlm[0] && vlm[0].id)
+    || (S.models[0] && S.models[0].id);
+  if (scanModel && !$("#mock").checked){
+    const pr = await probeStructured(scanModel);
+    S.structuredMode = pr.ok ? pr.mode : "none";
+    saveSettings();
+    checks.push(pr.mode === "json_schema"
+      ? { status:"ok", title:"Structured output",
+          detail:"Schema enforced. This is what keeps a reasoning model from "
+            + "spending its whole budget thinking — 13 tokens instead of 799." }
+      : pr.mode === "json_object"
+      ? { status:"warn", title:"Structured output",
+          detail:"This server does not enforce a schema, only \u201cJSON only\u201d. "
+            + "Scanning works but costs more tokens and needs more repair. (" + pr.why + ")" }
+      : { status:"warn", title:"Structured output",
+          detail:"This server enforces neither a schema nor JSON-only, so answers are "
+            + "parsed from prose and some photos will fail. (" + pr.why + ")" });
+  }
   renderChecks($("#diag"), checks);
   renderModels();
   btn.disabled = false; btn.textContent = "Test connection";
