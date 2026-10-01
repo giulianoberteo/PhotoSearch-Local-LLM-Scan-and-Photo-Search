@@ -67,6 +67,8 @@ scratch folder, so your real photos and index are never touched.
   never include a removed photo
 - **tab links:** that `#library` and its case, parameter, slash and encoded variants name the right
   tab, that `#selftest` and unknown hashes are never tabs, and that showing a tab selects it
+- **favourites:** a heart is stored on the record and written to the index, the Favourites view
+  lists only hearted photos and drops one when it is unhearted, `#favourites` and its search chip
 - **rotating photos:** that a turn is stored on the record and written to the index, wraps
   at 360 degrees, applies to each photo from its own angle, survives three quick clicks, and
   is drawn on the tile

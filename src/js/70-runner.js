@@ -345,6 +345,7 @@ async function runScan(files, mode, resuming){
            library must stay removed. */
         const was = IDX.records.get(rec.id);
         if (was && was.hidden){ rec.hidden = true; rec.hidden_at = was.hidden_at; }
+        if (was && was.favourite) rec.favourite = true;
         if (was && was.rotation) rec.rotation = was.rotation;    // a view setting the user chose
         RUN.streak = 0;                       // a success breaks the failure streak
         RUN.times.push(rec.secs);

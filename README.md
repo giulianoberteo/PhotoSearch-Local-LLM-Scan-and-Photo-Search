@@ -105,7 +105,7 @@ The current version is shown in the app's footer; the [ChangeLog](ChangeLog.md) 
 | **Browses like a photo app** | a zoomable Library grid, a full-window viewer, a day-by-day Timeline |
 | **Talks to your library** | a chat agent with nine tools that answers with the matching photos |
 | **Groups faces, never identifies them** | people appear as anonymous groups until *you* name them |
-| **Tidies safely** | rotate or remove photos from the Library, with undo; your files are never touched |
+| **Tidies safely** | favourite, rotate or remove photos from the Library, with undo; your files are never touched |
 | **Survives reality** | resumable scans, flaky-network-share tolerance, verified backups, a built-in self-test |
 | **Stays private** | no accounts, no API keys, no telemetry, no photo ever uploaded |
 
@@ -174,6 +174,7 @@ in **[docs/SETUP.md](docs/SETUP.md)**.
 
 | tab | what it is for |
 |---|---|
+| **Favourites** | Your hearted photos, in the same grid. Click the ♡ that appears on a photo (or press `F` in the viewer) to favourite it; in Select mode the **Favourite** button hearts the whole selection. `#favourites` links straight here. |
 | **Library** | Every photo in one grid. The **Size** slider changes density. Click a photo and it grows out of its tile into a full-window viewer: `←` `→` step through photos, `R` rotates right, `Shift+R` rotates left, `I` shows details, `Esc` closes. **Select** enables multi-select (click, shift-click for a range, `⌘/Ctrl+A`); the rotate buttons turn the whole selection and **Remove** hides it. **Removed (N)** lists what you hid so you can **Restore** it. |
 | **Chat** | Ask about your photos in plain language. Shows which tools the model used and the photos it found; click one for the full image and its metadata. |
 | **Timeline** | Browse by day, newest first, with places and occasions in the headings, a year bar and a date picker. |
@@ -182,7 +183,7 @@ in **[docs/SETUP.md](docs/SETUP.md)**.
 | **Settings** | Server URL and connection test, model roles, folder and index location, scan and date settings, backups, the self-test. |
 
 **Links to tabs.** Every tab has its own address, so you can bookmark or share a view:
-`PhotoSearch.html#library`, `#chat`, `#timeline`, `#people`, `#scan` or `#settings`. Opening a
+`PhotoSearch.html#library`, `#favourites`, `#chat`, `#timeline`, `#people`, `#scan` or `#settings`. Opening a
 link goes straight to that tab, choosing a tab updates the address, and the browser's Back and
 Forward buttons step through the tabs you visited. (`#selftest` is reserved for the self-test.)
 

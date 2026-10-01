@@ -108,6 +108,10 @@ function sgSuggest(raw){
     faceItems.push({ kind:"faces", icon:"☺", label:"Photos with faces",
       sub:F.withFaces.size.toLocaleString(), chips:[{ kind:"faces", label:"Faces" }] });
   if (faceItems.length) out.push({ title:"People", items:faceItems });
+  const favs = [...IDX.records.values()].filter(r => sgLive(r) && r.favourite).length;
+  if (favs && (!q || (q.length >= 2 && "favourites".startsWith(q))))
+    out.push({ title:"Favourites", items:[{ kind:"favourite", icon:"\u2665", label:"Favourites",
+      sub:favs.toLocaleString(), chips:[{ kind:"favourite", label:"Favourites" }] }] });
 
   /* Dates: "june", "2021" and "june 2021" all work, in any order. */
   const dates = [];
@@ -259,6 +263,8 @@ function sgArgs(){
   for (const c of GAL.chips){
     if (c.kind === "person") a.photo_sets.push((F.people.find(p => p.id === c.id) || { ids:new Set() }).ids);
     else if (c.kind === "faces") a.photo_sets.push(F.withFaces);
+    else if (c.kind === "favourite")
+      a.photo_sets.push(new Set([...IDX.records.values()].filter(r => sgLive(r) && r.favourite).map(r => r.id)));
     else if (c.kind === "place") a.place = c.value;
     else if (c.kind === "year"){ a.date_from = c.value + "-01-01"; a.date_to = c.value + "-12-31"; }
     else if (c.kind === "month") a.month = c.value;

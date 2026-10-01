@@ -1998,6 +1998,18 @@ async function selfTest(){
           eq("a half turn back returns to upright", IDX.records.get(rid).rotation, 0);
           ok("an upright photo carries no turn on its tile",
              rt.firstChild.style.rotate === "");
+          /* favourites: a mark on the record, shown as its own view */
+          written.length = 0;
+          eq("hearting reports how many", await galFavourite([rid], true, true), 1);
+          ok("a favourite is stored on the record and written to the index",
+             IDX.records.get(rid).favourite === true && written.length === 1
+             && written[0].favourite === true && !written[0].hidden && !written[0].deleted);
+          GAL.view = "favourites"; galBuild();
+          eq("the Favourites view lists only hearted photos", GAL.list.map(x => x.r.id), [rid]);
+          eq("unhearting reports how many", await galFavourite([rid], false, true), 1);
+          eq("an unhearted photo leaves the Favourites view", GAL.list.length, 0);
+          GAL.view = "all"; galBuild();
+          ok("and is no longer a favourite", !IDX.records.get(rid).favourite);
           eq("turns snap to quarter turns", normRot(100), 90);
           ok("odd quarter turns swap width and height", rotOdd(270) && rotOdd(-90) && !rotOdd(180));
         } finally {
@@ -2174,6 +2186,11 @@ async function selfTest(){
         eq("a person chip filters by that person's photos",
            [...a.photo_sets[0]].sort(), ["s1", "s2"]);
         eq("typed words become one query", a.query, "boat sea");
+        IDX.records.get("s1").favourite = true;
+        GAL.chips = [{ kind:"favourite", label:"Favourites" }];
+        eq("a Favourites chip filters to the hearted photos", [...sgArgs().photo_sets[0]], ["s1"]);
+        eq("Favourites is suggested when there are some", sgSuggest("fav").flatMap(s => s.items).some(i => i.kind === "favourite"), true);
+        GAL.chips = []; delete IDX.records.get("s1").favourite;
         ok("the Library's results are not capped at the chat limit", a.max > 60);
         const res = await searchPhotos({ ...a, query:"" });
         eq("the filters combine (Paris + 2022 + Anna has no photo)", res.results.length, 0);
@@ -2196,6 +2213,8 @@ async function selfTest(){
        shared with #selftest, which must never be mistaken for a tab. */
     {
       eq("#library names the Library tab", tabFromHash("#library"), "library");
+      eq("#favourites names the Favourites tab", tabFromHash("#favourites"), "favourites");
+      eq("Favourites shows the Library's grid", TAB_SECTION.favourites, "library");
       eq("tab names are case-insensitive", tabFromHash("#Timeline"), "timeline");
       eq("extra parameters after a tab are ignored", tabFromHash("#people&x=1"), "people");
       eq("a leading slash is tolerated", tabFromHash("#/settings"), "settings");

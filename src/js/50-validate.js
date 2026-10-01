@@ -62,7 +62,7 @@ const stripThink = s => (s || "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim
    "id" or "path" key would overwrite the record's identity. */
 const RESERVED = new Set(["id","path","name","kind","library_root","content_tag",
   "fingerprint","size","mtime","width","height","decoder","scanned_at","status",
-  "issues","secs","out_tokens","deleted","hidden","hidden_at","rotation","vision_model","embed_model",
+  "issues","secs","out_tokens","deleted","hidden","hidden_at","rotation","favourite","vision_model","embed_model",
   "schema_hash","prompt_hash","date_taken","gps","camera","when","place"]);
 
 function validate(r){
