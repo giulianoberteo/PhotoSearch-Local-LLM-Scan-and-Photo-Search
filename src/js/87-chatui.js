@@ -160,6 +160,11 @@ async function openLightbox(r){
     const f = await fileByPath(r.path);
     if (f && /\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(r.path)){
       lbUrl = URL.createObjectURL(f); img.src = lbUrl;
+    } else if (f && isScannable(r.path)){
+      const u = await thumbUrl(r.id);
+      if (u) img.src = u;
+      const big = await processImage(f, classifyFile(r.path), { bigPx:6000 });
+      lbUrl = URL.createObjectURL(big.big); img.src = lbUrl;
     } else {
       // HEIC/TIFF cannot be shown directly by the browser: use the stored thumbnail.
       const u = await thumbUrl(r.id);

@@ -503,16 +503,20 @@ function vwFill(r){
 async function vwLoadOriginal(r, tok){
   const note = t => { if (tok === VW.tok) $("#vwNote").textContent = t; };
   try {
-    if (!/\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(r.path)){
-      note("Showing the stored thumbnail — the browser cannot display this format directly.");
-      return;
-    }
     const f = await fileByPath(r.path);
     if (!f){
       note("The original is not reachable (the folder is not connected), so this is the stored thumbnail.");
       return;
     }
-    const url = URL.createObjectURL(f);
+    let url;
+    if (/\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(r.path)) url = URL.createObjectURL(f);
+    else {
+      // RAW, HEIC and TIFF: decode again at display size (a RAW's embedded preview is full size).
+      note("Loading the full-size picture\u2026");
+      const big = await processImage(f, classifyFile(r.path), { bigPx:6000 });
+      url = URL.createObjectURL(big.big);
+      note("");
+    }
     const probe = new Image();
     probe.src = url;
     await probe.decode();
