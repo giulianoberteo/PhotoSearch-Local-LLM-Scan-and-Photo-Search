@@ -1971,6 +1971,22 @@ async function selfTest(){
         $("#vwInfoBtn").click();
         ok("the info button opens the details panel", $("#viewer").classList.contains("info"));
         ok("which lists the photo", $("#vwMeta").textContent.includes("L599.jpg"));
+        $("#vwInfoBtn").click();
+        eq("the viewer starts fitted", VW.z, 1);
+        vwZoomTo(3);
+        eq("zoom goes to the requested level", [VW.z, $("#vwImg").style.scale, $("#vwZr").value], [3, "3", "300"]);
+        vwZoomTo(100);
+        eq("zoom is capped", VW.z, VW_MAXZ);
+        $("#viewer").dispatchEvent(new WheelEvent("wheel", { deltaY:500, clientX:300, clientY:300, bubbles:true, cancelable:true }));
+        ok("scrolling the wheel down zooms out", VW.z < VW_MAXZ, String(VW.z));
+        $("#viewer").dispatchEvent(new WheelEvent("wheel", { deltaY:-200, clientX:300, clientY:300, bubbles:true, cancelable:true }));
+        VW.px = 1e6; vwPlace(false);
+        ok("panning cannot carry the photo out of the window", Math.abs(VW.px) < 1e5, String(VW.px));
+        vwZoomTo(1);
+        eq("fit resets the pan", [VW.z, VW.px, VW.py], [1, 0, 0]);
+        vwZoomTo(2.5); vwStep(1);
+        eq("stepping to another photo returns to fit", VW.z, 1);
+        vwStep(-1);
         closeViewer();
         ok("closing releases the viewer", !VW.open);
 
