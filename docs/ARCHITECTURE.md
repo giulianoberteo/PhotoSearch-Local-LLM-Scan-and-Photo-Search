@@ -7,6 +7,13 @@ anything non-trivial. For *measurements* behind these decisions, see
 ## Index
 <!-- index:start -->
 - [Overview](#overview)
+- [Where data lives](#where-data-lives)
+  - [Photos and metadata are separate](#photos-and-metadata-are-separate)
+  - [What reads what](#what-reads-what)
+  - [The model server sees photos only in transit](#the-model-server-sees-photos-only-in-transit)
+  - [Browser storage holds settings, not data](#browser-storage-holds-settings-not-data)
+  - [Downloads](#downloads)
+  - [What can be rebuilt, and what cannot](#what-can-be-rebuilt-and-what-cannot)
 - [Source layout](#source-layout)
 - [The index](#the-index)
 - [Identifying a photo](#identifying-a-photo)
@@ -52,6 +59,91 @@ calls a model to do so (chat is the exception, because it talks to one by design
 
 [↑ Back to Index](#index)
 
+
+## Where data lives
+
+PhotoSearch deals with six places. Keeping them straight explains most of the design: what
+survives what, what can be rebuilt, and what must be backed up.
+
+| place | contents | who writes it | survives |
+|---|---|---|---|
+| **The photo folder** | the original files | you, never PhotoSearch | everything below being lost |
+| **The index** (`.photoindex/`) | metadata, embeddings, thumbnails, face data | PhotoSearch | losing the browser profile |
+| **Browser storage** | settings; remembered folder handles | PhotoSearch | losing the index |
+| **The model server** | nothing durable, by design | n/a | n/a |
+| **The browser cache** | libraries and models fetched from a CDN | the browser | being cleared (they are re-fetched) |
+| **Memory** | the loaded records and vectors | PhotoSearch | nothing; it is rebuilt from the index |
+
+### Photos and metadata are separate
+
+The photo folder is **read-only as far as the app is concerned**. Every photo is read at most
+a few times: once to scan it, and again if you open it full-size, run a face pass over
+originals, or rebuild its thumbnail. Nothing outside `.photoindex/` is ever written, moved or
+deleted, so the app cannot damage a library.
+
+The metadata lives in the index and carries no full-size pixels. The only images in the index
+are *derived*: a 384px thumbnail per photo (about 33 KB at the quality used) and, for faces, a
+small aligned crop (about 5 KB). Embeddings are numbers, not pictures.
+
+The two halves are joined by two keys stored in every record:
+
+- **`path`**, relative to the folder that was picked, together with **`library_root`**, the
+  name of that folder. This finds the file again when you open a photo or run a face pass.
+- **A content fingerprint** (name, size, modified time, confirmed by a hash of the first 64
+  KB). This lets the index follow a photo that was moved or renamed, and keeps two folders'
+  `IMG_1.jpg` apart. See [Identifying a photo](#identifying-a-photo).
+
+### What reads what
+
+| view or action | needs the index | needs the photo folder |
+|---|---|---|
+| Library, Timeline, search, chat, People | yes | **no**: they use thumbnails and metadata |
+| Open a photo full-size | yes | **yes**: reads the original; falls back to the thumbnail |
+| Scan, Refresh plan, Rebuild thumbnails | yes | **yes** |
+| Face pass over *thumbnails* | yes | no |
+| Face pass over *originals* | yes | **yes**, and only for the folder that is open |
+| Backup and restore | yes | no |
+
+This is why the index can live on a different disk from the photos. With the index on a local
+disk and the photos on a NAS, everything in the first row keeps working while the NAS sleeps.
+
+### The model server sees photos only in transit
+
+Scanning sends a resized 1024px JPEG of each photo, with the schema, to the model server. Chat
+sends your questions and compact search results, and `look_at_photos` sends up to six stored
+thumbnails. PhotoSearch asks the server to keep nothing, but what a server logs is its own
+setting, so check it if that matters to you.
+
+### Browser storage holds settings, not data
+
+`localStorage` keeps the server URL, model roles, scan and date settings, and the Library tile
+size. IndexedDB keeps *directory handles* for the last photo folder and index folder. A handle
+is a permission-bound pointer, not a copy. Chrome drops the permission when the page reloads,
+so the app asks you to re-approve the folder, and the index is untouched by that.
+
+### Downloads
+
+HEIC and TIFF decoders, `exifr`, the face detection and recognition models are fetched by the
+browser from public CDNs on first use and kept in its normal cache. The GeoNames place list is
+the one download the app stores itself, in `.photoindex/geo/`, after which place lookup is
+fully offline.
+
+### What can be rebuilt, and what cannot
+
+| lost | recovered by | cost |
+|---|---|---|
+| thumbnails | **Rebuild thumbnails** from the originals | minutes; no model |
+| embeddings (`vectors.bin`) | rescan the affected photos (**Refresh stale**); search is keyword-only meanwhile | model time |
+| face groups | **Find faces** again | minutes (thumbnails) to hours (originals) |
+| `state.json` | **Refresh plan** | a re-walk |
+| `records.jsonl` | nothing but a backup or a rescan | **about 21.5 s per photo** |
+
+`records.jsonl` is the one irreplaceable file, which is why the app backs it up after every
+scan and why [OPERATIONS.md](OPERATIONS.md#backing-up-by-hand) has a command that always works.
+
+[↑ Back to Index](#index)
+
+---
 
 ## Source layout
 
