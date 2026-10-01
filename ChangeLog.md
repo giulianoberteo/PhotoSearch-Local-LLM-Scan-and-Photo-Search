@@ -17,6 +17,8 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
+- [0.6.6 (2026-10-02)](#066-2026-10-02)
+  - [Fixed](#fixed)
 - [0.6.5 (2026-10-02)](#065-2026-10-02)
   - [Added](#added)
 - [0.6.4 (2026-10-02)](#064-2026-10-02)
@@ -36,7 +38,7 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 - [0.5.4 (2026-10-01)](#054-2026-10-01)
   - [Changed](#changed-4)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
-  - [Fixed](#fixed)
+  - [Fixed](#fixed-1)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
   - [Added](#added-6)
   - [Changed](#changed-5)
@@ -45,22 +47,36 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-7)
   - [Changed](#changed-7)
-  - [Fixed](#fixed-1)
+  - [Fixed](#fixed-2)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-8)
   - [Changed](#changed-8)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-9)
   - [Changed](#changed-9)
-  - [Fixed](#fixed-2)
+  - [Fixed](#fixed-3)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
   - [Added](#added-10)
   - [Changed](#changed-10)
-  - [Fixed](#fixed-3)
+  - [Fixed](#fixed-4)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
   - [Added](#added-11)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.6 (2026-10-02)
+
+**Summary:** the self-test no longer leaves its fake models in your settings.
+
+### Fixed
+
+- Running the self-test could save `mock-embed` and `mock-vlm` as your selected models, so a
+  later scan stopped with "The selected embedding model 'mock-embed' is not in LM Studio".
+  The test now writes your real settings back when it ends, and any mock model left in saved
+  settings by an earlier run is ignored on load.
+
+[↑ Back to Index](#index)
+
 
 ## 0.6.5 (2026-10-02)
 
