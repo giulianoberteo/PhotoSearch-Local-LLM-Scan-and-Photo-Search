@@ -250,7 +250,7 @@ $("#btnWriteTest").onclick = async () => {
     st.ok("append + seek to end works");
     st = step(host, "Read the folder"); await st.paint();
     const { files, counts } = await walk(S.dirHandle, n => st.note(n + " images so far…"));
-    st.ok(files.length + " scannable images · " + counts.raw + " RAW, " + counts.video + " video, "
+    st.ok(files.length + " scannable images · " + counts.rawPaired + " RAW beside a JPEG, " + counts.video + " video, "
       + counts.vector + " vector skipped · " + fmtDur((performance.now()-t0)/1000));
     checksBox(host).append(checkRow({ status:"ok", title:"Index is writable",
       detail:"Open the Scan tab to see the plan." }));
@@ -355,7 +355,7 @@ function renderPlan(p){
   box.append(stat);
   const c = p.counts;
   const bits = [];
-  if (c.raw) bits.push(c.raw + " RAW counted, skipped");
+  if (c.rawPaired) bits.push(c.rawPaired + " RAW beside a JPEG, not scanned twice");
   if (c.video) bits.push(c.video + " video skipped");
   if (c.vector) bits.push(c.vector + " vector/PDF skipped");
   if (p.unreadable.length) bits.push(p.unreadable.length + " unreadable");

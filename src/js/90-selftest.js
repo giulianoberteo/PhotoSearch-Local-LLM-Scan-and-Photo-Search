@@ -266,8 +266,32 @@ async function selfTest(){
     await writeInto(scratch, "three.webp", await makeImage(300, 300, "#44cc88", "image/webp"));
     await writeInto(sub, "four.png", await makeImage(200, 400, "#cc4488"));
     await writeInto(scratch, "notes.txt", new Blob(["hello"]));
-    await writeInto(scratch, "raw.CR2", new Blob([new Uint8Array(10)]));
+    await writeInto(scratch, "one.CR2", new Blob([new Uint8Array(10)]));
     await writeInto(scratch, "clip.mp4", new Blob([new Uint8Array(10)]));
+
+    /* ---- RAW through its embedded preview ---- */
+    {
+      const jpg = new Uint8Array(await (await makeImage(640, 480, "#ccaa44", "image/jpeg")).arrayBuffer());
+      const mk = orient => {
+        const t = new Uint8Array(68 + jpg.length), d = new DataView(t.buffer);
+        t.set([0x49, 0x49, 42, 0], 0); d.setUint32(4, 8, true);
+        d.setUint16(8, 2, true);                                   // IFD0: orientation + SubIFD
+        d.setUint16(10, 0x0112, true); d.setUint16(12, 3, true); d.setUint32(14, 1, true); d.setUint16(18, orient, true);
+        d.setUint16(22, 0x014A, true); d.setUint16(24, 4, true); d.setUint32(26, 1, true); d.setUint32(30, 38, true);
+        d.setUint16(38, 2, true);                                  // SubIFD: JPEG offset + length
+        d.setUint16(40, 0x0201, true); d.setUint16(42, 4, true); d.setUint32(44, 1, true); d.setUint32(48, 68, true);
+        d.setUint16(52, 0x0202, true); d.setUint16(54, 4, true); d.setUint32(56, 1, true); d.setUint32(60, jpg.length, true);
+        t.set(jpg, 68);
+        return new File([t], "shot.NEF");
+      };
+      const up = await processImage(mk(1), "raw");
+      eq("NEF: reads the embedded JPEG preview", [up.srcW, up.srcH, up.decoder], [640, 480, "raw-preview"]);
+      const turned = await processImage(mk(6), "raw");
+      eq("NEF: applies the camera's orientation", [turned.srcW, turned.srcH], [480, 640]);
+      let bad = "";
+      try { await processImage(new File([new Uint8Array(500)], "x.NEF"), "raw"); } catch (e){ bad = String(e.message || e); }
+      ok("NEF with no preview fails with a clear reason", /no embedded JPEG/.test(bad), bad);
+    }
 
     /* ---- worker decode ---- */
     await st.note("Decoding through the worker…");
@@ -308,7 +332,7 @@ async function selfTest(){
     await loadRecords(); await loadVectors(); await loadCheckpoint();
     let plan = await buildPlan();
     eq("plan finds 4 scannable images", plan.total, 4);
-    eq("plan counts RAW", plan.counts.raw, 1);
+    eq("RAW beside a same-named JPEG/PNG is not scanned twice", plan.counts.rawPaired, 1);
     eq("plan counts video", plan.counts.video, 1);
     eq("plan ignores .txt", plan.counts.other, 1);
     eq("all four are new", plan.new.length, 4);

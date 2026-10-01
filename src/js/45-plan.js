@@ -5,9 +5,10 @@ const SKIP_DIR = new Set([".photoindex","@eaDir",".AppleDouble",".Trashes","#rec
 
 async function walk(dir, onTick, signal){
   const files = [];
-  const counts = { raw:0, vector:0, video:0, other:0, skippedDirs:0 };
+  const counts = { raw:0, rawPaired:0, vector:0, video:0, other:0, skippedDirs:0 };
   async function rec(h, prefix, depth){
     if (depth > 24) return;                         // guard against pathological nesting
+    const raws = [], stems = new Set();
     for await (const [name, ent] of h.entries()){
       if (signal && signal.aborted) throw new DOMException("aborted","AbortError");
       if (ent.kind === "directory"){
@@ -16,11 +17,18 @@ async function walk(dir, onTick, signal){
       } else {
         if (name.startsWith("._")) continue;        // AppleDouble sidecars
         const kind = classifyFile(name);
-        if (kind === "native" || kind === "heic" || kind === "tiff"){
+        if (kind === "raw") raws.push({ path: prefix + name, name, handle: ent, kind });
+        else if (kind === "native" || kind === "heic" || kind === "tiff"){
+          stems.add(name.replace(/\.[^.]*$/, "").toLowerCase());
           files.push({ path: prefix + name, name, handle: ent, kind });
           if (onTick && files.length % 100 === 0) await onTick(files.length);
         } else counts[kind === "other" ? "other" : kind]++;
       }
+    }
+    // A RAW with a same-named JPEG beside it is the same shot: the JPEG is scanned, not both.
+    for (const r of raws){
+      if (stems.has(r.name.replace(/\.[^.]*$/, "").toLowerCase())) counts.rawPaired++;
+      else files.push(r);
     }
   }
   await rec(dir, "", 0);

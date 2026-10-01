@@ -632,7 +632,8 @@ round trip measured 24 seconds when the drives were asleep, and a directory list
   real share rather than the share itself.
 - **Chat and Timeline still open the older lightbox**, not the Library viewer, so they have
   no Remove button and no arrow-key stepping.
-- **Videos and RAW files** are counted and skipped; they never appear in the Library. See
+- **Videos** are counted and skipped; they never appear in the Library. **RAW files** are indexed
+  through their embedded JPEG preview (best effort outside NEF). See
   [ROADMAP.md](ROADMAP.md).
 
 [↑ Back to Index](#index)

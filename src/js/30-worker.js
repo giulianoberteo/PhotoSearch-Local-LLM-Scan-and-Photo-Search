@@ -2,7 +2,9 @@
 /* ================= file-format policy =================
    Chromium decodes jpeg/png/webp/gif/bmp/avif natively. HEIC and TIFF need a
    decoder, loaded lazily from a pinned CDN and skipped cleanly when offline.
-   RAW, vector and video files are counted and reported but never sent to a model. */
+   RAW files (NEF, CR2, ARW, DNG ...) are read through the full-size JPEG preview that the
+   camera embeds in them; the sensor data is never decoded. Vector and video files are
+   counted and reported but never sent to a model. */
 const FMT = {
   native: /\.(jpe?g|jpe|jfif|pjpeg|png|apng|webp|gif|bmp|avif)$/i,
   heic:   /\.(heic|heif|hif)$/i,
@@ -11,7 +13,7 @@ const FMT = {
   raw:    /\.(cr2|cr3|nef|nrw|arw|srf|sr2|dng|orf|rw2|raf|pef|ptx|srw|3fr|fff|iiq|x3f|erf|mef|mos|mrw|kdc|dcr)$/i,
   video:  /\.(mp4|mov|m4v|avi|mkv|webm|mpg|mpeg|wmv|3gp|mts|m2ts)$/i,
 };
-const isScannable = n => FMT.native.test(n) || FMT.heic.test(n) || FMT.tiff.test(n);
+const isScannable = n => FMT.native.test(n) || FMT.heic.test(n) || FMT.tiff.test(n) || FMT.raw.test(n);
 function classifyFile(name){
   if (FMT.native.test(name)) return "native";
   if (FMT.heic.test(name)) return "heic";
@@ -81,6 +83,88 @@ async function tiffBitmap(buf){
   if (!w || !h) throw new Error("TIFF has no dimensions");
   return createImageBitmap(new ImageData(new Uint8ClampedArray(rgba), w, h));
 }
+/* A RAW file is a TIFF container (CR3 and RAF are not, and use the byte scan below) that
+   carries one or more JPEG previews. Walk IFD0, its chained IFDs and its SubIFDs, collect
+   every JPEG the tags point at, and use the largest. */
+function rawPreviews(buf){
+  const n = buf.byteLength, dv = new DataView(buf), out = [];
+  let orient = 1;
+  const le = n > 8 && dv.getUint16(0) === 0x4949;
+  if (n > 8 && (le || dv.getUint16(0) === 0x4D4D)){
+    const u16 = o => dv.getUint16(o, le), u32 = o => dv.getUint32(o, le);
+    const seen = new Set();
+    const ifd = (off, top) => {
+      if (!off || off + 2 > n || seen.has(off) || seen.size > 64) return;
+      seen.add(off);
+      const cnt = u16(off), subs = [];
+      let comp = 0, jOff = 0, jLen = 0, sOff = 0, sLen = 0;
+      for (let i = 0; i < cnt; i++){
+        const e = off + 2 + i * 12;
+        if (e + 12 > n) break;
+        const tag = u16(e), type = u16(e + 2), c = u32(e + 4);
+        const val = type === 3 ? u16(e + 8) : u32(e + 8);
+        const first = () => c === 1 ? val : (val + 4 <= n ? (type === 3 ? u16(val) : u32(val)) : 0);
+        if (tag === 0x0112 && top) orient = val;
+        else if (tag === 0x0103) comp = val;
+        else if (tag === 0x0201) jOff = val;
+        else if (tag === 0x0202) jLen = val;
+        else if (tag === 0x0111) sOff = first();
+        else if (tag === 0x0117) sLen = c === 1 ? val : first();
+        else if (tag === 0x014A){
+          for (let k = 0; k < Math.min(c, 8); k++)
+            subs.push(c === 1 ? val : (val + k * 4 + 4 <= n ? u32(val + k * 4) : 0));
+        }
+      }
+      if (jOff && jLen) out.push([jOff, jLen]);
+      if ((comp === 6 || comp === 7) && sOff && sLen) out.push([sOff, sLen]);
+      if (e2(off + 2 + cnt * 12)) ifd(u32(off + 2 + cnt * 12), false);
+      subs.forEach(s => ifd(s, false));
+    };
+    const e2 = o => o + 4 <= n;
+    try { ifd(u32(4), true); } catch (e) {}
+  }
+  const u8 = new Uint8Array(buf);
+  const good = out.filter(([o, l]) => l > 1000 && o + l <= n && u8[o] === 0xFF && u8[o + 1] === 0xD8)
+                  .sort((a, b) => b[1] - a[1]);
+  if (!good.length){
+    // No usable tags: take every JPEG start-of-image in the file, biggest span first.
+    const starts = [];
+    for (let i = u8.indexOf(0xFF); i >= 0 && i + 3 < n; i = u8.indexOf(0xFF, i + 1))
+      if (u8[i + 1] === 0xD8 && u8[i + 2] === 0xFF) starts.push(i);
+    starts.forEach((o, k) => good.push([o, (k + 1 < starts.length ? starts[k + 1] : n) - o]));
+    good.sort((a, b) => b[1] - a[1]);
+  }
+  return { spans: good.slice(0, 3), orient };
+}
+async function rotBitmap(bmp, o){
+  const w = bmp.width, h = bmp.height, swap = o === 6 || o === 8;
+  const c = new OffscreenCanvas(swap ? h : w, swap ? w : h), cx = c.getContext("2d");
+  if (o === 6){ cx.translate(h, 0); cx.rotate(Math.PI / 2); }
+  else if (o === 8){ cx.translate(0, w); cx.rotate(-Math.PI / 2); }
+  else { cx.translate(w, h); cx.rotate(Math.PI); }
+  cx.drawImage(bmp, 0, 0);
+  bmp.close();
+  return createImageBitmap(c);
+}
+async function rawBitmap(buf){
+  const { spans, orient } = rawPreviews(buf);
+  if (!spans.length) throw new Error("RAW file has no embedded JPEG preview");
+  let last = null;
+  for (const [o, l] of spans){
+    const bytes = buf.slice(o, o + l);
+    try {
+      const bmp = await createImageBitmap(new Blob([bytes], { type:"image/jpeg" }),
+                                          { imageOrientation:"from-image" });
+      // Most previews carry no EXIF of their own; the camera's turn is in IFD0.
+      let hasExif = false;
+      const head = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 4096));
+      for (let i = 0; i + 4 < head.length; i++)
+        if (head[i] === 0x45 && head[i + 1] === 0x78 && head[i + 2] === 0x69 && head[i + 3] === 0x66){ hasExif = true; break; }
+      return (!hasExif && (orient === 3 || orient === 6 || orient === 8)) ? rotBitmap(bmp, orient) : bmp;
+    } catch (e){ last = e; }
+  }
+  throw new Error("RAW preview would not decode: " + String(last && last.message || last));
+}
 function fit(w, h, max){
   if (w <= max && h <= max) return [w, h];
   return w >= h ? [max, Math.round(h * max / w)] : [Math.round(w * max / h), max];
@@ -106,6 +190,8 @@ self.onmessage = async e => {
     } else if (kind === "tiff"){
       try { bmp = await createImageBitmap(file, { imageOrientation:"from-image" }); }
       catch { bmp = await tiffBitmap(await file.arrayBuffer()); decoder = "utif"; }
+    } else if (kind === "raw"){
+      bmp = await rawBitmap(await file.arrayBuffer()); decoder = "raw-preview";
     } else {
       throw new Error("unsupported kind: " + kind);
     }
