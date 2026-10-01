@@ -15,32 +15,50 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
+- [0.5.4 (2026-10-01)](#054-2026-10-01)
+  - [Changed](#changed)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
   - [Added](#added)
-  - [Changed](#changed)
-- [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-1)
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
+  - [Changed](#changed-2)
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-1)
-  - [Changed](#changed-2)
+  - [Changed](#changed-3)
   - [Fixed](#fixed-1)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-2)
-  - [Changed](#changed-3)
+  - [Changed](#changed-4)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-3)
-  - [Changed](#changed-4)
+  - [Changed](#changed-5)
   - [Fixed](#fixed-2)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
   - [Added](#added-4)
-  - [Changed](#changed-5)
+  - [Changed](#changed-6)
   - [Fixed](#fixed-3)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
   - [Added](#added-5)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.5.4 (2026-10-01)
+
+**Summary:** the README's opening diagram is now a real architecture diagram. Documentation
+only.
+
+### Changed
+
+- Replaced the ASCII sketch with a Mermaid architecture diagram (rendered natively by GitHub).
+  It shows the interface and engine inside the browser, the read-only photo folder, the
+  `.photoindex/` index, the local model server with its three model roles, and the one-time CDN
+  downloads, with each connection labelled. A short "Reading the diagram" note follows it.
+
+[↑ Back to Index](#index)
+
+---
 
 ## 0.5.3 (2026-10-01)
 
