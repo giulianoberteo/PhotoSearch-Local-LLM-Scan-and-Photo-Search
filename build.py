@@ -33,6 +33,7 @@ ORDER = [
     "80-ui.js",       # settings and scan UI
     "85-chat.js",     # tool-calling agent
     "82-timeline.js", # browse by day
+    "83-library.js",  # flat gallery of every photo + full-window viewer
     "84-faces.js",    # face detection, grouping, naming
     "86-peopleui.js", # the People tab
     "87-chatui.js",   # chat rendering, lightbox

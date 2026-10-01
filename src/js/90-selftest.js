@@ -1727,6 +1727,103 @@ async function selfTest(){
       TL.built = 0;
     }
 
+    /* ---- library ----
+       One flat grid of every photo. The point of the design is that 6,635
+       tiles are never in the DOM at once, and that the viewer opens, steps and
+       closes without leaving the page stuck behind it. */
+    {
+      const keepRecords = IDX.records, sec = $("#tab-library");
+      const wasHidden = sec.hidden;
+      const recs = [];
+      for (let i = 0; i < 600; i++)
+        recs.push(["L" + i, { id:"L" + i, name:"L" + i + ".jpg", path:"L" + i + ".jpg",
+          status:"ok", caption:"c", date_taken:new Date(2020, 0, 1 + i).toISOString() }]);
+      recs.push(["Lundated", { id:"Lundated", name:"u.jpg", path:"u.jpg", status:"ok" }]);
+      recs.push(["Lgone", { id:"Lgone", name:"g.jpg", path:"g.jpg", status:"ok",
+        deleted:true, date_taken:"2030-01-01T00:00:00.000Z" }]);
+      recs.push(["Lerr", { id:"Lerr", name:"e.jpg", path:"e.jpg", status:"error" }]);
+      IDX.records = new Map(recs);
+      GAL.desc = true;
+      galBuild();
+      eq("the library lists every live photo", GAL.list.length, 601);
+      eq("the newest photo comes first", GAL.list[0].r.id, "L599");
+      eq("undated photos go last", GAL.list[600].r.id, "Lundated");
+      ok("deleted and failed records are left out",
+         !GAL.list.some(x => x.r.id === "Lgone" || x.r.id === "Lerr"));
+      GAL.desc = false; galBuild();
+      eq("reversing puts the oldest first", GAL.list[0].r.id, "L0");
+      eq("and still keeps undated photos last", GAL.list[600].r.id, "Lundated");
+      GAL.desc = true; galBuild();
+
+      sec.hidden = false;
+      try {
+        galClear(); GAL.cell = 0; galLayout();
+        ok("the grid is laid out in columns", GAL.cols > 0 && GAL.cell > 0,
+           GAL.cols + " cols, " + GAL.cell + "px");
+        ok("tiles are created only near the viewport, not for every photo",
+           GAL.shown.size > 0 && GAL.shown.size < 601, String(GAL.shown.size));
+        eq("the DOM holds exactly the tiles it tracks",
+           $("#galGrid").querySelectorAll(".gtile").length, GAL.shown.size);
+        const first = GAL.list[[...GAL.shown.keys()][0]].r.id;
+        ok("a shown tile pins its thumbnail", thumbPinned.has(first));
+        galClear();
+        eq("clearing removes every tile", $("#galGrid").querySelectorAll(".gtile").length, 0);
+        ok("and unpins their thumbnails", !thumbPinned.has(first));
+
+        galLayout();
+        await openViewer(0);
+        ok("clicking a photo opens the viewer", VW.open && !$("#viewer").hidden);
+        eq("on the right photo", VW.i, 0);
+        ok("with nothing before the first photo", $("#vwPrev").disabled);
+        vwStep(1);
+        eq("stepping forward moves to the next photo", VW.i, 1);
+        vwStep(-1); vwStep(-1);
+        eq("stepping back past the first photo stays put", VW.i, 0);
+        $("#vwInfoBtn").click();
+        ok("the info button opens the details panel", $("#viewer").classList.contains("info"));
+        ok("which lists the photo", $("#vwMeta").textContent.includes("L599.jpg"));
+        closeViewer();
+        ok("closing releases the viewer", !VW.open);
+
+        /* Removing is an index-only change: no file is touched, the record is
+           flagged `hidden` (never `deleted`, which the scan plan would treat
+           as absent and re-index), and every surface that lists photos skips it. */
+        const real = { ei:ensureIndex, rf:readFullRecords, al:appendLines };
+        const written = [];
+        ensureIndex = async () => {};
+        readFullRecords = async () => new Map();
+        appendLines = async (name, lines) => { written.push(...lines); };
+        try {
+          galBuild(); galLayout();
+          const n0 = GAL.list.length;
+          eq("removing reports how many it hid",
+             await galApply(["L598", "L597"], true, true), 2);
+          ok("the records are flagged hidden, not deleted",
+             written.length === 2 && written.every(l => l.hidden === true && !l.deleted));
+          eq("they leave the library", GAL.list.length, n0 - 2);
+          eq("and are counted as removed", GAL.removed, 2);
+          ok("search no longer considers them", !candidateSet({}).some(r => r.hidden));
+          GAL.view = "removed"; galBuild();
+          eq("the Removed view lists exactly them", GAL.list.length, 2);
+          eq("and restoring brings one back", await galApply(["L598"], false, true), 1);
+          ok("restored records are no longer hidden", !IDX.records.get("L598").hidden);
+          GAL.view = "all"; galBuild();
+          eq("the library has one fewer removed photo", GAL.list.length, n0 - 1);
+        } finally {
+          ensureIndex = real.ei; readFullRecords = real.rf; appendLines = real.al;
+          GAL.view = "all";
+        }
+        await sleep(450);
+        ok("and hides it again once the zoom-out finishes", $("#viewer").hidden);
+      } finally {
+        galClear();
+        if (VW.open) closeViewer();
+        sec.hidden = wasHidden;
+        IDX.records = keepRecords;
+        GAL.built = 0; GAL.cell = 0; GAL.list = [];
+      }
+    }
+
     /* ---- escape sequences must never reach the screen ----
        "Press \u201cFind faces\u201d" rendered literally, backslashes and all,
        because the source carried an escaped backslash. It is invisible to every

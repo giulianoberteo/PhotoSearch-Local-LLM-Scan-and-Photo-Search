@@ -163,7 +163,7 @@ function showPersonPhotos(g, label){
     const f = FACES.faces.get(fid);
     if (f) ids.add(f.photo_id);
   }
-  const recs = [...ids].map(id => IDX.records.get(id)).filter(Boolean)
+  const recs = [...ids].map(id => IDX.records.get(id)).filter(r => r && !r.hidden)
     .sort((a, b) => (b.date_taken || "").localeCompare(a.date_taken || ""));
   const host = $("#faceOut");
   host.textContent = "";

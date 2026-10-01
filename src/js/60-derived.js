@@ -41,7 +41,7 @@ function buildEvents(records, gapHours, km){
      false, so no split happened AND lastT became NaN, merging every later photo
      into a single enormous "event". */
   const dated = records
-    .filter(r => r.date_taken && !r.deleted && r.status !== "error" && !r.probe)
+    .filter(r => r.date_taken && !r.deleted && !r.hidden && r.status !== "error" && !r.probe)
     .filter(r => !isNaN(new Date(r.date_taken).getTime()))
     .sort((a,b) => a.date_taken < b.date_taken ? -1 : 1);
   const events = [];
@@ -87,7 +87,7 @@ function rebuildDerived(){
   /* The write-test probe row is not a photo: it inflated the library count fed
      to the model, and could be returned as a "similar photo". */
   const recs = [...IDX.records.values()]
-    .filter(r => !r.deleted && r.status !== "error" && !r.probe);
+    .filter(r => !r.deleted && !r.hidden && r.status !== "error" && !r.probe);
   for (const r of recs){
     for (const o of r.objects || []) addEntity("object", o, r.id);
     for (const a of r.activities || []) addEntity("activity", a, r.id);
@@ -119,6 +119,7 @@ function rebuildDerived(){
     photos: recs.length,
     errors: [...IDX.records.values()].filter(r => r.status === "error").length,
     deleted: [...IDX.records.values()].filter(r => r.deleted).length,
+    hidden: [...IDX.records.values()].filter(r => r.hidden && !r.deleted).length,
     entities: DERIVED.entities.size,
     terms: DERIVED.postings.size,
     events: DERIVED.events.length,
