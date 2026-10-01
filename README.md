@@ -115,6 +115,12 @@ to fill a fixed JSON schema — observations first, caption last, "unknown" pref
 guess. Reads EXIF for dates, camera and GPS. Resolves GPS to place names from an offline
 GeoNames extract. Writes everything to `.photoindex/` beside your photos.
 
+**Browsing.** A Library tab shows every photo in one zoomable grid; click one and it opens
+full-window, with arrow-key stepping and a details panel. A Timeline tab groups by day.
+Photos can be removed from the library (select several, or press Delete in the viewer) with
+an Undo and a Removed list to restore from. This only hides them from the index — your
+files are never touched.
+
 **Searching.** BM25 over an inverted index, cosine similarity over embeddings, merged with
 reciprocal rank fusion. Exact phrases in `"quotes"`. All of it in the browser — there is no
 vector database.

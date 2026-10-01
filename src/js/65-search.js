@@ -29,7 +29,7 @@ function candidateSet(f){
   const occ   = f.occasion ? [].concat(f.occasion).map(s => String(s).toLowerCase()) : null;
   const who   = f.person ? [].concat(f.person).map(s => String(s).toLowerCase()) : null;
   for (const r of IDX.records.values()){
-    if (r.deleted || r.status === "error" || r.probe) continue;
+    if (r.deleted || r.hidden || r.status === "error" || r.probe) continue;
     if (from && (!r.date_taken || r.date_taken.slice(0,10) < from)) continue;
     if (to   && (!r.date_taken || r.date_taken.slice(0,10) > to)) continue;
     if (place && !(r.place || "").toLowerCase().includes(place)) continue;
@@ -224,7 +224,7 @@ async function searchPhotos(args){
 function findSimilar(id, limit){
   const v = vectorOf(id);
   const allowed = new Set([...IDX.records.values()]
-    .filter(r => !r.deleted && r.status !== "error" && !r.probe && r.id !== id).map(r => r.id));
+    .filter(r => !r.deleted && !r.hidden && r.status !== "error" && !r.probe && r.id !== id).map(r => r.id));
   if (v){
     const m = cosineScores(v, allowed);
     return [...m.entries()].sort((a,b) => b[1]-a[1]).slice(0, limit)

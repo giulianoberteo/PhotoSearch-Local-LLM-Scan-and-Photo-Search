@@ -107,14 +107,8 @@ async function fileByPath(path){
   for (let i = 0; i < parts.length - 1; i++) dir = await dir.getDirectoryHandle(parts[i]);
   return (await dir.getFileHandle(parts[parts.length - 1])).getFile();
 }
-let lbUrl = null;
-async function openLightbox(r){
-  const lb = $("#lightbox");
-  lb.hidden = false;
-  const img = $("#lbImg");
-  img.removeAttribute("src");
-  $("#lbTitle").textContent = r.name || r.path;
-  const meta = $("#lbMeta"); meta.innerHTML = "";
+/* The key/value block describing one photo; shared by the lightbox and the Library viewer. */
+function metaList(r){
   const dl = el("dl","kv");
   const add = (k, v) => { if (v == null || v === "") return;
     dl.append(el("dt", null, k)); dl.append(el("dd", null, String(v))); };
@@ -136,7 +130,17 @@ async function openLightbox(r){
   add("text in image", r.visible_text && r.visible_text.has_text ? r.visible_text.text : null);
   add("colours", (r.dominant_colors || []).join(", "));
   add("file", r.path + (r.width && r.height ? "  ·  " + r.width + "x" + r.height : ""));
-  meta.append(dl);
+  return dl;
+}
+let lbUrl = null;
+async function openLightbox(r){
+  const lb = $("#lightbox");
+  lb.hidden = false;
+  const img = $("#lbImg");
+  img.removeAttribute("src");
+  $("#lbTitle").textContent = r.name || r.path;
+  const meta = $("#lbMeta"); meta.innerHTML = "";
+  meta.append(metaList(r));
 
   const more = $("#lbMore");
   more.onclick = () => {

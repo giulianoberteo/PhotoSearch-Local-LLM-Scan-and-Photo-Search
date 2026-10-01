@@ -39,7 +39,7 @@ function buildTimeline(){
   const byDay = new Map();
   let undated = 0, total = 0;
   for (const r of IDX.records.values()){
-    if (r.deleted || r.status === "error") continue;
+    if (r.deleted || r.hidden || r.status === "error") continue;
     total++;
     const key = tlDayKey(r);
     if (!key){ undated++; continue; }
