@@ -1,7 +1,36 @@
 # Architecture
 
+How PhotoSearch is put together, and why. This is the document to read before changing
+anything non-trivial. For *measurements* behind these decisions, see
+[FINDINGS.md](FINDINGS.md); for running the thing, see [SETUP.md](SETUP.md).
+
+## Index
+<!-- index:start -->
+- [Overview](#overview)
+- [Source layout](#source-layout)
+- [The index](#the-index)
+- [Identifying a photo](#identifying-a-photo)
+- [The plan](#the-plan)
+- [Scanning one photo](#scanning-one-photo)
+- [Search](#search)
+- [The chat agent](#the-chat-agent)
+- [Browsing: Library and Timeline](#browsing-library-and-timeline)
+  - [Library](#library)
+  - [Removing photos](#removing-photos)
+  - [Timeline](#timeline)
+- [Faces](#faces)
+- [The model server](#the-model-server)
+- [Safety properties](#safety-properties)
+- [Storage is assumed to be slow and unreliable](#storage-is-assumed-to-be-slow-and-unreliable)
+- [Known gaps](#known-gaps)
+<!-- index:end -->
+
+## Overview
+
 Everything runs in one browser tab. There is no server, no database engine and no
-framework — deliberately, because the project's premise is a file you can copy anywhere.
+framework, deliberately: the project's premise is a file you can copy to any machine and
+open. The only external dependency at run time is a model server you already have running
+(LM Studio, Ollama and similar), and even that is reached over plain HTTP from the page.
 
 ```
 PhotoSearch.html
@@ -11,14 +40,52 @@ PhotoSearch.html
 ├── scan runner                  queue · retries · checkpoint · backup
 ├── search                       BM25 + cosine + reciprocal rank fusion
 ├── chat agent                   tool-calling loop over the index
+├── library                      every photo in one grid · full-window viewer · remove/restore
 ├── timeline                     browse by day · lazy, windowed thumbnails
 ├── faces                        detect · embed · group by resemblance · you name them
 └── fault proxy (test-only)      slow · hanging · failing · short-writing storage
 ```
 
+The same data feeds every view. Scanning produces *records*; search, chat, the Library, the
+Timeline and People are all different ways of looking at those records, and none of them
+calls a model to do so (chat is the exception, because it talks to one by design).
+
+[↑ Back to Index](#index)
+
+
+## Source layout
+
+`PhotoSearch.html` is **generated**. The source lives in `src/js/` and `build.py`
+concatenates it, in a fixed order, into `src/shell.html`. Later files may use names defined
+earlier, never the reverse.
+
+| file | responsibility |
+|---|---|
+| `00-core.js` | helpers, settings, the model-server client, tab switching |
+| `25-datetime.js` · `26-geo.js` · `35-exif.js` | dates and occasions, offline place names, EXIF and date confidence |
+| `30-worker.js` | the decode and resize worker |
+| `40-store.js` · `42-backup.js` | the `.photoindex/` reader and writer; backup and restore |
+| `45-plan.js` | folder walk, identity matching, the plan |
+| `50-validate.js` · `55-extract.js` | normalising model output; the vision call, OCR pass, embeddings |
+| `60-derived.js` · `65-search.js` | entities, events and the inverted index; ranking |
+| `70-runner.js` | the scan runner |
+| `80-ui.js` | Settings and Scan tabs |
+| `85-chat.js` · `87-chatui.js` | the tool-calling agent; chat rendering and the lightbox |
+| `82-timeline.js` · `83-library.js` | the Timeline tab; the Library tab and its viewer |
+| `84-faces.js` · `86-peopleui.js` | face detection, grouping, naming; the People tab |
+| `90-selftest.js` · `95-faultfs.js` | the in-browser test suite; the fault-injecting filesystem |
+| `99-boot.js` | error surfacing and start-up |
+
+`src/template.py` is the single source of truth for the extraction schema and prompt; the
+build generates the JavaScript constant from it. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+[↑ Back to Index](#index)
+
+
 ## The index
 
-Plain files, readable with anything:
+The index is a folder of plain files, readable with anything. By default it is
+`.photoindex/` beside the photos; Settings can point it somewhere else.
 
 | file | contents |
 |---|---|
@@ -26,199 +93,339 @@ Plain files, readable with anything:
 | `vectors.bin` | raw float32 rows, appended a row at a time |
 | `vectors.json` | the id list mapping rows to photos |
 | `thumbs/<id>.jpg` | 384px thumbnail |
+| `faces/` | `faces.jsonl`, `facevecs.bin`/`.json`, `people.json` (see [Faces](#faces)) |
 | `config.json` | settings, the full extraction schema, `schema_hash`, `prompt_hash` |
 | `runs.jsonl` | one line per scan: timing, errors, models, hashes |
 | `state.json` | resume checkpoint: the pending queue |
+| `geo/` · `backups/` | cached place-name data; verified copies of the files above |
 
-Append-only means a crash truncates at most the last line, which the loader skips. It also
-means the file grows on re-scans — **Compact log** rewrites it to latest-state-only.
+**Append-only is the durability strategy.** A crash can truncate at most the final line,
+which the loader skips. The cost is that the file grows on every re-scan, since a changed
+record is appended rather than edited; **Compact log** rewrites it to latest-state-only.
 
-**Memory.** Records are *lightened* before entering memory: `raw_model_json` and the
-embedding stay on disk. A 50k-photo library costs kilobytes per record, not tens.
+**Memory.** Records are *lightened* on load: `raw_model_json` and the embedding stay on
+disk. A 50,000-photo library therefore costs kilobytes per record in memory, not tens of
+kilobytes, and the few places that need the full record (rewriting it, for instance) read
+it back from disk.
+
+**A record has three independent lifecycle states.** They are easy to confuse, and the
+distinction matters:
+
+| state | meaning | who sets it | what the scan plan does |
+|---|---|---|---|
+| `status: "error"` | the model or decoder failed on this photo | the scanner | retries it ("failed") |
+| `deleted: true` | the file is gone from disk ("missing") | **Mark missing** | treats it as absent, so the same file would be indexed again if it returned |
+| `hidden: true` | *you* removed it from the library | the Library | leaves it alone: still matched, never rescanned, never re-surfaced |
+
+[↑ Back to Index](#index)
+
 
 ## Identifying a photo
 
-A record is keyed to the **file**, not to where you pointed the picker. Matching order:
+A record is keyed to the **file**, not to where you pointed the folder picker. Matching is
+tried in this order:
 
-1. **stored path**, qualified by the folder it was scanned from — pick two different
-   subfolders and both photos are literally `IMG_1.jpg`, so an unqualified path match would
-   merge them
-2. **identity** = name + size + modified time — free, since we already stat every file
-3. **name + size** — for copies that lost their timestamp (NAS transfer, `rsync` without `-t`)
+1. **Stored path**, qualified by the folder it was scanned from. Two different subfolders can
+   each contain an `IMG_1.jpg`; an unqualified path match would merge them.
+2. **Identity** = name + size + modified time. Free, because every file is already stat'd.
+3. **Name + size**, for copies that lost their timestamp (a NAS transfer, `rsync` without `-t`).
 
 Tiers 2 and 3 are then **confirmed by content**: size plus a hash of the first 64 KB, stored
-at scan time while the file is already open. Only *candidates* are verified, so it costs a
-handful of extra reads, not one per photo. A 1:1 requirement means true duplicates are never
-guessed at.
+at scan time while the file was already open. Only *candidates* are verified, so this costs a
+handful of extra reads, not one per photo. A strict one-to-one requirement means true
+duplicates are never guessed at.
 
-Consequence: scan a subfolder today and the whole library tomorrow — one index, no
-duplicates, nothing wrongly marked missing.
+The consequence: scan a subfolder today and the whole library tomorrow, and you get one
+index, no duplicates, and nothing wrongly marked missing.
+
+[↑ Back to Index](#index)
+
 
 ## The plan
 
-Walk → stat (12-way parallel; over SMB this is the difference between fast and unusable) →
-classify each file as **new**, **changed** (fingerprint differs), **failed**, **stale**
-(schema/prompt/model hash differs) or **ok**. Records not seen become **missing**, but only
-those belonging to the folder actually walked.
+Before scanning, PhotoSearch works out *what needs doing*: walk the folder, stat every file
+(12 in parallel; over SMB that is the difference between fast and unusable), and classify:
 
-**The plan is the source of truth, not the checkpoint.** A photo with no record is `new`; a
-photo with an error record is `failed`. Delete the checkpoint entirely and you lose nothing
-but a re-walk. This is what makes "you can never restart from zero" true.
+| class | meaning |
+|---|---|
+| **new** | no record yet |
+| **changed** | the file's fingerprint differs from the record's |
+| **failed** | the record is an error stub |
+| **stale** | the record was made with a different schema, prompt or model |
+| **ok** | nothing to do |
+| **missing** | a record whose file was not seen, but *only* among records from the folder actually walked |
+
+**The plan is the source of truth, not the checkpoint.** A photo with no record is `new`;
+a photo with an error record is `failed`. Delete the checkpoint entirely and you lose only
+a re-walk. This is what makes "you can never restart from zero" true.
+
+[↑ Back to Index](#index)
+
 
 ## Scanning one photo
 
-1. read the file (retried — network shares drop reads)
-2. decode and resize in the worker; EXIF orientation applied during decode
-3. read EXIF: date with a recorded **source** and **confidence**, camera, GPS
-4. send the 1024px image with the schema in `response_format` — which is also what
-   suppresses reasoning (see [FINDINGS.md](FINDINGS.md))
-5. validate and normalise in JS: caps, enums, singularisation, synonyms
-6. correct `image_type` from filename, EXIF, dimensions and the model's own caption
-7. for text-heavy types, a second pass with an **array-of-lines** schema
-8. resolve GPS to a place name offline; derive date context (season, weekday, occasion)
-9. embed a document built from caption, description, objects, text, place and date
+1. Read the file (retried; network shares drop reads).
+2. Decode and resize in the worker, applying EXIF orientation during decode.
+3. Read EXIF: the date with a recorded **source** and **confidence**, camera, GPS.
+4. Send the 1024px image with the schema in `response_format`. That is also what suppresses
+   reasoning (see [FINDINGS.md](FINDINGS.md#1-structured-output-suppresses-reasoning)).
+5. Validate and normalise in JavaScript: caps, enums, singular nouns, synonyms.
+6. Correct `image_type` from the filename, EXIF, dimensions and the model's own caption.
+7. For text-heavy types, make a second pass with an **array-of-lines** schema (OCR).
+8. Resolve GPS to a place name offline; derive season, weekday and occasion.
+9. Embed a document built from caption, description, objects, text, place and date.
 
-Flushed in batches of 25: records, then vectors, then the checkpoint — in that order, so a
-crash leaves the checkpoint stale rather than ahead of the data.
+Results are flushed in batches of 25: records first, then vectors, then the checkpoint. The
+order is deliberate: a crash leaves the checkpoint *behind* the data, never ahead of it.
+
+A rescan builds a record from scratch, so it carries one thing over by hand: `hidden`. A
+photo you removed stays removed.
+
+[↑ Back to Index](#index)
+
 
 ## Search
 
-No vector database. At 20k photos a brute-force pass is a few milliseconds; an ANN index
-would add a dependency and a build step to save time nobody is spending.
+There is no vector database. At 20,000 photos a brute-force pass takes a few milliseconds;
+an approximate-nearest-neighbour index would add a dependency and a build step to save time
+nobody is spending.
 
-1. **filter** — dates, place, `image_type`, occasion, entities, text
-2. **BM25** over the inverted index (k1 = 1.4, b = 0.75), built at load
-3. **cosine** over `vectors.bin`, with a **relevance floor** — cosine is never zero, so
-   without one a nonsense query returns a confident list of junk
-4. **reciprocal rank fusion**, `Σ 1/(60 + rank)` — rank-based, so the two incompatible
-   score scales need no normalisation
+1. **Filter** by dates, place, `image_type`, occasion, entities, person and text.
+2. **BM25** over the inverted index (k1 = 1.4, b = 0.75), built at load.
+3. **Cosine** over `vectors.bin`, with a **relevance floor**. Cosine similarity is never
+   zero, so without a floor a nonsense query would return a confident list of junk.
+4. **Reciprocal rank fusion**, `Σ 1/(60 + rank)`. Because it uses ranks, the two
+   incompatible score scales need no normalisation.
 
-Exact phrases in `"quotes"` are a filter, not a ranking signal, and are stripped before
+Exact phrases in `"quotes"` are a filter, not a ranking signal. They are stripped before
 ranking so the rest of the query still scores.
+
+Records with `deleted` or `hidden` set, error stubs and probe records are excluded at the
+start, so no later stage needs to remember to do it.
+
+[↑ Back to Index](#index)
+
 
 ## The chat agent
 
-A `while` loop against `/v1/chat/completions` with `tools`, capped at six rounds. **Tools
-execute locally** — the model never sees the index, only compact JSON rows (id, date, place,
-caption ≤150 chars, score). The one exception is `look_at_photos`, which sends up to six
-stored thumbnails back to the vision model.
+A loop against `/v1/chat/completions` with `tools`, capped at six rounds. **Tools execute
+locally.** The model never sees the index, only compact JSON rows (id, date, place,
+caption of at most 150 characters, score). The single exception is `look_at_photos`, which
+sends up to six stored thumbnails back to the vision model.
 
-Eight tools: `search_photos`, `filter_photos`, `find_similar`, `get_photo`, `list_entities`,
-`list_events`, `library_stats`, `look_at_photos`.
+There are nine tools: `search_photos`, `filter_photos`, `list_people`, `find_similar`,
+`get_photo`, `list_entities`, `list_events`, `library_stats` and `look_at_photos`.
 
-History is trimmed to a character budget, never orphaning a tool reply from the assistant
-turn that requested it — tool results are large and context is finite.
+- **History** is trimmed to a character budget and never orphans a tool reply from the
+  assistant turn that requested it. Tool results are large and context is finite.
+- **Models without tool support** are detected and fall back to retrieve-then-answer, with a
+  badge showing which mode is live.
+- **Model output is never inserted as HTML.** A small Markdown subset is rendered into DOM
+  nodes, so a caption containing markup stays inert. A test asserts exactly that.
 
-Models without tool support are detected and fall back to retrieve-then-answer, with a badge
-showing which mode is live.
+[↑ Back to Index](#index)
 
-**Model output is never inserted as HTML.** A small markdown subset is rendered into DOM
-nodes, so a caption containing markup stays inert. There is a test asserting exactly that.
+
+## Browsing: Library and Timeline
+
+Both are views over the records already in memory. Neither reads a photo or calls a model;
+the only I/O is reading thumbnails, and both are built so that **thumbnails are fetched only
+for what is on screen**. Reading 6,635 of them from a network share up front is not an option.
+
+### Library
+
+A single flat grid of every photo, newest first (undated photos last), with a size slider
+and a reverse-order toggle.
+
+- **Virtualised.** The grid container is given the full height, and tiles are absolutely
+  positioned inside it. Only the rows near the viewport exist as DOM nodes. Column count and
+  tile size come from the container width and the slider; changing either re-lays out the
+  grid and keeps the row at the top of the screen where it was.
+- **Pinned thumbnails.** A tile pins its thumbnail while it exists and unpins it when it
+  scrolls away, so the thumbnail cache stays bounded and eviction can never revoke an image
+  that is visible. Each tile carries its own record id, because tiles outlive the list they
+  were drawn from (see [FINDINGS.md](FINDINGS.md#17-things-outlive-the-list-that-created-them)).
+- **The viewer** opens full-window from the clicked tile. It starts as the tile's rectangle,
+  animates to the photo's real aspect ratio, and shows the stored thumbnail immediately; the
+  original is decoded in the background and swapped into the same box, so nothing jumps.
+  Arrow keys step through the photos, `I` toggles the details panel, `Esc` closes, and closing
+  animates back into the tile (or fades, if that tile has scrolled out of view). Formats a
+  browser cannot display, such as HEIC and TIFF, stay on the thumbnail and say so.
+- **Select mode** allows click, shift-click range and select-all, then **Remove**.
+
+### Removing photos
+
+Removal is **index-only**. The original file is never read, moved or deleted, so the rule
+that nothing outside `.photoindex/` is modified still holds.
+
+- It appends the full record again with `hidden: true`. The full record is read back from
+  disk first, so the model's raw output is not lost when the lightened in-memory copy would
+  have dropped it. Memory is updated only after the write succeeds.
+- It uses `hidden`, **not** `deleted`. The scan plan treats a deleted record as absent and
+  would index the same file again on the next scan.
+- Search, chat, the Timeline, statistics and the People tab all skip hidden records. The
+  scanner keeps them matched but leaves them alone, and a rescan carries `hidden` forward.
+- **Undo** appears for about nine seconds after any removal or restore. The **Removed** view
+  lists hidden photos and restores them (which appends `hidden: false`).
+- Compaction keeps hidden records, since restoring them depends on it.
+
+### Timeline
+
+Photos grouped by day, newest first, with place and occasion in each day's heading, a year
+bar and a date picker. The picker lands on the nearest earlier day when the chosen date has
+no photos. Dates whose source is uncertain are marked per photo. Day sections are
+**windowed**: only days near the viewport are filled, and a day that scrolls away releases
+its images and unpins them. Heights are estimated up front so the scrollbar is honest and
+nothing shifts under the reader.
+
+[↑ Back to Index](#index)
+
+
+## Faces
+
+Detection and embedding run **in the browser**, because the model server's embeddings
+endpoint is text-only: there is no way to push this onto the server.
+`.photoindex/faces/` holds `faces.jsonl` (geometry and provenance), `facevecs.bin`/`.json`
+(unit-length vectors, reconciled in both directions on load like the photo vectors) and
+`people.json` (groups and the names you gave them).
+
+**Design decisions**
+
+- **Alignment is mandatory.** The descriptor runs on the crop it is given, so `face.mesh` and
+  `face.detection.rotation` are on. Without them the vector encodes head angle rather than
+  identity (0.53 self-similarity versus 0.93; see
+  [FINDINGS.md](FINDINGS.md#10-a-face-embedding-without-alignment-describes-the-pose-not-the-person)).
+- **Grouping is greedy against centroids**, not all-pairs: 8,000 faces against a few hundred
+  centroids takes seconds, where all-pairs would take minutes. A candidate must also be close
+  to an actual member, not just the centroid, because centroid-only merging drifts until a
+  group is a blur of several people.
+- **The engine configuration is recorded on every face.** Vectors from different
+  configurations are not comparable, so they are reported rather than silently mixed.
+- **A name is authoritative.** Re-grouping never re-clusters a named person's faces away, and
+  unnamed faces are matched against named people first, so new photos join by themselves.
+  Merge and split exist because clustering gets some wrong.
+- **Two passes.** Thumbnails first (fast, and tells us which photos contain people), then
+  optionally the originals for just those photos, decoded large, because a face below 112 px
+  is upscaled into the model. Re-measuring matches old faces to new by box overlap, so names
+  survive.
+- **The aligned 112×112 crop is stored** (about 5 KB a face). It is the output of work that
+  cannot be cheaply redone, so keeping it turns a change of embedder into a minute's work
+  instead of a day's. Display tiles, by contrast, store no crop: a 0..1 box plus the existing
+  thumbnail renders the same picture for free.
+- **Thumbnails need no photo folder.** They are keyed by record id, so a pass over thumbnails
+  covers the whole index whichever folder is connected. Only the "originals" source needs a
+  walk, and can therefore only reach the folder that is open.
+- **Names work everywhere**, not only in the People tab: `ensureFaceNames()` reads the two
+  small files (not the multi-megabyte vectors), so chat and the search box can filter by name
+  without loading the grouping machinery.
+- **One action deletes all of it**, leaving the rest of the index untouched.
+
+**The privacy boundary**
+
+Nothing is inferred. A group is "Group 1" until you type a name, and the app never decides
+*who* anyone is. The descriptor model computes an age and gender guess as a side effect of
+the embedding and cannot be asked not to, so both are dropped at the adapter boundary. A face
+row is built field by field rather than spread, and a test asserts neither ever reaches
+storage. Emotion, iris, antispoof and liveness are switched off outright.
+
+[↑ Back to Index](#index)
+
+
+## The model server
+
+Any server that speaks the OpenAI API. Detection goes from most to least informative:
+
+1. LM Studio's `/api/v0/models`: model type and load state.
+2. Ollama's `/api/tags`: model families, where `clip` or `mllama` identifies a vision model as
+   a fact rather than a guess.
+3. Plain `/v1/models`: only ids exist, so types are guessed from the name. This is always
+   overridable by hand in Settings.
+
+Native endpoints resolve against the **root**, not the base URL, so a pasted `…/v1` does not
+demote a recognised server to the generic path.
+
+**Structured output is probed, not assumed.** A JSON schema is what stops a reasoning model
+spending its whole budget thinking, so the connection test asks the server whether it can
+enforce one. The app then degrades in steps: schema, then JSON-only, then prose. Which one is
+in play is reported, because the weaker the contract, the more the validator has to repair.
+
+[↑ Back to Index](#index)
+
 
 ## Safety properties
 
-- writes are confined to `.photoindex/`; nothing else is modified, moved or deleted
-- **Mark missing** refuses to run when a folder returns no images at all — an unmounted NAS
-  cannot soft-delete a library
-- five identical failures in a row stop a scan rather than writing thousands of error records
-- index writes are serialised: `appendLines` reads a size then seeks to it, so concurrent
-  appends would otherwise overwrite each other
-- restoring a backup first copies the current state, so a mistaken restore is undoable
-- thumbnails are the only derived part of the index, and the only part excluded from
-  backups — which is honest because **Rebuild thumbnails** remakes them from the originals
-  with no model calls, matching photos by content rather than by stored path
-- an index that cannot be read is an **empty** index, never a stale one: loading a location
-  with no `records.jsonl` clears memory rather than leaving the previous location's records
-  behind, where they would be planned against and then flushed into the new index
-- `vectors.bin` is reconciled to its id list in both directions on load, and a write that
-  does not land at the expected length is refused before the ids describing it are recorded
-- a stalled write cannot wedge the index: the serialising lock has a timeout, so one
-  unresponsive NAS operation does not block every write that follows
-- the model can fill in fields but never *identify* a record: `id`, `path`, `fingerprint`,
-  `size`, `mtime` and `scanned_at` are reserved and stripped from model output
-- a failure keeps its `cause`, so callers can tell a deleted folder from an unreachable
-  share — the two need opposite responses, and a `DOMException` loses its name when wrapped
+What the app guarantees, and how.
+
+**Scope of writes**
+
+- Writes are confined to `.photoindex/`. Nothing else is modified, moved or deleted, and
+  removing a photo from the Library changes the index only.
+- The model can fill in fields but never *identify* a record: `id`, `path`, `fingerprint`,
+  `size`, `mtime`, `scanned_at`, `deleted` and `hidden` are reserved and stripped from model
+  output.
+
+**Protection against mass damage**
+
+- **Mark missing** refuses to run when a folder returns no images at all, so an unmounted NAS
+  cannot soft-delete a library.
+- Five identical failures in a row stop a scan, rather than writing thousands of error
+  records.
+- Restoring a backup first copies the current state, so a mistaken restore is undoable.
+
+**Consistency of what is on disk**
+
+- Index writes are serialised. `appendLines` reads a size and then seeks to it, so concurrent
+  appends would otherwise overwrite each other.
+- A write that does not land at the expected length is refused before the ids describing it
+  are recorded. `vectors.bin` is reconciled to its id list in both directions on load.
+- An index that cannot be read is an **empty** index, never a stale one. Loading a location
+  with no `records.jsonl` clears memory instead of leaving the previous location's records
+  behind, where they would be planned against and then flushed into the new index.
+- A stalled write cannot wedge the index: the serialising lock has a timeout, so one
+  unresponsive NAS operation does not block every write that follows.
+
+**What can be rebuilt**
+
+- Thumbnails are the only derived part of the index and the only part excluded from backups.
+  **Rebuild thumbnails** remakes them from the originals with no model calls, matching photos
+  by content rather than by stored path.
+- A failure keeps its `cause`, so callers can tell a deleted folder from an unreachable share.
+  The two need opposite responses, and a `DOMException` loses its name when re-wrapped.
+
+[↑ Back to Index](#index)
+
 
 ## Storage is assumed to be slow and unreliable
 
-Not as an edge case — as the normal case. The index lives on an SMB share where a single
+Not as an edge case, but as the normal case. The index lives on an SMB share where a single
 round trip measured 24 seconds when the drives were asleep, and a directory listing 75.
 
 - **Speed is measured, not guessed.** Opening `.photoindex/` and reading `config.json` are
   timed as they happen, so the probe costs nothing extra, and a listing is timed once on
-  connect. The result is shown to the user in Settings.
-- **Every deadline is sized from that measurement** (`ioDeadline`), between a floor and a
-  cap. The alternative was a guessed constant, raised from 30s to 120s to 120s again, each
+  connect. The result is shown in Settings.
+- **Every deadline is sized from that measurement** (`ioDeadline`), between a floor and a cap.
+  The alternative was a guessed constant, raised from 30s to 120s and then 120s again, each
   time after it fired on storage that was merely slow rather than broken.
-- **One wrapper for every index operation.** `indexOp(label, fn)` supplies the deadline,
-  the progress reporting and the error naming. A failure always says both what was
-  attempted and how far it got — `opening the index … [stuck at: Reading config.json…]` —
-  because the backup that failed four times reported the least of anything in the app.
-- **Writes are verified by length.** `appendLines` and `appendVectors` both re-read the
-  file and refuse to report success unless it grew by exactly what was written.
+- **One wrapper for every index operation.** `indexOp(label, fn)` supplies the deadline, the
+  progress reporting and the error naming. A failure always says both what was attempted and
+  how far it got: `opening the index … [stuck at: Reading config.json…]`.
+- **Writes are verified by length.** `appendLines` and `appendVectors` re-read the file and
+  refuse to report success unless it grew by exactly what was written.
 
-## The model server
+[↑ Back to Index](#index)
 
-Any server that speaks the OpenAI API. Detection goes from most informative to least:
-LM Studio's `/api/v0/models` (type and load state), Ollama's `/api/tags` (model families,
-where `clip`/`mllama` identifies a vision model as a fact rather than a guess), then plain
-`/v1/models` where only ids exist and types are guessed from the name — always overridable
-by hand.
-
-Native endpoints resolve against the **root**, not the base URL, so a pasted `.../v1` does
-not demote a recognised server to the generic path.
-
-**Structured output is probed, not assumed.** A JSON schema is what stops a reasoning model
-spending its whole budget thinking, so the connection test asks the server whether it can
-enforce one and the app degrades in steps: schema → JSON-only → prose. Which one is in play
-is reported, because the weaker the contract the more the validator has to repair.
-
-## Faces
-
-Detection and embedding run **in the browser** — LM Studio's embeddings endpoint is
-text-only, so there is no alternative. `.photoindex/faces/` holds `faces.jsonl` (geometry
-and provenance), `facevecs.bin`/`.json` (unit-length vectors, reconciled both ways on load
-like the photo vectors), and `people.json` (groups and the names you gave them).
-
-- **No crops are stored.** A face box is kept in 0..1, so a tile is the photo's existing
-  thumbnail zoomed to that box. One less file per face, and one less write path.
-- **Alignment is mandatory.** The descriptor runs on the crop it is given, so `face.mesh`
-  and `face.detection.rotation` are on: without them the vector encodes head angle rather
-  than identity (0.53 self-similarity versus 0.93 — see FINDINGS §10).
-- **Grouping is greedy against centroids**, not all-pairs: 8,000 faces against a few
-  hundred centroids is seconds, where all-pairs would be minutes. A candidate must be
-  close to an actual member as well as to the centroid, because centroid-only merging
-  drifts until a group is a blur of several people.
-- **The engine configuration is recorded on every face.** Vectors from a different
-  configuration are not comparable, so they are reported rather than silently mixed in.
-- **A name is authoritative.** Re-grouping never re-clusters a named person's faces away,
-  and unnamed faces are matched against named people first, so new photos join by
-  themselves. Merge and split exist because clustering gets some wrong.
-- **Nothing is inferred.** A group is "Group 1" until you type a name. `human`'s descriptor
-  model computes age and a gender guess as a side effect of the embedding and cannot be
-  asked not to; both are dropped at the adapter boundary, a face row is built field by
-  field rather than spread, and a test asserts neither ever reaches storage. Emotion, iris,
-  antispoof and liveness are switched off outright.
-- **Thumbnails need no photo folder.** They are keyed by record id, so a face pass covers
-  the whole index regardless of which folder is connected. Only the "originals" source
-  needs a walk, and it can therefore only reach the folder that is open.
-- **Names work everywhere**, not only in the People tab: `ensureFaceNames()` reads the two
-  small files (not the vectors, which are tens of megabytes) so chat and the search box can
-  filter by a name without loading the grouping machinery.
-- **The aligned 112×112 crop is stored** (~5 KB a face). It is the output of work that
-  cannot be cheaply redone — reading a photo off the share and detecting — so keeping it
-  makes changing embedder a minute's work instead of a day's.
-- **Two passes.** Thumbnails first (fast, and tells us which photos have people in them),
-  then optionally the originals for just those photos, decoded large, because a face below
-  112 px is upscaled into the model. Re-measuring matches old faces to new by box overlap
-  so names survive.
-- **One action deletes all of it**, leaving the rest of the index untouched.
 
 ## Known gaps
 
-- **Orphaned thumbnails are counted, not collected.** A thumbnail whose record is gone
-  stays on disk; deleting files is not a decision the rebuild makes on its own.
-- **The fault-injection suite is simulation.** `95-faultfs.js` reproduces latency, hangs,
-  failing and short writes, and the assertions were verified by removing the fixes and
-  watching them go red. It is still OPFS underneath: it models the failures observed on
-  the real share rather than the share itself.
+- **Orphaned thumbnails are counted, not collected.** A thumbnail whose record is gone stays
+  on disk. Deleting files is not a decision the rebuild makes on its own.
+- **The fault-injection suite is a simulation.** `95-faultfs.js` reproduces latency, hangs,
+  failing and short writes, and its assertions were verified by removing the fixes and
+  watching them go red. It is still OPFS underneath: it models the failures observed on the
+  real share rather than the share itself.
+- **Chat and Timeline still open the older lightbox**, not the Library viewer, so they have
+  no Remove button and no arrow-key stepping.
+- **Videos and RAW files** are counted and skipped; they never appear in the Library. See
+  [ROADMAP.md](ROADMAP.md).
+
+[↑ Back to Index](#index)

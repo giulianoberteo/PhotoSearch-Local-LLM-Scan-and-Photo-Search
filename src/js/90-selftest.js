@@ -1,6 +1,5 @@
 
-/* ================= self-test ==========    }
-
+/* ================= self-test =================
    Runs the real pipeline against an OPFS scratch folder with mock model
    responses, so the worker, index, plan, move detection, vectors, checkpoint
    and derived data are all genuinely exercised without a picked folder. */
@@ -1823,7 +1822,8 @@ async function selfTest(){
         IDX.records = keepRecords;
         GAL.built = 0; GAL.cell = 0; GAL.list = [];
       }
-=======
+    }
+
     /* ---- any OpenAI-compatible server, not just LM Studio ---- */
     {
       const keepUrl = S.baseUrl, keepMode = S.structuredMode;
