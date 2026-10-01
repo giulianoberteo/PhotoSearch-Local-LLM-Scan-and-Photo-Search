@@ -198,6 +198,10 @@ If that finds nothing, quit Chrome entirely; a reload is not always enough.
 **A scan was interrupted.** Nothing is lost. The plan is the source of truth, so anything
 without a record is found again. *Resume* appears when a checkpoint exists.
 
+**The self-test says "SecurityError … certain files are unsafe".** Chrome does not give a page
+opened from disk the private storage the self-test needs. It is not a problem with your photos.
+See [Running the self-test in your own Chrome](TESTING.md#running-the-self-test-in-your-own-chrome).
+
 **HEIC or TIFF fail.** Their decoders load from a CDN on first use. Offline, those files are
 skipped and counted rather than failing the scan.
 

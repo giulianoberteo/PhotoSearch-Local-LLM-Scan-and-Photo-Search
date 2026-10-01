@@ -103,7 +103,7 @@ $("#btnThink").onclick = async () => {
       st[mode === "off" && !leaked ? "ok" : "warn"](
         tok + " output tokens, " + secs.toFixed(1) + "s, reasoning "
         + (leaked ? "present" : "absent"));
-    } catch (e){ st.err(errText(e)); }
+    } catch (e){ st.err(humanError(e)); }
   }
   const on = runs.find(r => r.mode === "on"), off = runs.find(r => r.mode === "off");
   if (on && off && on.tok && off.tok)
@@ -125,7 +125,7 @@ async function useDirectory(handle){
     let p = await handle.queryPermission({ mode:"readwrite" });
     if (p !== "granted") p = await handle.requestPermission({ mode:"readwrite" });
     p === "granted" ? st.ok("granted") : st.warn(p);
-  } catch (e){ st.warn(errText(e)); }
+  } catch (e){ st.warn(humanError(e)); }
   try { await idbSet("lastDir", handle); $("#btnReconnect").disabled = false; } catch {}
   renderIndexWhere();
   /* Measure this storage once, on connect, and say what was found. Every
@@ -138,7 +138,7 @@ async function useDirectory(handle){
     const unit = storageUnitMs();
     (unit != null && unit > 3000 ? sp.warn : sp.ok)(describeStorage());
     renderIndexWhere();
-  } catch (e){ sp.warn(errText(e)); }
+  } catch (e){ sp.warn(humanError(e)); }
   await fillScopes();
   IDX.loaded = false;
   await refreshPlan();
@@ -197,7 +197,7 @@ $("#btnIndexDir").onclick = async () => {
   catch (e){
     if (e.name === "AbortError") return;
     if (isPickerStuck(e)){ offerPickerReset(); return; }
-    toast(errText(e));
+    toast(humanError(e));
     return;
   }
   if (!h) return;
@@ -217,7 +217,7 @@ $("#btnPick").onclick = async () => {
     if (e.name === "AbortError") return;
     if (isPickerStuck(e)){ offerPickerReset(); return; }
     renderChecks($("#fsOut"), [{ status:"err", title:"Could not open folder",
-      detail:errText(e) }]);
+      detail:humanError(e) }]);
     return;
   }
   if (h) await useDirectory(h);
@@ -256,7 +256,7 @@ $("#btnWriteTest").onclick = async () => {
       detail:"Open the Scan tab to see the plan." }));
   } catch (e){
     checksBox(host).append(checkRow({ status:"err", title:"Write test failed",
-      detail:errText(e) }));
+      detail:humanError(e) }));
   }
   btn.disabled = false; btn.textContent = "Test write to .photoindex/";
 };
@@ -331,7 +331,7 @@ async function refreshPlan(){
     renderPlan(p);
   } catch (e){
     if (e.name === "AbortError") return;
-    st.err(errText(e));
+    st.err(humanError(e));
     /* A failed refresh must invalidate the plan, not leave live buttons
        pointing at dead file handles. */
     S.planStale = true;
@@ -598,7 +598,7 @@ $("#btnRetry").onclick = () => { const p = planOrRefuse(); if (!p) return;
   runScan(p.failed, "retry-failed"); };
 $("#btnMissing").onclick = async () => {
   try { const n = await markMissing(S.plan); toast(n + " records marked missing."); await refreshPlan(); }
-  catch (e){ toast(errText(e)); }
+  catch (e){ toast(humanError(e)); }
 };
 $("#btnCompact").onclick = async () => {
   if (!(await ensureIndexConnected()) || !(await ensureConnected("compaction"))) return;
@@ -606,7 +606,7 @@ $("#btnCompact").onclick = async () => {
   try { await ensureIndex(); const r = await compactRecords();
     toast("Compacted records.jsonl: " + r.before + " lines to " + r.after + ".");
     rebuildDerived(); await refreshPlan(); }
-  catch (e){ toast(errText(e)); }
+  catch (e){ toast(humanError(e)); }
 };
 $("#btnThumbs").onclick = async () => {
   if (!(await ensureIndexConnected()) || !(await ensureConnected("the rebuild"))) return;
@@ -617,7 +617,7 @@ $("#btnThumbs").onclick = async () => {
   let p;
   try {
     p = await planThumbnails(async m => { await st.note(m); });
-  } catch (e){ st.err(errText(e)); toast(errText(e)); return; }
+  } catch (e){ st.err(humanError(e)); toast(humanError(e)); return; }
 
   if (!p.missing){
     st.ok(p.have + " thumbnails for " + p.total + " photos — none are missing."
@@ -647,7 +647,7 @@ $("#btnThumbs").onclick = async () => {
     if (p.unresolved.length) parts.push(p.unresolved.length + " await another folder");
     (r.failed || r.stopped ? st.warn : st.ok)(parts.join(", ") + ".");
     toast(r.built + " thumbnails rebuilt.");
-  } catch (e){ st.err(errText(e)); toast(errText(e)); }
+  } catch (e){ st.err(humanError(e)); toast(humanError(e)); }
 };
 
 $("#btnPause").onclick = () => {
@@ -693,7 +693,7 @@ $("#btnIndexReveal").onclick = async () => {
       + "\n\nNote: the leading dot makes .photoindex HIDDEN in Finder."
       + "\nPress Cmd+Shift+.  in Finder to show hidden folders.";
     host.append(pre);
-  } catch (e){ st.err(errText(e)); }
+  } catch (e){ st.err(humanError(e)); }
 };
 
 /* ================= backups ================= */
@@ -717,7 +717,7 @@ $("#btnBackup").onclick = async () => {
     }
   } catch (e){
     checksBox(host).append(checkRow({ status:"err", title:"Could not open the index",
-      detail:errText(e) }));
+      detail:humanError(e) }));
     btn.disabled = false; btn.textContent = "Back up now";
     return;
   }
@@ -732,8 +732,8 @@ $("#btnBackup").onclick = async () => {
     toast("Backup complete: " + (b.bytes/1048576).toFixed(1) + " MB");
     await showBackups();
   } catch (e){
-    st.err(errText(e));
-    toast("Backup failed: " + errText(e));
+    st.err(humanError(e));
+    toast("Backup failed: " + humanError(e));
   } finally {
     btn.disabled = false; btn.textContent = "Back up now";
   }
@@ -776,7 +776,7 @@ async function showBackups(){
           const r2 = await restoreBackup(b.name, m => st2.note(m));
           st2.ok("Restored " + r2.records + " records, " + r2.vectors + " vectors.");
           await refreshPlan();
-        } catch (e){ st2.err(errText(e)); }
+        } catch (e){ st2.err(humanError(e)); }
       };
       td.append(btn); tr.append(td);
       tb.append(tr);
@@ -784,7 +784,7 @@ async function showBackups(){
     t.append(tb); box.append(t);
     host.append(box);
   } catch (e){ renderChecks(host, [{ status:"err", title:"Could not list backups",
-    detail:errText(e) }]); }
+    detail:humanError(e) }]); }
 }
 
 /* ================= geonames button ================= */
@@ -801,7 +801,7 @@ $("#btnGeo").onclick = async () => {
     await geoFetchAndCache((phase, detail) =>
       st.note(phase + (detail ? "  " + detail : "")));
     st.ok(GEO.count.toLocaleString() + " places cached in .photoindex/geo/ — this is now offline.");
-  } catch (e){ st.err(errText(e) + " — photos will store coordinates only."); }
+  } catch (e){ st.err(humanError(e) + " — photos will store coordinates only."); }
 };
 
 /* ================= settings wiring ================= */

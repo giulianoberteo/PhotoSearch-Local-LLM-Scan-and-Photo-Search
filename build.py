@@ -84,7 +84,8 @@ def check_syntax(html: str) -> None:
         if r.returncode:
             sys.exit("JS syntax error:\n" + r.stderr)
     except FileNotFoundError:
-        print("node not found — skipping the syntax check", file=sys.stderr)
+        print("node not found — the syntax check was skipped. Install it with: brew install node",
+              file=sys.stderr)
     finally:
         tmp.unlink(missing_ok=True)
 

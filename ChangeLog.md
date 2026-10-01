@@ -17,43 +17,82 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.6.2 (2026-10-01)](#062-2026-10-01)
+- [0.6.3 (2026-10-01)](#063-2026-10-01)
   - [Added](#added)
   - [Changed](#changed)
-- [0.6.1 (2026-10-01)](#061-2026-10-01)
+- [0.6.2 (2026-10-01)](#062-2026-10-01)
   - [Added](#added-1)
   - [Changed](#changed-1)
-- [0.6.0 (2026-10-01)](#060-2026-10-01)
+- [0.6.1 (2026-10-01)](#061-2026-10-01)
   - [Added](#added-2)
   - [Changed](#changed-2)
-- [0.5.4 (2026-10-01)](#054-2026-10-01)
+- [0.6.0 (2026-10-01)](#060-2026-10-01)
+  - [Added](#added-3)
   - [Changed](#changed-3)
+- [0.5.4 (2026-10-01)](#054-2026-10-01)
+  - [Changed](#changed-4)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
-  - [Added](#added-3)
-  - [Changed](#changed-4)
-- [0.5.1 (2026-10-01)](#051-2026-10-01)
-  - [Changed](#changed-5)
-- [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-4)
+  - [Changed](#changed-5)
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-6)
-  - [Fixed](#fixed-1)
-- [0.4.0 (2026-10-01)](#040-2026-10-01)
+- [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-5)
   - [Changed](#changed-7)
-- [0.3.0 (2026-09-30)](#030-2026-09-30)
+  - [Fixed](#fixed-1)
+- [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-6)
   - [Changed](#changed-8)
-  - [Fixed](#fixed-2)
-- [0.2.0 (2026-09-29)](#020-2026-09-29)
+- [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-7)
   - [Changed](#changed-9)
+  - [Fixed](#fixed-2)
+- [0.2.0 (2026-09-29)](#020-2026-09-29)
+  - [Added](#added-8)
+  - [Changed](#changed-10)
   - [Fixed](#fixed-3)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
-  - [Added](#added-8)
+  - [Added](#added-9)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.3 (2026-10-01)
+
+**Summary:** the self-test explains itself, errors say what to do, and search accepts several
+people at once ("mum + dad").
+
+### Added
+
+- **Self-test report.** A verdict ("All 562 checks passed"), failures first with what each got
+  and wanted, passed checks folded away, live progress while it runs, **Copy report** and
+  **Run again**. If the run stops early it says what happened, the last check that completed,
+  and what to do.
+- **Up-front check** that the self-test can run. A page opened from disk is not given Chrome's
+  private file area, which used to surface as a bare "FAIL threw: SecurityError: It was
+  determined that certain files are unsafe for access…" (or a silent hang). It now says why and
+  gives the two fixes (start Chrome with `--allow-file-access-from-files`, or serve the file).
+- **Plain-language error hints** (`humanError`) for security, permission, not-found, full-disk,
+  locked-file, unreachable-server and timeout errors, added after the browser's own text and used
+  in toasts and Settings messages.
+- **Keywords are tokens inside the search field.** Pick *Mum*, it becomes a token in the box and
+  the list stays open for the next; results narrow as you go. `Backspace` on an empty field
+  removes the last token and `+` or `,` finishes a word. (They were chips in the Library toolbar.)
+- **Search several people at once.** Typing `mum + dad` (also `&`, `,` or `and`) offers one
+  suggestion that adds both people as chips, matching photos that contain all of them. It works
+  as you type: `mum + da` suggests `Mum + Dad`. Pressing Enter on a phrase whose every part is a
+  person does the same. Names match exactly first, then by unique prefix.
+- Self-test assertions for the hints, the report parsing and the multi-person search.
+
+### Changed
+
+- `TESTING.md` and `SETUP.md` explain the `SecurityError` and how to run the self-test from your
+  own Chrome.
+
+[↑ Back to Index](#index)
+
+---
 
 ## 0.6.2 (2026-10-01)
 

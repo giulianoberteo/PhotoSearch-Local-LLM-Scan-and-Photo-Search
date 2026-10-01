@@ -1,6 +1,6 @@
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.2";
+const APP_VERSION = "0.6.3";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -268,6 +268,56 @@ function errText(e){
   if (name) return name;
   const s = String(e);
   return s === "[object Object]" ? JSON.stringify(e).slice(0, 200) : s;
+}
+
+/* Browsers describe file and network trouble in terms that explain nothing to
+   the person looking at them: "It was determined that certain files are unsafe
+   for access within a Web application" is a security rule, not a damaged file.
+   This turns the common ones into a sentence plus the steps that fix them. It
+   only ever ADDS to errText(), which stays exactly as it was. */
+const ERR_HELP = [
+  { test: (n, m) => n === "SecurityError" || /unsafe for access|too many calls/i.test(m),
+    hint: "Chrome blocked access to a file or folder; this is a security rule, not damage to your files.",
+    steps: [
+      "Self-test, or anything using the browser's private storage: a page opened from disk (file://) is not given it. Quit Chrome completely and start it with --allow-file-access-from-files, or serve the folder and open http://localhost:8000/PhotoSearch.html (run: python3 -m http.server 8000).",
+      "Choosing a folder: Chrome refuses a few places outright (your home folder, Desktop, Documents, Downloads, and system folders themselves). Pick a subfolder inside one.",
+      "On a slow network share: lower \u201cFile-stat concurrency\u201d in Settings so fewer files are touched at once." ] },
+  { test: n => n === "NotAllowedError",
+    hint: "Permission to use the folder was refused or has expired.",
+    steps: [ "Chrome forgets folder access whenever the page reloads. Press Reconnect, or choose the folder again.",
+             "If Chrome asked for permission, choose Allow." ] },
+  { test: n => n === "NotFoundError",
+    hint: "A file or folder could not be found.",
+    steps: [ "Is the drive or network share still mounted?",
+             "Was the folder moved or renamed? Choose it again, then press Refresh plan." ] },
+  { test: n => n === "AbortError",
+    hint: "The action was cancelled.",
+    steps: [ "If you closed a picker, this is expected. Otherwise try again." ] },
+  { test: n => n === "QuotaExceededError",
+    hint: "There is no space left for this.",
+    steps: [ "Free some disk space, or choose another place for the index in Settings." ] },
+  { test: n => n === "NoModificationAllowedError" || n === "InvalidStateError",
+    hint: "The file is locked or read-only.",
+    steps: [ "Close any other tab or program using the same index.",
+             "Check the folder is not read-only (network shares often are)." ] },
+  { test: (n, m) => /failed to fetch|networkerror|load failed/i.test(m),
+    hint: "Could not reach the model server.",
+    steps: [ "Is the server running?", "Is the URL in Settings right?",
+             "Is this page allowed to connect (CORS)? Settings \u2192 Test connection names the fix." ] },
+  { test: (n, m) => /did not finish within|timed out|timeout/i.test(m) || n === "TimeoutError",
+    hint: "A storage operation took too long.",
+    steps: [ "A sleeping NAS can take half a minute to wake. Wait, then try again." ] }
+];
+function errExplain(e){
+  if (!e) return null;
+  const n = String(e.name || ""), m = String(e.message || "");
+  return ERR_HELP.find(h => h.test(n, m)) || null;
+}
+function errHint(e){ const h = errExplain(e); return h ? h.hint : ""; }
+/* errText plus the plain-language reading, for anything shown to a person. */
+function humanError(e){
+  const t = errText(e), h = errHint(e);
+  return h ? t + " \u2014 " + h : t;
 }
 
 function toast(msg){
