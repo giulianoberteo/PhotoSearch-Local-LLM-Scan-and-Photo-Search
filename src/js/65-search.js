@@ -28,10 +28,14 @@ function candidateSet(f){
   const ents  = f.entities ? [].concat(f.entities).map(s => singular(String(s).toLowerCase())) : null;
   const occ   = f.occasion ? [].concat(f.occasion).map(s => String(s).toLowerCase()) : null;
   const who   = f.person ? [].concat(f.person).map(s => String(s).toLowerCase()) : null;
+  const month = f.month ? String(f.month).padStart(2, "0") : null;
+  const sets  = f.photo_sets && f.photo_sets.length ? f.photo_sets : null;   // every set must contain the photo
   for (const r of IDX.records.values()){
     if (r.deleted || r.hidden || r.status === "error" || r.probe) continue;
     if (from && (!r.date_taken || r.date_taken.slice(0,10) < from)) continue;
     if (to   && (!r.date_taken || r.date_taken.slice(0,10) > to)) continue;
+    if (month && !(r.date_taken && r.date_taken.slice(5, 7) === month)) continue;
+    if (sets && !sets.every(s => s.has(r.id))) continue;
     if (place && !(r.place || "").toLowerCase().includes(place)) continue;
     if (types && !types.includes(String(r.image_type || "").toLowerCase())) continue;
     if (occ && !((r.when && r.when.occasions) || []).some(o => occ.includes(o))) continue;
@@ -128,7 +132,7 @@ function rrf(maps, k = 60){
 }
 
 async function searchPhotos(args){
-  const limit = Math.min(60, Math.max(1, args.limit || 12));
+  const limit = Math.min(args.max || 60, Math.max(1, args.limit || 12));   // `max` lifts the chat cap for the Library's search results
   const cands = candidateSet(args);
   const allowed = new Set(cands.map(r => r.id));
   const q = (args.query || "").trim();

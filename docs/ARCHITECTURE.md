@@ -24,6 +24,7 @@ anything non-trivial. For *measurements* behind these decisions, see
 - [The chat agent](#the-chat-agent)
 - [Browsing: Library and Timeline](#browsing-library-and-timeline)
   - [Library](#library)
+  - [The search field](#the-search-field)
   - [Rotating photos](#rotating-photos)
   - [Removing photos](#removing-photos)
   - [Timeline](#timeline)
@@ -190,6 +191,7 @@ earlier, never the reverse.
 | `80-ui.js` | Settings and Scan tabs |
 | `85-chat.js` · `87-chatui.js` | the tool-calling agent; chat rendering and the lightbox |
 | `82-timeline.js` · `83-library.js` | the Timeline tab; the Library tab and its viewer |
+| `88-search.js` | the header search field: suggestions, chips, and results shown in the Library |
 | `84-faces.js` · `86-peopleui.js` | face detection, grouping, naming; the People tab |
 | `90-selftest.js` · `95-faultfs.js` | the in-browser test suite; the fault-injecting filesystem |
 | `99-boot.js` | error surfacing and start-up |
@@ -374,6 +376,33 @@ and a reverse-order toggle.
   browser cannot display, such as HEIC and TIFF, stay on the thumbnail and say so.
 - **Select mode** allows click, shift-click range and select-all, then **Rotate** or **Remove**.
 - **Rotation** is non-destructive; see [Rotating photos](#rotating-photos).
+
+### The search field
+
+The field in the header is the front door to search, and it reuses the Library as its results
+view instead of building a second grid.
+
+- **Suggestions are local and instant.** `sgSuggest()` works from the records, the entity index
+  and the people, with no model call and no waiting. It offers *People* (with the face tile),
+  *Dates* (`2021`, `june`, `june 2021` in any order, and occasions), *Places*, *Kinds of
+  picture* and *In the picture* (objects, activities, keywords, animals, settings). The facts
+  behind them are cached and rebuilt only when the index or the people change.
+- **A choice becomes a chip.** Each chip maps onto a filter `searchPhotos` already understood,
+  and two new ones: `month` (any year) and `photo_sets`, a list of photo-id sets that must all
+  contain the photo. A person chip uses the **set of that person's photos**, not the name, so
+  it is exact even when two people share a name, and it works for unnamed groups. A second place,
+  year or month replaces the first, because those only make sense one at a time; people, kinds
+  and things combine (all people must appear; a photo may be any of the chosen kinds).
+- **The words are a separate, ordinary search.** Enter on the first row sets the text and runs
+  the usual hybrid search (BM25 plus embeddings, merged by rank fusion) inside the chip filters.
+  This is the only part that can call the embedding model.
+- **Results live in the Library.** Search switches the Library to a third view, `search`, whose
+  list is the ranker's order (newest first when there are only chips). The viewer, Select,
+  rotate and remove therefore work on results, and arrow keys step through them. The chat cap
+  of 60 results does not apply here: `searchPhotos` takes a `max` for the Library.
+- **Waiting for the index.** A search started from another tab opens the Library, waits for the
+  one shared load of the index (`onLibraryShown()` returns the same promise to every caller),
+  then loads face names, vectors and the keyword index if they are missing, as chat does.
 
 ### Rotating photos
 
