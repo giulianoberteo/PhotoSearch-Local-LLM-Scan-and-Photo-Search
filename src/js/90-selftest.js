@@ -1908,6 +1908,91 @@ async function selfTest(){
       S.baseUrl = keepUrl; S.structuredMode = keepMode; S.provider = null;
     }
 
+    /* ---- header search ----
+       Suggestions come from the index and the people, with no model call; a
+       chosen suggestion becomes a chip that maps onto searchPhotos' filters. */
+    {
+      const keep = { rec:IDX.records, ent:DERIVED.entities, fp:FACES.people, fc:FACES.clusters,
+                     ff:FACES.faces, fb:FACES.byPhoto, view:GAL.view, chips:GAL.chips,
+                     text:GAL.text, res:GAL.results, facts:SG.facts };
+      const mk = (id, iso, place) => [id, { id, name:id + ".jpg", path:id + ".jpg", status:"ok", caption:"c",
+        date_taken:iso, place, when:{ year:+iso.slice(0, 4), month:+iso.slice(5, 7), day:1 } }];
+      IDX.records = new Map([
+        mk("s1", "2021-06-10T12:00:00.000Z", "Sicily, IT"), mk("s2", "2022-06-11T12:00:00.000Z", "Sicily, IT"),
+        mk("s3", "2022-07-12T12:00:00.000Z", "Paris, FR"), mk("s4", "2023-01-02T12:00:00.000Z", "Paris, FR")]);
+      IDX.records.get("s4").hidden = true;
+      DERIVED.entities = new Map([
+        ["place:Sicily, IT", { type:"place", value:"Sicily, IT", count:2 }],
+        ["place:Paris, FR", { type:"place", value:"Paris, FR", count:1 }],
+        ["object:boat", { type:"object", value:"boat", count:2 }],
+        ["image_type:screenshot", { type:"image_type", value:"screenshot", count:1 }]]);
+      FACES.faces = new Map([["f1", { id:"f1", photo_id:"s1", box:[0, 0, 1, 1], score:1 }],
+                             ["f2", { id:"f2", photo_id:"s2", box:[0, 0, 1, 1], score:1 }],
+                             ["f3", { id:"f3", photo_id:"s4", box:[0, 0, 1, 1], score:1 }]]);
+      FACES.byPhoto = new Map([["s1", ["f1"]], ["s2", ["f2"]], ["s4", ["f3"]]]);
+      FACES.people = [{ id:"pa", name:"Anna", face_ids:["f1", "f2", "f3"] }];
+      FACES.clusters = [];
+      SG.facts = null;
+      try {
+        /* the two new filters */
+        eq("a month filter keeps that month in any year",
+           candidateSet({ month:6 }).map(r => r.id).sort(), ["s1", "s2"]);
+        eq("a photo-set filter keeps only members",
+           candidateSet({ photo_sets:[new Set(["s1", "s3"])] }).map(r => r.id).sort(), ["s1", "s3"]);
+        eq("several photo sets must all contain the photo",
+           candidateSet({ photo_sets:[new Set(["s1", "s3"]), new Set(["s3"])] }).map(r => r.id), ["s3"]);
+
+        /* suggestions */
+        const top = sgSuggest("ann");
+        eq("typed words always offer a text search first", top[0].items[0].kind, "text");
+        const anna = top.flatMap(s => s.items).find(i => i.kind === "person");
+        ok("a matching person is suggested", !!anna && anna.label === "Anna", anna && anna.label);
+        eq("and counts only visible photos (the hidden one is not counted)", anna.sub, "2");
+        ok("places are suggested by name", sgSuggest("sic").flatMap(s => s.items)
+             .some(i => i.kind === "place" && i.label === "Sicily, IT"));
+        const jd = sgSuggest("june 2022").flatMap(s => s.items).find(i => i.kind === "date");
+        eq("\"june 2022\" becomes a month and a year", jd && jd.chips.map(c => c.kind), ["month", "year"]);
+        ok("things in the picture are suggested", sgSuggest("boa").flatMap(s => s.items)
+             .some(i => i.kind === "thing" && i.label === "boat"));
+        ok("kinds of picture are suggested", sgSuggest("screen").flatMap(s => s.items)
+             .some(i => i.kind === "type"));
+        eq("an empty box suggests people first", sgSuggest("")[0].title, "People");
+        eq("unrelated words suggest nothing but the text search",
+           sgSuggest("zzzz").flatMap(s => s.items).length, 1);
+
+        /* chips become filters */
+        GAL.chips = [];
+        sgAddChip({ kind:"place", value:"Sicily, IT", label:"Sicily, IT" });
+        sgAddChip({ kind:"place", value:"Paris, FR", label:"Paris, FR" });
+        eq("a second place replaces the first", GAL.chips.map(c => c.value), ["Paris, FR"]);
+        sgAddChip({ kind:"person", id:"pa", label:"Anna" });
+        sgAddChip({ kind:"person", id:"pa", label:"Anna" });
+        eq("the same chip is not added twice", GAL.chips.filter(c => c.kind === "person").length, 1);
+        sgAddChip({ kind:"year", value:"2022", label:"2022" });
+        GAL.text = "boat";
+        const a = sgArgs();
+        eq("a place chip filters by place", a.place, "Paris, FR");
+        eq("a year chip filters by date range", [a.date_from, a.date_to], ["2022-01-01", "2022-12-31"]);
+        eq("a person chip filters by that person's photos",
+           [...a.photo_sets[0]].sort(), ["s1", "s2"]);
+        eq("typed words become the query", a.query, "boat");
+        ok("the Library's results are not capped at the chat limit", a.max > 60);
+        const res = await searchPhotos({ ...a, query:"" });
+        eq("the filters combine (Paris + 2022 + Anna has no photo)", res.results.length, 0);
+
+        /* the Library shows results in ranked order and drops removed photos */
+        GAL.view = "search"; GAL.results = ["s2", "s4", "s1"];
+        galBuild();
+        eq("search results keep the ranker's order", GAL.list.map(x => x.r.id), ["s2", "s1"]);
+        ok("and a hidden photo never appears", !GAL.list.some(x => x.r.id === "s4"));
+      } finally {
+        IDX.records = keep.rec; DERIVED.entities = keep.ent;
+        FACES.people = keep.fp; FACES.clusters = keep.fc; FACES.faces = keep.ff; FACES.byPhoto = keep.fb;
+        GAL.view = keep.view; GAL.chips = keep.chips; GAL.text = keep.text; GAL.results = keep.res;
+        SG.facts = keep.facts; GAL.built = 0; GAL.list = [];
+      }
+    }
+
     /* ---- tab links ----
        PhotoSearch.html#library and friends open a tab directly. The address is
        shared with #selftest, which must never be mistaken for a tab. */

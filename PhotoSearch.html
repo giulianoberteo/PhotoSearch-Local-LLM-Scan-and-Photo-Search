@@ -63,7 +63,8 @@ header{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14
   background:var(--bar);-webkit-backdrop-filter:saturate(180%) blur(22px);
   backdrop-filter:saturate(180%) blur(22px);border-bottom:1px solid var(--line)}
 header .spacer{display:none}
-header .switch{justify-self:end;font-size:12px;color:var(--dim)}
+.hdrRight{justify-self:end;display:flex;align-items:center;gap:14px;min-width:0}
+.hdrRight .switch{font-size:12px;color:var(--dim);white-space:nowrap}
 h1{font-size:17px;margin:0;font-weight:700;letter-spacing:-.02em}
 nav{display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--panel2)}
 nav button{background:none;border:0;color:var(--text);padding:5px 15px;border-radius:8px;
@@ -241,6 +242,36 @@ footer{position:fixed;bottom:0;left:0;right:0;display:flex;gap:18px;align-items:
 .hint{font-size:12px;color:var(--dim);margin-top:6px}
 code{font-family:var(--mono);background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12.5px}
 
+
+/* Search: a field in the toolbar, as in the Photos app, with grouped suggestions. */
+.sgWrap{position:relative;width:clamp(130px,15vw,230px);transition:width .2s}
+.sgWrap:focus-within{width:clamp(180px,20vw,300px)}
+@media (max-width:1250px){.hdrRight .swt{display:none}}
+#gSearch{width:100%;height:30px;padding:0 10px 0 30px;border:0;border-radius:9px;font:inherit;
+  background:var(--panel2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2.4' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='M20 20l-4.8-4.8'/%3E%3C/svg%3E") no-repeat 9px 50%}
+#sgBox{position:absolute;top:36px;right:0;width:max(100%,340px);max-height:min(70vh,520px);overflow-y:auto;
+  background:var(--panel);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.28),0 0 0 1px var(--line);
+  padding:6px;z-index:40}
+#sgBox .sgHead{padding:8px 10px 3px;font-size:11px;font-weight:650;letter-spacing:.4px;
+  text-transform:uppercase;color:var(--dim)}
+.sgItem{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:9px;cursor:pointer;
+  min-height:34px}
+.sgItem .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sgItem .sub{color:var(--dim);font-size:12px;white-space:nowrap}
+.sgItem .ic{flex:0 0 30px;height:30px;display:grid;place-items:center;border-radius:50%;
+  background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);font-size:14px}
+.sgItem .facetile{width:30px;height:30px;flex:0 0 30px}
+.sgItem.on,.sgItem:hover{background:var(--accent);color:var(--accent-t)}
+.sgItem.on .sub,.sgItem:hover .sub{color:inherit;opacity:.85}
+.sgItem.on .ic,.sgItem:hover .ic{background:rgba(255,255,255,.22);color:inherit}
+.sgEmpty{padding:12px 10px;color:var(--dim);font-size:13px}
+.chips{display:inline-flex;gap:6px;align-items:center}
+.chip{border:0;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);
+  border-radius:99px;padding:3px 6px 3px 11px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+  white-space:nowrap}
+.chip .x{opacity:.7;font-size:11px;margin-left:2px}
+.chip:hover .x{opacity:1}
+
 /* Library: one flat, virtualised grid of every photo. */
 body:has(#tab-library:not([hidden])){--bg:var(--lib)}
 body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;padding-right:6px}
@@ -311,7 +342,15 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
     <button role="tab" data-tab="settings" aria-selected="true">Settings</button>
   </nav>
   <div class="spacer"></div>
-  <label class="switch"><input type="checkbox" id="mock"> Mock LM Studio</label>
+  <div class="hdrRight">
+    <div class="sgWrap">
+      <input type="search" id="gSearch" placeholder="Search" autocomplete="off" spellcheck="false"
+             aria-label="Search photos, people, places and more" aria-controls="sgBox"
+             aria-expanded="false" role="combobox" title="Search  ( / or Ctrl+K )">
+      <div id="sgBox" role="listbox" hidden></div>
+    </div>
+    <label class="switch" title="Mock LM Studio"><input type="checkbox" id="mock"><span class="swt"> Mock LM Studio</span></label>
+  </div>
 </header>
 
 <main>
@@ -385,6 +424,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   <section id="tab-library" hidden>
     <div id="galBar" class="tlbar">
       <span class="hint" id="galCount" style="margin:0"></span>
+      <span class="chips" id="galChips"></span>
       <span class="spacer"></span>
       <span class="hint" id="galSelCount" style="margin:0" hidden></span>
       <button id="galRotL" title="Rotate left (Shift+R)" aria-label="Rotate left" hidden>&#8634;</button>
@@ -393,6 +433,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
       <label class="hint" style="display:flex;align-items:center;gap:8px;margin:0">Size
         <input type="range" id="galSize" min="70" max="260" step="5" value="130"
                style="width:140px"></label>
+      <button id="galClearSearch" title="Back to the whole library" hidden>Clear search</button>
       <button id="galSort" title="Reverse the order">Newest first</button>
       <button id="galRemoved" title="Photos you removed from the library" hidden>Removed</button>
       <button id="galSelect" title="Select several photos">Select</button>
@@ -647,7 +688,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.1";
+const APP_VERSION = "0.6.2";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -3623,10 +3664,14 @@ function candidateSet(f){
   const ents  = f.entities ? [].concat(f.entities).map(s => singular(String(s).toLowerCase())) : null;
   const occ   = f.occasion ? [].concat(f.occasion).map(s => String(s).toLowerCase()) : null;
   const who   = f.person ? [].concat(f.person).map(s => String(s).toLowerCase()) : null;
+  const month = f.month ? String(f.month).padStart(2, "0") : null;
+  const sets  = f.photo_sets && f.photo_sets.length ? f.photo_sets : null;   // every set must contain the photo
   for (const r of IDX.records.values()){
     if (r.deleted || r.hidden || r.status === "error" || r.probe) continue;
     if (from && (!r.date_taken || r.date_taken.slice(0,10) < from)) continue;
     if (to   && (!r.date_taken || r.date_taken.slice(0,10) > to)) continue;
+    if (month && !(r.date_taken && r.date_taken.slice(5, 7) === month)) continue;
+    if (sets && !sets.every(s => s.has(r.id))) continue;
     if (place && !(r.place || "").toLowerCase().includes(place)) continue;
     if (types && !types.includes(String(r.image_type || "").toLowerCase())) continue;
     if (occ && !((r.when && r.when.occasions) || []).some(o => occ.includes(o))) continue;
@@ -3723,7 +3768,7 @@ function rrf(maps, k = 60){
 }
 
 async function searchPhotos(args){
-  const limit = Math.min(60, Math.max(1, args.limit || 12));
+  const limit = Math.min(args.max || 60, Math.max(1, args.limit || 12));   // `max` lifts the chat cap for the Library's search results
   const cands = candidateSet(args);
   const allowed = new Set(cands.map(r => r.id));
   const q = (args.query || "").trim();
@@ -6223,7 +6268,8 @@ async function onTimelineShown(force){
 
 const GAL = { list:[], built:0, size:130, desc:true, gap:2, cols:1, cell:0, rows:0,
               shown:new Map(), raf:0, loading:false,
-              view:"all",                     // "all" or "removed"
+              view:"all",                     // "all", "removed" or "search"
+              chips:[], text:"", results:[],    // the header search, shown as a view of this grid
               selMode:false, sel:new Set(), last:-1, removed:0 };
 try { const v = +localStorage.getItem("ps.galSize"); if (v >= 70 && v <= 260) GAL.size = v; } catch {}
 
@@ -6244,6 +6290,22 @@ function galSortKey(r){
   return k ? Date.parse(k) : null;
 }
 function galBuild(){
+  if (GAL.view === "search"){
+    /* Search results keep the order the ranker gave them. Records are looked up
+       afresh, so a photo removed or rotated since the search is still right. */
+    const list = [];
+    let removed = 0;
+    for (const r of IDX.records.values())
+      if (r.hidden && !r.deleted && r.status !== "error") removed++;
+    for (const id of GAL.results){
+      const r = IDX.records.get(id);
+      if (r && !r.hidden && !r.deleted && r.status !== "error") list.push({ r, t:galSortKey(r) });
+    }
+    GAL.list = list; GAL.undated = 0; GAL.removed = removed;
+    const inList = new Set(list.map(x => x.r.id));
+    for (const id of GAL.sel) if (!inList.has(id)) GAL.sel.delete(id);
+    return;
+  }
   const dated = [], undated = [];
   let removed = 0;
   for (const r of IDX.records.values()){
@@ -6279,7 +6341,8 @@ function galClear(){
 function galLayout(){
   const host = $("#galGrid");
   const w = host.clientWidth;
-  if (!w || !GAL.list.length) return;
+  if (!GAL.list.length){ host.style.height = "0px"; GAL.rows = 0; return; }
+  if (!w) return;
   const oldRow = GAL.cell ? Math.max(0, Math.floor((100 - host.getBoundingClientRect().top)
                                                     / (GAL.cell + GAL.gap))) : 0;
   const oldCols = GAL.cols, oldH = GAL.cell + GAL.gap;
@@ -6338,9 +6401,36 @@ function galRender(){
   host.append(frag);
 }
 
+/* The active search, as removable chips plus the typed words. */
+function galChips(){
+  const host = $("#galChips");
+  host.textContent = "";
+  if (GAL.view !== "search") return;
+  GAL.chips.forEach((c, i) => {
+    const b = el("button", "chip");
+    b.append(document.createTextNode(c.label + " "));
+    b.append(el("span", "x", "\u2715"));
+    b.title = "Remove this filter";
+    b.onclick = () => galDropChip(i);
+    host.append(b);
+  });
+  if (GAL.text){
+    const b = el("button", "chip");
+    b.append(document.createTextNode("\u201c" + GAL.text + "\u201d "));
+    b.append(el("span", "x", "\u2715"));
+    b.title = "Remove these words";
+    b.onclick = () => galDropText();
+    host.append(b);
+  }
+}
 function galBar(){
-  const removedView = GAL.view === "removed";
-  $("#galCount").textContent = removedView
+  const removedView = GAL.view === "removed", searchView = GAL.view === "search";
+  galChips();
+  $("#galClearSearch").hidden = !searchView;
+  $("#galSort").hidden = searchView;
+  $("#galCount").textContent = searchView
+    ? GAL.list.length.toLocaleString() + (GAL.list.length === 1 ? " result" : " results")
+    : removedView
     ? GAL.list.length.toLocaleString() + " removed — hidden from search, never deleted"
     : GAL.list.length.toLocaleString() + " photos"
       + (GAL.undated ? " · " + GAL.undated.toLocaleString() + " undated" : "");
@@ -6348,7 +6438,7 @@ function galBar(){
   $("#galSize").value = String(GAL.size);
   $("#galRemoved").textContent = removedView ? "Back to library"
     : "Removed" + (GAL.removed ? " (" + GAL.removed.toLocaleString() + ")" : "");
-  $("#galRemoved").hidden = !removedView && !GAL.removed;
+  $("#galRemoved").hidden = searchView || (!removedView && !GAL.removed);
   const n = GAL.sel.size;
   $("#galSelect").textContent = GAL.selMode ? "Done" : "Select";
   $("#galSelCount").hidden = !GAL.selMode;
@@ -6476,9 +6566,9 @@ async function galRotSel(delta){
 async function galAct(){
   const ids = [...GAL.sel];
   if (!ids.length) return;
-  if (GAL.view === "all" && ids.length >= 25
+  if (GAL.view !== "removed" && ids.length >= 25
       && !confirm("Remove " + ids.length + " photos from the library?\n\nThe files stay where they are and you can restore them from Removed.")) return;
-  const n = await galApply(ids, GAL.view === "all");
+  const n = await galApply(ids, GAL.view !== "removed");
   if (n){ GAL.sel.clear(); GAL.last = -1; galPaint(); }
 }
 
@@ -6494,11 +6584,16 @@ function galReveal(i){
   galRender();
 }
 
-let libLoading = false;
-async function onLibraryShown(force){
-  if (libLoading) return;
+/* One load at a time, and everyone who asks while it runs waits for the same
+   one. A search started from another tab needs the index open before it can
+   look anything up. */
+let libJob = null;
+function onLibraryShown(force){
+  if (!libJob) libJob = libLoad(force).finally(() => { libJob = null; });
+  return libJob;
+}
+async function libLoad(force){
   if (!force && GAL.built && GAL.built === IDX.records.size){ galLayout(); return; }
-  libLoading = true;
   try {
     if (!IDX.dir || !IDX.loaded){
       if (!S.dirHandle && !S.indexDirHandle){
@@ -6511,14 +6606,15 @@ async function onLibraryShown(force){
     }
     galBuild();
     GAL.built = IDX.records.size;
-    galMessage(GAL.list.length ? "" : "Nothing indexed yet — run a scan first.");
+    galMessage(GAL.list.length ? "" : (GAL.view === "search" ? "No photos match this search."
+                                                              : "Nothing indexed yet — run a scan first."));
     galBar();
     GAL.cell = 0;                       // a fresh list has no scroll anchor
     galClear();
     galLayout();
   } catch (e){
     galMessage(errText(e));
-  } finally { libLoading = false; }
+  }
 }
 
 $("#galSize").oninput = e => {
@@ -6531,7 +6627,7 @@ $("#galAct").onclick = galAct;
 $("#galRotL").onclick = () => galRotSel(-90);
 $("#galRotR").onclick = () => galRotSel(90);
 $("#galRemoved").onclick = () => {
-  GAL.view = GAL.view === "all" ? "removed" : "all";
+  GAL.view = GAL.view === "removed" ? "all" : "removed";
   GAL.sel.clear(); GAL.last = -1;
   galBuild(); galBar(); galClear(); galLayout();
   window.scrollTo(0, 0);
@@ -6704,7 +6800,7 @@ function vwStep(d){
 async function vwRemove(){
   if (!VW.open) return;
   const i = VW.i;
-  if (!await galApply([GAL.list[i].r.id], GAL.view === "all")) return;
+  if (!await galApply([GAL.list[i].r.id], GAL.view !== "removed")) return;
   if (!GAL.list.length){ closeViewer(); return; }
   const ni = Math.min(i, GAL.list.length - 1);
   galReveal(ni);
@@ -8546,6 +8642,277 @@ $("#chatSave").onclick = async () => {
     toast("Saved to .photoindex/chats/" + name);
   } catch (e){ toast("Could not save: " + errText(e)); }
 };
+
+/* ==================== 88-search.js ==================== */
+/* ================= header search =================
+   A search field in the toolbar, as in the Photos app. Typing offers grouped
+   suggestions (people, places, dates, kinds of picture, things in the picture)
+   worked out locally and instantly; choosing one adds a removable chip, and
+   pressing Enter on the first row searches the words themselves by keyword and
+   meaning. Results are shown in the Library grid, so the viewer, Select,
+   rotate and remove all work on them.
+
+   Nothing here calls a model except the ordinary text search, which embeds the
+   query when an embedding model is selected, exactly as chat does. */
+
+const SG = { open:false, items:[], sel:0, facts:null, key:"", run:0 };
+
+const sgLive = r => !!r && !r.deleted && !r.hidden && r.status !== "error" && !r.probe;
+
+/* Everything a suggestion needs, rebuilt only when the index or the people
+   changed. A photo set per person is what a person chip filters by, so it is
+   exact even when two people share a name. */
+function sgFacts(){
+  const key = [IDX.records.size, FACES.people.length, FACES.clusters.length, FACES.faces.size,
+               DERIVED.entities.size].join(":");
+  if (SG.facts && SG.key === key) return SG.facts;
+  const years = new Map(), occasions = new Map();
+  for (const r of IDX.records.values()){
+    if (!sgLive(r)) continue;
+    const y = r.date_taken && r.date_taken.slice(0, 4);
+    if (y && /^\d{4}$/.test(y)) years.set(y, (years.get(y) || 0) + 1);
+    for (const o of (r.when && r.when.occasions) || []) occasions.set(o, (occasions.get(o) || 0) + 1);
+  }
+  const people = [];
+  [...FACES.people, ...FACES.clusters].forEach((g, i) => {
+    const ids = new Set();
+    for (const fid of g.face_ids){
+      const f = FACES.faces.get(fid);
+      if (f && sgLive(IDX.records.get(f.photo_id))) ids.add(f.photo_id);
+    }
+    people.push({ id:g.id, named:!!g.name, label:groupLabel(g, i), ids, group:g });
+  });
+  const withFaces = new Set();
+  for (const pid of FACES.byPhoto.keys()) if (sgLive(IDX.records.get(pid))) withFaces.add(pid);
+  const places = new Map(), types = new Map(), things = new Map();
+  for (const e of DERIVED.entities.values()){
+    if (e.type === "place") places.set(e.value, e.count);
+    else if (e.type === "image_type") types.set(e.value, e.count);
+    else if (["object", "activity", "keyword", "animal", "setting"].includes(e.type)){
+      const k = e.value.toLowerCase(), cur = things.get(k);
+      if (cur) cur.count += e.count; else things.set(k, { value:e.value, count:e.count });
+    }
+  }
+  SG.key = key;
+  return SG.facts = { years, occasions, people, withFaces, places, types, things };
+}
+
+const sgTop = (map, n) => [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+
+/* Suggestions for what has been typed so far: [{ title, items:[...] }]. An
+   item carries the chips it would add, so choosing it needs no further work. */
+function sgSuggest(raw){
+  const F = sgFacts(), q = raw.trim().toLowerCase(), out = [];
+  const pass = str => !q || String(str).toLowerCase().includes(q);
+  const starts = str => String(str).toLowerCase().startsWith(q);
+
+  if (q) out.push({ title:"", items:[{ kind:"text", icon:"🔎", label:"Search for “" + raw.trim() + "”",
+                                         sub:"words and meaning" }] });
+
+  const ppl = F.people.filter(p => p.ids.size && pass(p.label))
+    .sort((a, b) => (b.named - a.named) || (b.ids.size - a.ids.size)).slice(0, q ? 6 : 8);
+  const faceItems = ppl.map(p => ({ kind:"person", face:bestFaceOf(p.group), label:p.label,
+    sub:p.ids.size.toLocaleString(), chips:[{ kind:"person", id:p.id, label:p.label }] }));
+  if (F.withFaces.size && (!q || (q.length >= 2 && ("faces".startsWith(q) || "people".startsWith(q)))))
+    faceItems.push({ kind:"faces", icon:"☺", label:"Photos with faces",
+      sub:F.withFaces.size.toLocaleString(), chips:[{ kind:"faces", label:"Faces" }] });
+  if (faceItems.length) out.push({ title:"People", items:faceItems });
+
+  /* Dates: "june", "2021" and "june 2021" all work, in any order. */
+  const dates = [];
+  const words = q.split(/\s+/).filter(Boolean);
+  const mi = words.map(w => w.length >= 3 ? TL_MONTHS.findIndex(m => m.toLowerCase().startsWith(w)) : -1)
+                  .find(i => i >= 0);
+  const yr = words.find(w => /^(19|20)\d{2}$/.test(w));
+  if (mi != null && yr)
+    dates.push({ kind:"date", icon:"📅", label:TL_MONTHS[mi] + " " + yr,
+      chips:[{ kind:"month", value:mi + 1, label:TL_MONTHS[mi] }, { kind:"year", value:yr, label:yr }] });
+  else if (mi != null)
+    dates.push({ kind:"date", icon:"📅", label:TL_MONTHS[mi], sub:"any year",
+      chips:[{ kind:"month", value:mi + 1, label:TL_MONTHS[mi] }] });
+  else if (/^\d{1,4}$/.test(q) || !q){
+    for (const [y, n] of sgTop(new Map([...F.years].filter(([y]) => !q || y.startsWith(q))), q ? 5 : 6)
+                           .sort((a, b) => b[0].localeCompare(a[0])))
+      dates.push({ kind:"date", icon:"📅", label:y, sub:n.toLocaleString(),
+        chips:[{ kind:"year", value:y, label:y }] });
+  }
+  for (const [o, n] of sgTop(F.occasions, 50).filter(([o]) => q && pass(o)).slice(0, 3))
+    dates.push({ kind:"occasion", icon:"🎉", label:o[0].toUpperCase() + o.slice(1), sub:n.toLocaleString(),
+      chips:[{ kind:"occasion", value:o, label:o[0].toUpperCase() + o.slice(1) }] });
+  if (dates.length) out.push({ title:"Dates", items:dates });
+
+  const places = sgTop(F.places, 400).filter(([p]) => pass(p)).slice(0, q ? 5 : 5)
+    .map(([p, n]) => ({ kind:"place", icon:"📍", label:p, sub:n.toLocaleString(),
+                        chips:[{ kind:"place", value:p, label:p }] }));
+  if (places.length) out.push({ title:"Places", items:places });
+
+  if (q){
+    const types = sgTop(F.types, 30).filter(([t]) => pass(t)).slice(0, 4)
+      .map(([t, n]) => ({ kind:"type", icon:"🏷", label:t[0].toUpperCase() + t.slice(1), sub:n.toLocaleString(),
+                          chips:[{ kind:"type", value:t, label:t[0].toUpperCase() + t.slice(1) }] }));
+    if (types.length) out.push({ title:"Kinds of picture", items:types });
+
+    const things = [...F.things.values()].filter(t => pass(t.value))
+      .sort((a, b) => (starts(b.value) - starts(a.value)) || (b.count - a.count)).slice(0, 6)
+      .map(t => ({ kind:"thing", icon:"✦", label:t.value, sub:t.count.toLocaleString(),
+                   chips:[{ kind:"thing", value:t.value, label:t.value }] }));
+    if (things.length) out.push({ title:"In the picture", items:things });
+  }
+  return out;
+}
+
+/* ---- the dropdown ---- */
+function sgRender(){
+  const box = $("#sgBox"), input = $("#gSearch");
+  const secs = sgSuggest(input.value);
+  SG.items = secs.flatMap(s => s.items);
+  SG.sel = Math.min(Math.max(SG.sel, 0), Math.max(0, SG.items.length - 1));
+  box.textContent = "";
+  if (!SG.items.length){
+    box.append(el("div", "sgEmpty", IDX.records.size
+      ? "Nothing to suggest. Press Enter to search the words."
+      : "Connect a folder in Settings to search your photos."));
+  }
+  let n = 0;
+  for (const s of secs){
+    if (s.title) box.append(el("div", "sgHead", s.title));
+    for (const it of s.items){
+      const row = el("div", "sgItem" + (n === SG.sel ? " on" : ""));
+      row.setAttribute("role", "option");
+      row.dataset.n = String(n++);
+      if (it.face) row.append(faceTile(it.face));
+      else row.append(el("span", "ic", it.icon || "•"));
+      row.append(el("span", "lbl", it.label));
+      if (it.sub) row.append(el("span", "sub", it.sub));
+      row.onmousedown = e => { e.preventDefault(); sgPick(it); };
+      row.onmousemove = () => { if (SG.sel !== +row.dataset.n) sgMove(+row.dataset.n, false); };
+      box.append(row);
+    }
+  }
+}
+function sgMove(to, scroll){
+  const rows = $("#sgBox").querySelectorAll(".sgItem");
+  if (!rows.length) return;
+  SG.sel = (to + rows.length) % rows.length;
+  rows.forEach((r, i) => r.classList.toggle("on", i === SG.sel));
+  if (scroll) rows[SG.sel].scrollIntoView({ block:"nearest" });
+}
+function sgOpen(){
+  SG.open = true;
+  $("#sgBox").hidden = false;
+  $("#gSearch").setAttribute("aria-expanded", "true");
+  sgRender();
+}
+function sgClose(){
+  SG.open = false;
+  $("#sgBox").hidden = true;
+  $("#gSearch").setAttribute("aria-expanded", "false");
+}
+
+/* ---- chips ---- */
+const SG_SINGLE = ["place", "year", "month"];          // a second one replaces the first
+function sgAddChip(c){
+  if (SG_SINGLE.includes(c.kind)) GAL.chips = GAL.chips.filter(x => x.kind !== c.kind);
+  if (!GAL.chips.some(x => x.kind === c.kind && x.id === c.id && x.value === c.value))
+    GAL.chips.push(c);
+}
+function sgPick(it){
+  const input = $("#gSearch");
+  if (it.kind === "text") GAL.text = input.value.trim();
+  else for (const c of it.chips) sgAddChip(c);
+  input.value = "";
+  sgClose();
+  runSearch();
+}
+
+/* The filters a set of chips stands for, in the form searchPhotos takes. */
+function sgArgs(){
+  const F = sgFacts(), a = { limit:100000, max:100000, photo_sets:[] };
+  const types = [], things = [], occ = [];
+  for (const c of GAL.chips){
+    if (c.kind === "person") a.photo_sets.push((F.people.find(p => p.id === c.id) || { ids:new Set() }).ids);
+    else if (c.kind === "faces") a.photo_sets.push(F.withFaces);
+    else if (c.kind === "place") a.place = c.value;
+    else if (c.kind === "year"){ a.date_from = c.value + "-01-01"; a.date_to = c.value + "-12-31"; }
+    else if (c.kind === "month") a.month = c.value;
+    else if (c.kind === "type") types.push(c.value);
+    else if (c.kind === "thing") things.push(c.value);
+    else if (c.kind === "occasion") occ.push(c.value);
+  }
+  if (types.length) a.image_type = types;
+  if (things.length) a.entities = things;
+  if (occ.length) a.occasion = occ;
+  if (GAL.text) a.query = GAL.text;
+  return a;
+}
+
+async function runSearch(){
+  const tok = ++SG.run;
+  if (!GAL.chips.length && !GAL.text){ clearSearch(); return; }
+  if (tabFromHash() !== "library") location.hash = "library";
+  showTab("library");
+  await onLibraryShown();
+  if (!IDX.records.size){ toast("Connect a folder in Settings first."); return; }
+  try {
+    await ensureFaceNames();
+    if (!IDX.vec.ids.length) await loadVectors().catch(() => {});
+    if (!DERIVED.postings.size) rebuildDerived();
+    const res = await searchPhotos(sgArgs());
+    if (tok !== SG.run) return;                       // a newer search superseded this one
+    GAL.view = "search";
+    GAL.results = res.results.map(x => x.rec.id);
+    GAL.sel.clear(); GAL.last = -1;
+    galBuild(); galBar(); galClear(); galLayout();
+    galMessage(GAL.list.length ? "" : "No photos match this search.");
+    window.scrollTo(0, 0);
+  } catch (e){
+    toast("Search failed: " + errText(e));
+  }
+}
+function clearSearch(){
+  SG.run++;
+  GAL.chips = []; GAL.text = ""; GAL.results = [];
+  if (GAL.view === "search") GAL.view = "all";
+  galBuild(); galBar(); galClear(); galLayout();
+  galMessage(GAL.list.length ? "" : "Nothing indexed yet — run a scan first.");
+}
+function galDropChip(i){ GAL.chips.splice(i, 1); runSearch(); }
+function galDropText(){ GAL.text = ""; runSearch(); }
+$("#galClearSearch").onclick = clearSearch;
+
+/* ---- the field ---- */
+{
+  const input = $("#gSearch");
+  input.addEventListener("focus", () => {
+    sgOpen();
+    ensureFaceNames().then(() => { if (SG.open) sgRender(); });
+  });
+  input.addEventListener("input", () => { SG.sel = 0; if (!SG.open) sgOpen(); else sgRender(); });
+  input.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== input) sgClose(); }, 120));
+  input.addEventListener("keydown", e => {
+    if (e.key === "ArrowDown"){ e.preventDefault(); if (!SG.open) sgOpen(); else sgMove(SG.sel + 1, true); }
+    else if (e.key === "ArrowUp"){ e.preventDefault(); sgMove(SG.sel - 1, true); }
+    else if (e.key === "Enter"){
+      e.preventDefault();
+      const it = SG.items[SG.sel];
+      if (it) sgPick(it);
+    } else if (e.key === "Escape"){
+      if (SG.open) sgClose();
+      else if (input.value) input.value = "";
+      else input.blur();
+    }
+  });
+  document.addEventListener("mousedown", e => {
+    if (SG.open && !e.target.closest(".sgWrap")) sgClose();
+  });
+  /* "/" and Ctrl/Cmd+K jump to the field, unless you are already typing. */
+  document.addEventListener("keydown", e => {
+    const typing = e.target.closest && e.target.closest("input,textarea,select,[contenteditable]");
+    const slash = e.key === "/" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey;
+    const k = (e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey);
+    if ((slash || k) && !VW.open){ e.preventDefault(); input.focus(); input.select(); }
+  });
+}
 
 /* ==================== 90-selftest.js ==================== */
 
@@ -10456,6 +10823,91 @@ async function selfTest(){
          /OLLAMA_ORIGINS/.test(corsHint()), corsHint());
 
       S.baseUrl = keepUrl; S.structuredMode = keepMode; S.provider = null;
+    }
+
+    /* ---- header search ----
+       Suggestions come from the index and the people, with no model call; a
+       chosen suggestion becomes a chip that maps onto searchPhotos' filters. */
+    {
+      const keep = { rec:IDX.records, ent:DERIVED.entities, fp:FACES.people, fc:FACES.clusters,
+                     ff:FACES.faces, fb:FACES.byPhoto, view:GAL.view, chips:GAL.chips,
+                     text:GAL.text, res:GAL.results, facts:SG.facts };
+      const mk = (id, iso, place) => [id, { id, name:id + ".jpg", path:id + ".jpg", status:"ok", caption:"c",
+        date_taken:iso, place, when:{ year:+iso.slice(0, 4), month:+iso.slice(5, 7), day:1 } }];
+      IDX.records = new Map([
+        mk("s1", "2021-06-10T12:00:00.000Z", "Sicily, IT"), mk("s2", "2022-06-11T12:00:00.000Z", "Sicily, IT"),
+        mk("s3", "2022-07-12T12:00:00.000Z", "Paris, FR"), mk("s4", "2023-01-02T12:00:00.000Z", "Paris, FR")]);
+      IDX.records.get("s4").hidden = true;
+      DERIVED.entities = new Map([
+        ["place:Sicily, IT", { type:"place", value:"Sicily, IT", count:2 }],
+        ["place:Paris, FR", { type:"place", value:"Paris, FR", count:1 }],
+        ["object:boat", { type:"object", value:"boat", count:2 }],
+        ["image_type:screenshot", { type:"image_type", value:"screenshot", count:1 }]]);
+      FACES.faces = new Map([["f1", { id:"f1", photo_id:"s1", box:[0, 0, 1, 1], score:1 }],
+                             ["f2", { id:"f2", photo_id:"s2", box:[0, 0, 1, 1], score:1 }],
+                             ["f3", { id:"f3", photo_id:"s4", box:[0, 0, 1, 1], score:1 }]]);
+      FACES.byPhoto = new Map([["s1", ["f1"]], ["s2", ["f2"]], ["s4", ["f3"]]]);
+      FACES.people = [{ id:"pa", name:"Anna", face_ids:["f1", "f2", "f3"] }];
+      FACES.clusters = [];
+      SG.facts = null;
+      try {
+        /* the two new filters */
+        eq("a month filter keeps that month in any year",
+           candidateSet({ month:6 }).map(r => r.id).sort(), ["s1", "s2"]);
+        eq("a photo-set filter keeps only members",
+           candidateSet({ photo_sets:[new Set(["s1", "s3"])] }).map(r => r.id).sort(), ["s1", "s3"]);
+        eq("several photo sets must all contain the photo",
+           candidateSet({ photo_sets:[new Set(["s1", "s3"]), new Set(["s3"])] }).map(r => r.id), ["s3"]);
+
+        /* suggestions */
+        const top = sgSuggest("ann");
+        eq("typed words always offer a text search first", top[0].items[0].kind, "text");
+        const anna = top.flatMap(s => s.items).find(i => i.kind === "person");
+        ok("a matching person is suggested", !!anna && anna.label === "Anna", anna && anna.label);
+        eq("and counts only visible photos (the hidden one is not counted)", anna.sub, "2");
+        ok("places are suggested by name", sgSuggest("sic").flatMap(s => s.items)
+             .some(i => i.kind === "place" && i.label === "Sicily, IT"));
+        const jd = sgSuggest("june 2022").flatMap(s => s.items).find(i => i.kind === "date");
+        eq("\"june 2022\" becomes a month and a year", jd && jd.chips.map(c => c.kind), ["month", "year"]);
+        ok("things in the picture are suggested", sgSuggest("boa").flatMap(s => s.items)
+             .some(i => i.kind === "thing" && i.label === "boat"));
+        ok("kinds of picture are suggested", sgSuggest("screen").flatMap(s => s.items)
+             .some(i => i.kind === "type"));
+        eq("an empty box suggests people first", sgSuggest("")[0].title, "People");
+        eq("unrelated words suggest nothing but the text search",
+           sgSuggest("zzzz").flatMap(s => s.items).length, 1);
+
+        /* chips become filters */
+        GAL.chips = [];
+        sgAddChip({ kind:"place", value:"Sicily, IT", label:"Sicily, IT" });
+        sgAddChip({ kind:"place", value:"Paris, FR", label:"Paris, FR" });
+        eq("a second place replaces the first", GAL.chips.map(c => c.value), ["Paris, FR"]);
+        sgAddChip({ kind:"person", id:"pa", label:"Anna" });
+        sgAddChip({ kind:"person", id:"pa", label:"Anna" });
+        eq("the same chip is not added twice", GAL.chips.filter(c => c.kind === "person").length, 1);
+        sgAddChip({ kind:"year", value:"2022", label:"2022" });
+        GAL.text = "boat";
+        const a = sgArgs();
+        eq("a place chip filters by place", a.place, "Paris, FR");
+        eq("a year chip filters by date range", [a.date_from, a.date_to], ["2022-01-01", "2022-12-31"]);
+        eq("a person chip filters by that person's photos",
+           [...a.photo_sets[0]].sort(), ["s1", "s2"]);
+        eq("typed words become the query", a.query, "boat");
+        ok("the Library's results are not capped at the chat limit", a.max > 60);
+        const res = await searchPhotos({ ...a, query:"" });
+        eq("the filters combine (Paris + 2022 + Anna has no photo)", res.results.length, 0);
+
+        /* the Library shows results in ranked order and drops removed photos */
+        GAL.view = "search"; GAL.results = ["s2", "s4", "s1"];
+        galBuild();
+        eq("search results keep the ranker's order", GAL.list.map(x => x.r.id), ["s2", "s1"]);
+        ok("and a hidden photo never appears", !GAL.list.some(x => x.r.id === "s4"));
+      } finally {
+        IDX.records = keep.rec; DERIVED.entities = keep.ent;
+        FACES.people = keep.fp; FACES.clusters = keep.fc; FACES.faces = keep.ff; FACES.byPhoto = keep.fb;
+        GAL.view = keep.view; GAL.chips = keep.chips; GAL.text = keep.text; GAL.results = keep.res;
+        SG.facts = keep.facts; GAL.built = 0; GAL.list = [];
+      }
     }
 
     /* ---- tab links ----

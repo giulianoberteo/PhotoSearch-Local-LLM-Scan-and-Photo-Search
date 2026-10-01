@@ -37,6 +37,7 @@ ORDER = [
     "84-faces.js",    # face detection, grouping, naming
     "86-peopleui.js", # the People tab
     "87-chatui.js",   # chat rendering, lightbox
+    "88-search.js",   # the header search field: suggestions, chips, results in the Library
     "90-selftest.js", # in-browser test suite
     "95-faultfs.js",  # test-only: slow/hanging/failing filesystem proxy
     "99-boot.js",     # error surfacing, boot

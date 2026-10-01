@@ -101,7 +101,7 @@ The current version is shown in the app's footer; the [ChangeLog](ChangeLog.md) 
 | | |
 |---|---|
 | **Describes every photo** | caption, description, objects, activities, scene, visible text (OCR), date, camera, GPS and place |
-| **Finds by meaning** | keyword and semantic search merged together, exact `"phrases"`, filters by date, place, person and type |
+| **Finds anything** | a Photos-style search field with instant suggestions for people, places, dates, kinds of picture and things in the picture, plus keyword and semantic search merged together and exact `"phrases"` |
 | **Browses like a photo app** | a zoomable Library grid, a full-window viewer, a day-by-day Timeline |
 | **Talks to your library** | a chat agent with nine tools that answers with the matching photos |
 | **Groups faces, never identifies them** | people appear as anonymous groups until *you* name them |
@@ -186,8 +186,17 @@ in **[docs/SETUP.md](docs/SETUP.md)**.
 link goes straight to that tab, choosing a tab updates the address, and the browser's Back and
 Forward buttons step through the tabs you visited. (`#selftest` is reserved for the self-test.)
 
+**The search field.** The field in the toolbar (press `/` or `Ctrl/⌘+K` to jump to it) works like
+the one in the Photos app. Click it and you see your people; type and you get suggestions grouped
+as **People** (with their face), **Dates** (`2021`, `june`, `june 2021`, occasions such as
+Easter), **Places**, **Kinds of picture** (screenshots, documents) and **In the picture**
+(`boat`, `cake`, `forest`). Pick one and it becomes a chip; add more to narrow the search, such
+as *Anna* + *Sicily* + *2022*. Press Enter on the first row to search the words themselves by
+keyword and meaning. Results appear in the Library, so you can open, step through, select,
+rotate and remove them. Remove a chip, or **Clear search**, to widen it again.
+
 **Searching** takes plain words, `"exact phrases"` in quotes, and people by name once you have
-named them. The Library is for looking; Chat is for asking.
+named them. The search field is for finding; the Library is for looking; Chat is for asking.
 
 [↑ Back to Index](#index)
 

@@ -26,7 +26,7 @@ Written on 29 September 2026, after 6,635 photos were indexed and searchable, an
   - [1.6 Near-duplicates, bursts and best shot: not started](#16-near-duplicates-bursts-and-best-shot-not-started)
 - [Phase 2: Better search](#phase-2-better-search)
   - [2.1 True image embeddings](#21-true-image-embeddings)
-  - [2.2 Query understanding](#22-query-understanding)
+  - [2.2 Query understanding: partly built](#22-query-understanding-partly-built)
   - [2.3 Typo tolerance and synonyms](#23-typo-tolerance-and-synonyms)
   - [2.4 A retrieval test set](#24-a-retrieval-test-set)
 - [Phase 3: Nice to have](#phase-3-nice-to-have)
@@ -56,7 +56,8 @@ The gap was mostly **browsing** and **two whole media types**, not intelligence.
 | Perceptual hash, near-duplicates and bursts | not started |
 | Place grouping (map view) | not started |
 | True image embeddings | not started |
-| Query understanding, typo tolerance | not started |
+| Search field with suggestions and filter chips | **built**, 1 October 2026 |
+| Typo tolerance, free-text query parsing | not started |
 
 This document says what to add, in what order, and what each item actually costs.
 
@@ -230,7 +231,11 @@ exists.
 main argument for MobileCLIP instead if that proves unacceptable. **Risk:** medium-high. This is
 the one item to prove, download and runtime, on the user's machine before committing.
 
-### 2.2 Query understanding
+### 2.2 Query understanding: partly built
+
+The header search field now covers the structured half: pick a person, a place, a year or a kind
+of picture and the filters combine. What is still missing is *parsing* a typed sentence into
+those filters.
 
 "Photos of Anna in Sicily last summer" should decompose into a person filter, a place filter
 and a date range, rather than being embedded whole. The chat agent already has the tools; this

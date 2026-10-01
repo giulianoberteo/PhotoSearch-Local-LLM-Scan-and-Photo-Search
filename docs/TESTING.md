@@ -58,6 +58,10 @@ scratch folder, so your real photos and index are never touched.
   thumbnails pinned then released, and the viewer's open, step, details and close cycle
 - **removing photos:** that a removal sets `hidden` and not `deleted`, leaves the library and
   search, appears in the Removed view, and is undone by restoring
+- **header search:** the month and photo-set filters; suggestions for people, places, dates, kinds
+  and things (and that hidden photos are not counted); how chips become filters, including the
+  replace-not-add rule and the exact person photo set; and that results keep ranked order and
+  never include a removed photo
 - **tab links:** that `#library` and its case, parameter, slash and encoded variants name the right
   tab, that `#selftest` and unknown hashes are never tabs, and that showing a tab selects it
 - **rotating photos:** that a turn is stored on the record and written to the index, wraps

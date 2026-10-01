@@ -63,7 +63,8 @@ header{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14
   background:var(--bar);-webkit-backdrop-filter:saturate(180%) blur(22px);
   backdrop-filter:saturate(180%) blur(22px);border-bottom:1px solid var(--line)}
 header .spacer{display:none}
-header .switch{justify-self:end;font-size:12px;color:var(--dim)}
+.hdrRight{justify-self:end;display:flex;align-items:center;gap:14px;min-width:0}
+.hdrRight .switch{font-size:12px;color:var(--dim);white-space:nowrap}
 h1{font-size:17px;margin:0;font-weight:700;letter-spacing:-.02em}
 nav{display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--panel2)}
 nav button{background:none;border:0;color:var(--text);padding:5px 15px;border-radius:8px;
@@ -241,6 +242,36 @@ footer{position:fixed;bottom:0;left:0;right:0;display:flex;gap:18px;align-items:
 .hint{font-size:12px;color:var(--dim);margin-top:6px}
 code{font-family:var(--mono);background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12.5px}
 
+
+/* Search: a field in the toolbar, as in the Photos app, with grouped suggestions. */
+.sgWrap{position:relative;width:clamp(130px,15vw,230px);transition:width .2s}
+.sgWrap:focus-within{width:clamp(180px,20vw,300px)}
+@media (max-width:1250px){.hdrRight .swt{display:none}}
+#gSearch{width:100%;height:30px;padding:0 10px 0 30px;border:0;border-radius:9px;font:inherit;
+  background:var(--panel2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2.4' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='M20 20l-4.8-4.8'/%3E%3C/svg%3E") no-repeat 9px 50%}
+#sgBox{position:absolute;top:36px;right:0;width:max(100%,340px);max-height:min(70vh,520px);overflow-y:auto;
+  background:var(--panel);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.28),0 0 0 1px var(--line);
+  padding:6px;z-index:40}
+#sgBox .sgHead{padding:8px 10px 3px;font-size:11px;font-weight:650;letter-spacing:.4px;
+  text-transform:uppercase;color:var(--dim)}
+.sgItem{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:9px;cursor:pointer;
+  min-height:34px}
+.sgItem .lbl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sgItem .sub{color:var(--dim);font-size:12px;white-space:nowrap}
+.sgItem .ic{flex:0 0 30px;height:30px;display:grid;place-items:center;border-radius:50%;
+  background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent);font-size:14px}
+.sgItem .facetile{width:30px;height:30px;flex:0 0 30px}
+.sgItem.on,.sgItem:hover{background:var(--accent);color:var(--accent-t)}
+.sgItem.on .sub,.sgItem:hover .sub{color:inherit;opacity:.85}
+.sgItem.on .ic,.sgItem:hover .ic{background:rgba(255,255,255,.22);color:inherit}
+.sgEmpty{padding:12px 10px;color:var(--dim);font-size:13px}
+.chips{display:inline-flex;gap:6px;align-items:center}
+.chip{border:0;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);
+  border-radius:99px;padding:3px 6px 3px 11px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+  white-space:nowrap}
+.chip .x{opacity:.7;font-size:11px;margin-left:2px}
+.chip:hover .x{opacity:1}
+
 /* Library: one flat, virtualised grid of every photo. */
 body:has(#tab-library:not([hidden])){--bg:var(--lib)}
 body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;padding-right:6px}
@@ -311,7 +342,15 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
     <button role="tab" data-tab="settings" aria-selected="true">Settings</button>
   </nav>
   <div class="spacer"></div>
-  <label class="switch"><input type="checkbox" id="mock"> Mock LM Studio</label>
+  <div class="hdrRight">
+    <div class="sgWrap">
+      <input type="search" id="gSearch" placeholder="Search" autocomplete="off" spellcheck="false"
+             aria-label="Search photos, people, places and more" aria-controls="sgBox"
+             aria-expanded="false" role="combobox" title="Search  ( / or Ctrl+K )">
+      <div id="sgBox" role="listbox" hidden></div>
+    </div>
+    <label class="switch" title="Mock LM Studio"><input type="checkbox" id="mock"><span class="swt"> Mock LM Studio</span></label>
+  </div>
 </header>
 
 <main>
@@ -385,6 +424,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   <section id="tab-library" hidden>
     <div id="galBar" class="tlbar">
       <span class="hint" id="galCount" style="margin:0"></span>
+      <span class="chips" id="galChips"></span>
       <span class="spacer"></span>
       <span class="hint" id="galSelCount" style="margin:0" hidden></span>
       <button id="galRotL" title="Rotate left (Shift+R)" aria-label="Rotate left" hidden>&#8634;</button>
@@ -393,6 +433,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
       <label class="hint" style="display:flex;align-items:center;gap:8px;margin:0">Size
         <input type="range" id="galSize" min="70" max="260" step="5" value="130"
                style="width:140px"></label>
+      <button id="galClearSearch" title="Back to the whole library" hidden>Clear search</button>
       <button id="galSort" title="Reverse the order">Newest first</button>
       <button id="galRemoved" title="Photos you removed from the library" hidden>Removed</button>
       <button id="galSelect" title="Select several photos">Select</button>

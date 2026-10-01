@@ -10,7 +10,8 @@
 
 const GAL = { list:[], built:0, size:130, desc:true, gap:2, cols:1, cell:0, rows:0,
               shown:new Map(), raf:0, loading:false,
-              view:"all",                     // "all" or "removed"
+              view:"all",                     // "all", "removed" or "search"
+              chips:[], text:"", results:[],    // the header search, shown as a view of this grid
               selMode:false, sel:new Set(), last:-1, removed:0 };
 try { const v = +localStorage.getItem("ps.galSize"); if (v >= 70 && v <= 260) GAL.size = v; } catch {}
 
@@ -31,6 +32,22 @@ function galSortKey(r){
   return k ? Date.parse(k) : null;
 }
 function galBuild(){
+  if (GAL.view === "search"){
+    /* Search results keep the order the ranker gave them. Records are looked up
+       afresh, so a photo removed or rotated since the search is still right. */
+    const list = [];
+    let removed = 0;
+    for (const r of IDX.records.values())
+      if (r.hidden && !r.deleted && r.status !== "error") removed++;
+    for (const id of GAL.results){
+      const r = IDX.records.get(id);
+      if (r && !r.hidden && !r.deleted && r.status !== "error") list.push({ r, t:galSortKey(r) });
+    }
+    GAL.list = list; GAL.undated = 0; GAL.removed = removed;
+    const inList = new Set(list.map(x => x.r.id));
+    for (const id of GAL.sel) if (!inList.has(id)) GAL.sel.delete(id);
+    return;
+  }
   const dated = [], undated = [];
   let removed = 0;
   for (const r of IDX.records.values()){
@@ -66,7 +83,8 @@ function galClear(){
 function galLayout(){
   const host = $("#galGrid");
   const w = host.clientWidth;
-  if (!w || !GAL.list.length) return;
+  if (!GAL.list.length){ host.style.height = "0px"; GAL.rows = 0; return; }
+  if (!w) return;
   const oldRow = GAL.cell ? Math.max(0, Math.floor((100 - host.getBoundingClientRect().top)
                                                     / (GAL.cell + GAL.gap))) : 0;
   const oldCols = GAL.cols, oldH = GAL.cell + GAL.gap;
@@ -125,9 +143,36 @@ function galRender(){
   host.append(frag);
 }
 
+/* The active search, as removable chips plus the typed words. */
+function galChips(){
+  const host = $("#galChips");
+  host.textContent = "";
+  if (GAL.view !== "search") return;
+  GAL.chips.forEach((c, i) => {
+    const b = el("button", "chip");
+    b.append(document.createTextNode(c.label + " "));
+    b.append(el("span", "x", "\u2715"));
+    b.title = "Remove this filter";
+    b.onclick = () => galDropChip(i);
+    host.append(b);
+  });
+  if (GAL.text){
+    const b = el("button", "chip");
+    b.append(document.createTextNode("\u201c" + GAL.text + "\u201d "));
+    b.append(el("span", "x", "\u2715"));
+    b.title = "Remove these words";
+    b.onclick = () => galDropText();
+    host.append(b);
+  }
+}
 function galBar(){
-  const removedView = GAL.view === "removed";
-  $("#galCount").textContent = removedView
+  const removedView = GAL.view === "removed", searchView = GAL.view === "search";
+  galChips();
+  $("#galClearSearch").hidden = !searchView;
+  $("#galSort").hidden = searchView;
+  $("#galCount").textContent = searchView
+    ? GAL.list.length.toLocaleString() + (GAL.list.length === 1 ? " result" : " results")
+    : removedView
     ? GAL.list.length.toLocaleString() + " removed — hidden from search, never deleted"
     : GAL.list.length.toLocaleString() + " photos"
       + (GAL.undated ? " · " + GAL.undated.toLocaleString() + " undated" : "");
@@ -135,7 +180,7 @@ function galBar(){
   $("#galSize").value = String(GAL.size);
   $("#galRemoved").textContent = removedView ? "Back to library"
     : "Removed" + (GAL.removed ? " (" + GAL.removed.toLocaleString() + ")" : "");
-  $("#galRemoved").hidden = !removedView && !GAL.removed;
+  $("#galRemoved").hidden = searchView || (!removedView && !GAL.removed);
   const n = GAL.sel.size;
   $("#galSelect").textContent = GAL.selMode ? "Done" : "Select";
   $("#galSelCount").hidden = !GAL.selMode;
@@ -263,9 +308,9 @@ async function galRotSel(delta){
 async function galAct(){
   const ids = [...GAL.sel];
   if (!ids.length) return;
-  if (GAL.view === "all" && ids.length >= 25
+  if (GAL.view !== "removed" && ids.length >= 25
       && !confirm("Remove " + ids.length + " photos from the library?\n\nThe files stay where they are and you can restore them from Removed.")) return;
-  const n = await galApply(ids, GAL.view === "all");
+  const n = await galApply(ids, GAL.view !== "removed");
   if (n){ GAL.sel.clear(); GAL.last = -1; galPaint(); }
 }
 
@@ -281,11 +326,16 @@ function galReveal(i){
   galRender();
 }
 
-let libLoading = false;
-async function onLibraryShown(force){
-  if (libLoading) return;
+/* One load at a time, and everyone who asks while it runs waits for the same
+   one. A search started from another tab needs the index open before it can
+   look anything up. */
+let libJob = null;
+function onLibraryShown(force){
+  if (!libJob) libJob = libLoad(force).finally(() => { libJob = null; });
+  return libJob;
+}
+async function libLoad(force){
   if (!force && GAL.built && GAL.built === IDX.records.size){ galLayout(); return; }
-  libLoading = true;
   try {
     if (!IDX.dir || !IDX.loaded){
       if (!S.dirHandle && !S.indexDirHandle){
@@ -298,14 +348,15 @@ async function onLibraryShown(force){
     }
     galBuild();
     GAL.built = IDX.records.size;
-    galMessage(GAL.list.length ? "" : "Nothing indexed yet — run a scan first.");
+    galMessage(GAL.list.length ? "" : (GAL.view === "search" ? "No photos match this search."
+                                                              : "Nothing indexed yet — run a scan first."));
     galBar();
     GAL.cell = 0;                       // a fresh list has no scroll anchor
     galClear();
     galLayout();
   } catch (e){
     galMessage(errText(e));
-  } finally { libLoading = false; }
+  }
 }
 
 $("#galSize").oninput = e => {
@@ -318,7 +369,7 @@ $("#galAct").onclick = galAct;
 $("#galRotL").onclick = () => galRotSel(-90);
 $("#galRotR").onclick = () => galRotSel(90);
 $("#galRemoved").onclick = () => {
-  GAL.view = GAL.view === "all" ? "removed" : "all";
+  GAL.view = GAL.view === "removed" ? "all" : "removed";
   GAL.sel.clear(); GAL.last = -1;
   galBuild(); galBar(); galClear(); galLayout();
   window.scrollTo(0, 0);
@@ -491,7 +542,7 @@ function vwStep(d){
 async function vwRemove(){
   if (!VW.open) return;
   const i = VW.i;
-  if (!await galApply([GAL.list[i].r.id], GAL.view === "all")) return;
+  if (!await galApply([GAL.list[i].r.id], GAL.view !== "removed")) return;
   if (!GAL.list.length){ closeViewer(); return; }
   const ni = Math.min(i, GAL.list.length - 1);
   galReveal(ni);

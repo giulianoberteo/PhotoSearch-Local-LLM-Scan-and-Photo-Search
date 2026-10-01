@@ -17,40 +17,74 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.6.1 (2026-10-01)](#061-2026-10-01)
+- [0.6.2 (2026-10-01)](#062-2026-10-01)
   - [Added](#added)
   - [Changed](#changed)
-- [0.6.0 (2026-10-01)](#060-2026-10-01)
+- [0.6.1 (2026-10-01)](#061-2026-10-01)
   - [Added](#added-1)
   - [Changed](#changed-1)
-- [0.5.4 (2026-10-01)](#054-2026-10-01)
+- [0.6.0 (2026-10-01)](#060-2026-10-01)
+  - [Added](#added-2)
   - [Changed](#changed-2)
+- [0.5.4 (2026-10-01)](#054-2026-10-01)
+  - [Changed](#changed-3)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
-  - [Added](#added-2)
-  - [Changed](#changed-3)
-- [0.5.1 (2026-10-01)](#051-2026-10-01)
-  - [Changed](#changed-4)
-- [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-3)
+  - [Changed](#changed-4)
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-5)
-  - [Fixed](#fixed-1)
-- [0.4.0 (2026-10-01)](#040-2026-10-01)
+- [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-4)
   - [Changed](#changed-6)
-- [0.3.0 (2026-09-30)](#030-2026-09-30)
+  - [Fixed](#fixed-1)
+- [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-5)
   - [Changed](#changed-7)
-  - [Fixed](#fixed-2)
-- [0.2.0 (2026-09-29)](#020-2026-09-29)
+- [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-6)
   - [Changed](#changed-8)
+  - [Fixed](#fixed-2)
+- [0.2.0 (2026-09-29)](#020-2026-09-29)
+  - [Added](#added-7)
+  - [Changed](#changed-9)
   - [Fixed](#fixed-3)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
-  - [Added](#added-7)
+  - [Added](#added-8)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.2 (2026-10-01)
+
+**Summary:** a Photos-style search field in the toolbar.
+
+### Added
+
+- **Search field** in the header (press `/` or `Ctrl/⌘+K`). Click it to see your people; type to
+  get grouped suggestions: **People** (with their face, including unnamed groups and "Photos
+  with faces"), **Dates** (`2021`, `june`, `june 2021`, occasions), **Places**, **Kinds of
+  picture** and **In the picture**.
+- **Filter chips.** A chosen suggestion becomes a removable chip; chips combine (for example
+  Anna + Sicily + 2022). Enter on the first row searches the typed words by keyword and meaning
+  inside those filters.
+- **Results in the Library.** Search opens the Library on a results view, so the viewer, arrow
+  stepping, Select, rotate and remove all work on results. **Clear search** returns to the whole
+  library.
+- Two new search filters, `month` (any year) and `photo_sets` (photos that must belong to every
+  given set), and a `max` option that lifts the 60-result chat cap for the Library.
+- Self-test assertions for suggestions, chips and result ordering.
+
+### Changed
+
+- The Library now shares one in-flight load, so several callers (a tab click, a search) wait for
+  the same index open instead of the second returning early.
+- The header's "Mock LM Studio" label collapses to the switch on windows narrower than 1250px to
+  make room for the search field.
+
+[↑ Back to Index](#index)
+
+---
 
 ## 0.6.1 (2026-10-01)
 
