@@ -222,17 +222,26 @@ async function preflightScan(){
     return "No scan model selected. Open Settings, press Test connection, then pick a "
          + "vision model under Model roles.";
   if ($("#mock").checked) return null;
-  const m = await jget("/api/v0/models", 8000);
-  if (!m.ok){
-    const v = await jget("/v1/models", 8000);
-    if (!v.ok) return "Cannot reach LM Studio at " + S.baseUrl + " (" + m.error + "). "
-      + "Start it with:  lms server start --cors --port 1234";
-    return null;
+  /* Works against any OpenAI-compatible server, so check the endpoints in order
+     of how much they tell us rather than assuming one product. */
+  let ids = null;
+  const m = await jgetAbs(apiRoot() + "/api/v0/models", 8000);
+  if (m.ok && m.data) ids = (m.data.data || []).map(x => x.id);
+  if (ids === null){
+    const t = await jgetAbs(apiRoot() + "/api/tags", 8000);
+    if (t.ok && t.data) ids = (t.data.models || []).map(x => x.name || x.model);
   }
-  const ids = (m.data.data || []).map(x => x.id);
+  if (ids === null){
+    const v = await jget("/v1/models", 8000);
+    if (v.ok && v.data) ids = (v.data.data || []).map(x => x.id);
+  }
+  if (ids === null)
+    return "Cannot reach " + serverName() + " at " + S.baseUrl + " (" + m.error + "). "
+      + "A page opened from a file needs the server to allow any origin:  " + corsHint();
   if (ids.length && !ids.includes(S.roles.scan))
-    return "The selected scan model '" + S.roles.scan + "' is not in LM Studio. "
-         + "Available: " + ids.slice(0,6).join(", ") + ". Press Test connection in Settings.";
+    return "The selected scan model '" + S.roles.scan + "' is not loaded in "
+         + serverName() + ". Available: " + ids.slice(0,6).join(", ")
+         + ". Press Test connection in Settings.";
   const entry = (m.data.data || []).find(x => x.id === S.roles.scan);
   if (entry && entry.type === "embeddings")
     return "'" + S.roles.scan + "' is an embedding model and cannot read images. "

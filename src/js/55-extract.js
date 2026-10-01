@@ -1,3 +1,13 @@
+/* Not every OpenAI-compatible server enforces a schema. Downgrade in steps
+   rather than failing: a schema if it works, otherwise "JSON only", otherwise
+   nothing but the prompt -- and the connection test says which one is in play,
+   because the weaker the contract the more the validator has to repair. */
+function structuredFormat(name, schema){
+  if (S.structuredMode === "json_object") return { type:"json_object" };
+  if (S.structuredMode === "none") return undefined;
+  return { type:"json_schema", json_schema:{ name, strict:true, schema } };
+}
+
 
 /* ================= vision extraction ================= */
 async function extract(model, dataUrl, extraNote, signal, maxTokens){
@@ -8,8 +18,7 @@ async function extract(model, dataUrl, extraNote, signal, maxTokens){
   const t0 = performance.now();
   const d = await chat({ model, messages: msgs, temperature: S.scan.temp,
     max_tokens: maxTokens || S.scan.maxTokens,
-    response_format:{ type:"json_schema",
-      json_schema:{ name:"photo_record", strict:true, schema: TPL.schema } } }, signal);
+    response_format: structuredFormat("photo_record", TPL.schema) }, signal);
   if (!d.choices || !d.choices[0])
     throw new Error("the model returned no choices: " + JSON.stringify(d).slice(0, 200));
   const m = d.choices[0].message;
@@ -66,8 +75,7 @@ async function ocrPass(model, dataUrl, signal, maxTokens){
       { role:"user", content:[
         { type:"text", text:"List every line of text you can see." },
         { type:"image_url", image_url:{ url:dataUrl } }]}],
-    response_format:{ type:"json_schema",
-      json_schema:{ name:"ocr_lines", strict:true, schema:OCR_SCHEMA } } }, signal);
+    response_format: structuredFormat("ocr_lines", OCR_SCHEMA) }, signal);
   if (!d.choices || !d.choices[0])
     throw new Error("the model returned no choices: " + JSON.stringify(d).slice(0, 200));
   const m = d.choices[0].message;

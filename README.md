@@ -3,37 +3,108 @@
 **Search your own photo library in plain English, entirely on your own machine.**
 One HTML file. No install, no server, no build step, no cloud.
 
-PhotoSearch scans a folder of photos with a local vision model running in
-[LM Studio](https://lmstudio.ai), builds a searchable index next to the photos, and lets
-you talk to it: *"photos of children in a forest"*, *"anything from summer 2021"*,
-*"where was the one with the boat taken?"*
+PhotoSearch scans a folder of photos with a local vision model, builds a searchable index
+next to the photos, and lets you talk to it: *"photos of children in a forest"*, *"anything
+from summer 2021"*, *"where was the one with the boat taken?"*
+
+It works with **any local server that speaks the OpenAI API** —
+[LM Studio](https://lmstudio.ai), [Ollama](https://ollama.com), llama.cpp's server,
+vLLM, LocalAI. You point it at a URL and pick your models; nothing is specific to one
+product.
 
 Nothing leaves your computer. No API keys, no accounts, no telemetry.
 
 ```
-┌── you ──────────┐      ┌── PhotoSearch.html ──────┐      ┌── LM Studio ────┐
-│  pick a folder  │─────▶│  walk · decode · index   │─────▶│  vision model   │
-│  ask a question │◀─────│  BM25 + vectors + tools  │◀─────│  chat model     │
-└─────────────────┘      └──────────┬───────────────┘      └─────────────────┘
-                                    ▼
-                         .photoindex/  (plain JSONL + a float32 blob)
+┌── you ──────────┐      ┌── PhotoSearch.html ──────┐      ┌── your model server ─┐
+│  pick a folder  │─────▶│  walk · decode · index   │─────▶│  vision model        │
+│  ask a question │◀─────│  BM25 + vectors + tools  │◀─────│  chat · embeddings   │
+└─────────────────┘      └──────────┬───────────────┘      └──────────────────────┘
+                                    ▼                       LM Studio · Ollama ·
+                         .photoindex/                       llama.cpp · vLLM · …
+                         (plain JSONL + a float32 blob)
 ```
 
 ---
 
 ## Quick start
 
-1. **Install [LM Studio](https://lmstudio.ai)** and download a vision model.
-   `Qwen3.5-9B` is the reference model; any VLM works.
-2. **Start its server with CORS enabled** — this is the step people miss:
+You need a **vision model** (to describe photos) and ideally an **embedding model** (for
+meaning-based search). Pick whichever server you already use.
+
+### With LM Studio
+
+1. Download a vision model — `Qwen3.5-VL` is the reference; any VLM works. Add an
+   embedding model such as `nomic-embed-text` for semantic search.
+2. **Start the server with CORS enabled** — the step people miss:
    ```bash
    lms server start --cors --port 1234
    ```
-   Or in the GUI: *Developer* tab → Status **Running** → tick **Enable CORS**.
-3. **Open `PhotoSearch.html`** in desktop Chrome or Edge. Double-click it; `file://` is fine.
-4. *Settings* → **Test connection** → **Choose folder** → *Scan* tab → **Refresh plan** → **Scan**.
+   Or: *Developer* tab → Status **Running** → tick **Enable CORS**.
+3. URL in Settings: `http://localhost:1234`
 
-Full detail, including running LM Studio on another machine: **[docs/SETUP.md](docs/SETUP.md)**.
+### With Ollama
+
+1. Pull a vision model and an embedding model:
+   ```bash
+   ollama pull qwen2.5vl        # or llava, minicpm-v, moondream, llama3.2-vision
+   ollama pull nomic-embed-text
+   ```
+2. **Allow this page to talk to it.** A page opened from a file sends `Origin: null`,
+   which Ollama rejects by default:
+   ```bash
+   OLLAMA_ORIGINS='*' ollama serve
+   ```
+   On macOS, if Ollama runs as the menu-bar app:
+   ```bash
+   launchctl setenv OLLAMA_ORIGINS '*'      # then quit and reopen Ollama
+   ```
+3. URL in Settings: `http://localhost:11434`
+
+### Then, whichever you chose
+
+4. **Open `PhotoSearch.html`** in desktop Chrome or Edge. Double-click it; `file://` is fine.
+5. *Settings* → **Test connection** → **Choose folder** → *Scan* tab → **Refresh plan** → **Scan**.
+
+**Test connection** tells you what it found: which server, which models, whether types could
+be detected, and — importantly — whether your server can enforce a **JSON schema**. See
+[Why structured output matters](#why-structured-output-matters) below.
+
+Full detail, including running the server on another machine: **[docs/SETUP.md](docs/SETUP.md)**.
+
+---
+
+## Why structured output matters
+
+This is the one place where servers genuinely differ, so **Test connection** probes it and
+tells you which of three contracts you have:
+
+| what your server supports | what happens |
+|---|---|
+| **JSON schema** (LM Studio, recent Ollama, vLLM) | Best. Constrained decoding also stops a reasoning model thinking out loud: **13 output tokens instead of 799** on the same prompt. |
+| **JSON only**, no schema | Works. More tokens, more repair, occasional retries. |
+| **neither** | Answers are parsed out of prose; some photos will fail. |
+
+Nothing to configure — it is detected and adapted to. It is simply worth knowing that a
+server with schema support scans faster and cheaper, which is why `response_format` is the
+first thing checked.
+
+---
+
+## Choosing models
+
+If your server reports model types (LM Studio) or families (Ollama), the right models are
+detected. Otherwise types are guessed from the name and you can correct them under
+*Settings → Model roles* — the dropdowns list every model, so a vision model that was not
+recognised can always be chosen by hand.
+
+| role | what it is for | examples |
+|---|---|---|
+| **Scan (vision)** | describing every photo | Qwen3.5-VL, Gemma 3, llava, minicpm-v, moondream, Pixtral |
+| **Embeddings** | meaning-based search | nomic-embed-text, bge-m3, mxbai-embed-large |
+| **Chat agent** | answering questions over the index | any decent instruct model |
+
+Face grouping needs **no server at all** — it runs in the browser (see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 
 ---
 
@@ -104,8 +175,10 @@ Measured on an M-series Mac, `Qwen3.5-9B` (MLX 4-bit), 1024px input:
 | ~4,000 photos | per day, unattended |
 | ~5 KB | index per photo (plus a 384px thumbnail) |
 
-Concurrency does not help: LM Studio serialises requests unless the model is loaded with
-`--parallel`. Lowering the input resolution barely helps either — generation dominates.
+Concurrency does not help: most local servers process one request at a time unless
+explicitly configured otherwise (LM Studio needs `--parallel`; Ollama needs
+`OLLAMA_NUM_PARALLEL`). Lowering the input resolution barely helps either — generation
+dominates.
 A 100,000-photo library is a multi-week scan. Plan accordingly, and scan newest-first so the
 index is useful on day one.
 
@@ -115,8 +188,11 @@ index is useful on day one.
 
 - **Desktop Chrome or Edge.** The File System Access API has no equivalent in Firefox or
   Safari; the app detects this and says so rather than half-working.
-- **LM Studio** with a vision model, CORS enabled.
+- **Any local server that speaks the OpenAI API**, with a vision model loaded and CORS
+  allowed for this page. LM Studio, Ollama, llama.cpp's server, vLLM and LocalAI all work;
+  the URL and the model names are the only things that differ.
 - **An embedding model** is optional but recommended — without one, search is keyword-only.
+- **Nothing** for face grouping: the detector and the recognition model run in the browser.
 
 Formats: JPEG, PNG, WebP, GIF, BMP, AVIF natively; HEIC/HEIF via libheif; TIFF via UTIF.
 RAW, video and vector files are counted and skipped.
@@ -132,9 +208,9 @@ Working software, used daily against a multi-terabyte NAS library. Rough edges r
 
 | | |
 |---|---|
-| [SETUP.md](docs/SETUP.md) | Installing, CORS, remote LM Studio, troubleshooting |
+| [SETUP.md](docs/SETUP.md) | Installing, CORS, Ollama, remote servers, troubleshooting |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the index, search and agent actually work |
-| [FINDINGS.md](docs/FINDINGS.md) | Measured results and hard-won LM Studio behaviour |
+| [FINDINGS.md](docs/FINDINGS.md) | Measured results, and model-server behaviour that cost time to find |
 | [TESTING.md](docs/TESTING.md) | The self-test, and driving it headlessly |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Where every file lives, manual backup, slow-NAS notes |
 | [ROADMAP.md](docs/ROADMAP.md) | What is missing next — people, video, timeline — and what each costs |

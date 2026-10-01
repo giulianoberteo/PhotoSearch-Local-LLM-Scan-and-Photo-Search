@@ -1,5 +1,34 @@
 # Setup
 
+## Which server?
+
+Any server that speaks the OpenAI API. Only the URL and the model names differ.
+
+| server | URL for Settings | allow this page to connect |
+|---|---|---|
+| **LM Studio** | `http://localhost:1234` | `lms server start --cors --port 1234`, or *Developer* → tick **Enable CORS** |
+| **Ollama** | `http://localhost:11434` | `OLLAMA_ORIGINS='*' ollama serve` — macOS menu-bar app: `launchctl setenv OLLAMA_ORIGINS '*'`, then restart Ollama |
+| **llama.cpp server** | `http://localhost:8080` | build with CORS allowed, or put it behind a proxy that sets `Access-Control-Allow-Origin: *` |
+| **vLLM** | `http://localhost:8000` | `--allowed-origins '["*"]'` |
+| **LocalAI** | `http://localhost:8080` | `CORS=true CORS_ALLOW_ORIGINS='*'` |
+
+A URL ending in `/v1` is accepted as well as one without, so pasting
+`http://localhost:11434/v1` works.
+
+**Why CORS is always the first problem.** The app is a local file, so the browser sends
+`Origin: null`. Every one of these servers rejects that by default, and the failure looks
+like the server being down. **Test connection** names the fix for whichever server it
+detected.
+
+**What Test connection checks**, in order: the server answers; CORS allows this page; which
+models exist and whether their types could be detected; and whether the server can enforce a
+**JSON schema** — which matters, because constrained decoding is what stops a reasoning
+model spending its whole budget thinking (13 output tokens instead of 799). If your server
+cannot, the app falls back to "JSON only" and then to parsing prose, and says which.
+
+---
+
+
 ## 1. LM Studio
 
 Install [LM Studio](https://lmstudio.ai) and download at least a **vision** model.

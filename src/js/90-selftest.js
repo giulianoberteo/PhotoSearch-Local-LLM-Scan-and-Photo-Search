@@ -1,5 +1,6 @@
 
-/* ================= self-test =================
+/* ================= self-test ==========    }
+
    Runs the real pipeline against an OPFS scratch folder with mock model
    responses, so the worker, index, plan, move detection, vectors, checkpoint
    and derived data are all genuinely exercised without a picked folder. */
@@ -1822,6 +1823,63 @@ async function selfTest(){
         IDX.records = keepRecords;
         GAL.built = 0; GAL.cell = 0; GAL.list = [];
       }
+=======
+    /* ---- any OpenAI-compatible server, not just LM Studio ---- */
+    {
+      const keepUrl = S.baseUrl, keepMode = S.structuredMode;
+      /* A URL that already ends in /v1 -- which is how Ollama's is usually
+         written down -- must not produce /v1/v1 and a baffling 404. */
+      S.baseUrl = "http://localhost:11434/v1";
+      eq("a base URL ending in /v1 is not doubled",
+         url("/v1/chat/completions"), "http://localhost:11434/v1/chat/completions");
+      eq("and root endpoints drop the /v1", apiRoot() + "/api/tags",
+         "http://localhost:11434/api/tags");
+      /* A pasted ".../v1" must not demote a recognised server to the generic
+         path: its native endpoint is at the root, not under /v1. */
+      S.baseUrl = "http://localhost:1234/v1";
+      eq("the native endpoint resolves against the root too",
+         apiRoot() + "/api/v0/models", "http://localhost:1234/api/v0/models");
+      S.baseUrl = "http://localhost:1234";
+      eq("a bare base URL still works",
+         url("/v1/chat/completions"), "http://localhost:1234/v1/chat/completions");
+      eq("trailing slashes are tolerated", (() => {
+        S.baseUrl = "http://localhost:1234/"; return url("/v1/models"); })(),
+        "http://localhost:1234/v1/models");
+
+      /* Model types have to be guessed when a server only reports ids. */
+      eq("an Ollama vision model is recognised", guessType("llava:13b"), "vlm");
+      eq("so is llama 3.2 vision", guessType("llama3.2-vision:11b"), "vlm");
+      eq("and moondream", guessType("moondream:latest"), "vlm");
+      eq("and minicpm-v", guessType("minicpm-v:8b"), "vlm");
+      eq("and qwen2.5vl", guessType("qwen2.5vl:7b"), "vlm");
+      eq("an embedding model is recognised", guessType("nomic-embed-text"), "embeddings");
+      eq("and mxbai", guessType("mxbai-embed-large"), "embeddings");
+      eq("a plain chat model is neither", guessType("llama3.1:8b"), "llm");
+
+      /* The schema contract degrades in steps rather than failing outright. */
+      S.structuredMode = "json_schema";
+      eq("a capable server gets a schema",
+         structuredFormat("x", { type:"object" }).type, "json_schema");
+      S.structuredMode = "json_object";
+      eq("a weaker one is asked for JSON only",
+         structuredFormat("x", { type:"object" }).type, "json_object");
+      S.structuredMode = "none";
+      eq("and one that supports neither is asked for nothing",
+         structuredFormat("x", { type:"object" }), undefined);
+
+      /* The advice must match the server, since every one of them refuses a
+         file:// origin by default and it looks like being offline. */
+      S.provider = "Ollama";
+      ok("Ollama is told about OLLAMA_ORIGINS", /OLLAMA_ORIGINS/.test(corsHint()),
+         corsHint());
+      S.provider = "LM Studio";
+      ok("LM Studio is told about --cors", /--cors/.test(corsHint()), corsHint());
+      S.provider = null;
+      S.baseUrl = "http://localhost:11434";
+      ok("and the port alone is enough of a hint",
+         /OLLAMA_ORIGINS/.test(corsHint()), corsHint());
+
+      S.baseUrl = keepUrl; S.structuredMode = keepMode; S.provider = null;
     }
 
     /* ---- escape sequences must never reach the screen ----

@@ -666,6 +666,7 @@ const paint = () => new Promise(r => {
 /* ================= state ================= */
 const S = {
   baseUrl: "http://localhost:1234",
+  provider: null, structuredMode: "json_schema",
   models: [], nativeApi: null, connected: false,
   dirHandle: null, indexDirHandle: null, photoCount: 0,
   roles: { scan:"", embed:"", chat:"auto" },
@@ -732,7 +733,8 @@ const LS_OLD = "photosearch.settings.v1";
 function saveSettings(){
   try { localStorage.setItem(LS, JSON.stringify({
     baseUrl:S.baseUrl, roles:S.roles, scan:S.scan, date:S.date, events:S.events,
-    search:S.search, ocr:S.ocr, backup:S.backup, chat:S.chat, faces:S.faces, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
+    search:S.search, ocr:S.ocr, backup:S.backup, chat:S.chat, faces:S.faces,
+    structuredMode:S.structuredMode, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
     mock: $("#mock").checked })); } catch {}
 }
 function loadSettings(){
@@ -752,6 +754,7 @@ function loadSettings(){
     if (d.events) S.events = { ...S.events, ...d.events };
     if (d.search) S.search = { ...S.search, ...d.search };
     if (d.chat) S.chat = { ...S.chat, ...d.chat };
+    if (d.structuredMode) S.structuredMode = d.structuredMode;
     if (d.faces){
       /* MIGRATION. `faces.threshold` used to mean the faceres threshold, around
          0.75. It now means the ArcFace one, which lives near 0.42 -- a totally
@@ -1130,8 +1133,28 @@ function enableFolderDrop(btnId, onFolder){
   });
 }
 
-/* ================= LM Studio client ================= */
-function url(p){ return S.baseUrl.replace(/\/+$/,"") + p; }
+/* ================= model server client ================= */
+/* Any OpenAI-compatible server will do. LM Studio is http://localhost:1234 and
+   Ollama is http://localhost:11434 -- but people paste the URL they were given,
+   which for Ollama usually already ends in /v1, so tolerate both rather than
+   producing /v1/v1 and a baffling 404. */
+function url(p){
+  const b = S.baseUrl.replace(/\/+$/, "");
+  if (/^\/v1\//.test(p) && /\/v1$/.test(b)) return b + p.slice(3);
+  return b + p;
+}
+/* Server-specific endpoints live at the root, not under /v1. */
+function apiRoot(){ return S.baseUrl.replace(/\/+$/, "").replace(/\/v1$/, ""); }
+async function jgetAbs(absolute, ms = 8000){
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  try {
+    const r = await fetch(absolute, { mode:"cors", signal: ac.signal });
+    if (!r.ok) return { ok:false, error:"HTTP " + r.status };
+    return { ok:true, data: await r.json() };
+  } catch (e){ return { ok:false, error: errText(e) }; }
+  finally { clearTimeout(t); }
+}
 async function jget(path, ms = 8000){
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), ms);
@@ -1196,6 +1219,57 @@ function mockChat(body){
     usage:{ completion_tokens:151 } });
 }
 
+/* How to let a browser talk to each server. A file:// page sends Origin: null,
+   which every one of these refuses by default -- and the failure looks like the
+   server being down rather than a policy. */
+const CORS_HELP = {
+  "LM Studio": "lms server start --cors --port 1234   (or tick CORS in the "
+    + "Developer tab)",
+  "Ollama":    "OLLAMA_ORIGINS='*' ollama serve   (on macOS: "
+    + "launchctl setenv OLLAMA_ORIGINS '*' then restart Ollama)",
+  "OpenAI-compatible": "start the server with CORS enabled for any origin"
+};
+function corsHint(){
+  return CORS_HELP[S.provider] || (S.baseUrl.includes("11434")
+    ? CORS_HELP["Ollama"] : CORS_HELP["LM Studio"]);
+}
+function serverName(){ return S.provider || "the model server"; }
+
+/* ---- does this server honour a JSON schema? ----
+   The whole scan depends on it. Constrained decoding is what stops a reasoning
+   model spending its entire budget thinking: 799 tokens and an empty answer
+   becomes 13 tokens and valid JSON. A server that ignores the field does not
+   fail -- it quietly returns prose, 20x the tokens, and a parse error per
+   photo. So ask once, and know. */
+async function probeStructured(model){
+  const schema = { type:"object", additionalProperties:false,
+    properties:{ ok:{ type:"boolean" } }, required:["ok"] };
+  try {
+    const d = await chat({ model, max_tokens: 40, temperature: 0,
+      messages:[{ role:"user", content:"Reply with {\"ok\":true} and nothing else." }],
+      response_format:{ type:"json_schema",
+        json_schema:{ name:"probe", strict:true, schema } } });
+    const m = d.choices && d.choices[0] && d.choices[0].message;
+    const text = ((m && m.content) || "").trim()
+      || ((m && (m.reasoning_content || m.reasoning)) || "").trim();
+    const parsed = JSON.parse(stripThink(text));
+    return { ok: parsed && parsed.ok === true, mode:"json_schema" };
+  } catch (e){
+    /* Fall back to the weaker contract rather than giving up: json_object at
+       least forbids prose, even if it cannot enforce the shape. */
+    try {
+      const d = await chat({ model, max_tokens: 40, temperature: 0,
+        messages:[{ role:"user", content:"Reply with {\"ok\":true} and nothing else." }],
+        response_format:{ type:"json_object" } });
+      const m = d.choices && d.choices[0] && d.choices[0].message;
+      JSON.parse(stripThink(((m && m.content) || "").trim()));
+      return { ok:true, mode:"json_object", why: errText(e) };
+    } catch (e2){
+      return { ok:false, mode:"none", why: errText(e) };
+    }
+  }
+}
+
 /* ================= model detection ================= */
 async function detectModels(){
   if ($("#mock").checked){
@@ -1206,25 +1280,56 @@ async function detectModels(){
       { id:"mock-llm-20b", type:"llm", state:"not-loaded" }];
     return { ok:true };
   }
-  const n = await jget("/api/v0/models");
+  /* 1. LM Studio's own endpoint: the richest, since it reports type and whether
+        the model is actually loaded. */
+  /* Server-specific endpoints sit at the ROOT, so resolve them against the root
+     rather than the base URL -- otherwise pasting ".../v1" quietly demotes a
+     recognised server to the generic path and loses its type and load state. */
+  const n = await jgetAbs(apiRoot() + "/api/v0/models");
   if (n.ok && n.data && Array.isArray(n.data.data)){
+    S.provider = "LM Studio";
     S.nativeApi = "/api/v0/models";
     S.models = n.data.data.map(m => ({ id:m.id, type:m.type || "llm",
       state:m.state || "unknown", arch:m.arch, ctx:m.max_context_length }));
     return { ok:true };
   }
+  /* 2. Ollama. Worth a dedicated probe rather than guessing from names: it
+        reports model families, and a vision model carries "clip" or "mllama"
+        among them, which is a fact rather than an inference. */
+  const t = await jgetAbs(apiRoot() + "/api/tags");
+  if (t.ok && t.data && Array.isArray(t.data.models)){
+    S.provider = "Ollama";
+    S.nativeApi = "/api/tags";
+    S.models = t.data.models.map(m => {
+      const fam = ((m.details && m.details.families) || []).join(",").toLowerCase();
+      const type = /clip|mllama|vision/.test(fam) ? "vlm"
+                 : /bert|embed/.test(fam) ? "embeddings"
+                 : guessType(m.name || m.model || "");
+      return { id: m.name || m.model, type, state:"unknown",
+               arch: (m.details && m.details.family) || undefined };
+    });
+    return { ok:true };
+  }
+  /* 3. Anything else that speaks OpenAI: only ids, so types are guessed and the
+        user can correct them under Model roles. */
   const v = await jget("/v1/models");
   if (v.ok && v.data && Array.isArray(v.data.data)){
+    S.provider = "OpenAI-compatible";
     S.nativeApi = null;
     S.models = v.data.data.map(m => ({ id:m.id, type:guessType(m.id), state:"unknown" }));
     return { ok:true };
   }
-  return { ok:false, error: n.error || v.error };
+  return { ok:false, error: n.error || t.error || v.error };
 }
+/* Name heuristics for servers that do not say what a model is. Deliberately
+   broad: a vision model missed here cannot be chosen for scanning, and the user
+   can always override it. */
 function guessType(id){
-  const s = id.toLowerCase();
-  if (/embed|bge|nomic|gte|e5/.test(s)) return "embeddings";
-  if (/vl|vision|llava|gemma-?[34]|qwen3\.5/.test(s)) return "vlm";
+  const s = String(id).toLowerCase();
+  if (/embed|bge|nomic-embed|gte|e5-|minilm|mxbai|arctic-embed|snowflake/.test(s))
+    return "embeddings";
+  if (/vl|vision|llava|bakllava|moondream|minicpm-v|pixtral|internvl|cogvlm|idefics|florence|phi-?3\.5-vision|phi-?4-multimodal|gemma-?[34]|qwen-?[23]|qwen3\.5|llama-?3\.2-vision|granite.*vision|aya-vision|smolvlm/.test(s))
+    return "vlm";
   return "llm";
 }
 function renderModels(){
@@ -1266,13 +1371,13 @@ function fillRoles(){
   opt($("#mEmbed"), emb, { label:"None (keyword search only)", value:"" }, S.roles.embed);
   opt($("#mChat"), llm, { label:"Auto: currently loaded LLM", value:"auto" }, S.roles.chat);
   syncRoles();
-  /* A saved choice that LM Studio no longer offers is dropped by the selects
+  /* A saved choice the server no longer offers is dropped by the selects
      above. Say so, rather than quietly switching the user to None. */
   const lost = [];
   for (const k of ["scan","embed","chat"])
     if (before[k] && before[k] !== "auto" && before[k] !== S.roles[k]) lost.push(before[k]);
   if (lost.length && S.models.length)
-    toast("Model no longer available in LM Studio: " + lost.join(", ")
+    toast("Model no longer available in " + serverName() + ": " + lost.join(", ")
       + ". Check Model roles in Settings.");
 }
 function syncRoles(){
@@ -3166,6 +3271,16 @@ function correctImageType(modelType, meta, rec){
 }
 
 /* ==================== 55-extract.js ==================== */
+/* Not every OpenAI-compatible server enforces a schema. Downgrade in steps
+   rather than failing: a schema if it works, otherwise "JSON only", otherwise
+   nothing but the prompt -- and the connection test says which one is in play,
+   because the weaker the contract the more the validator has to repair. */
+function structuredFormat(name, schema){
+  if (S.structuredMode === "json_object") return { type:"json_object" };
+  if (S.structuredMode === "none") return undefined;
+  return { type:"json_schema", json_schema:{ name, strict:true, schema } };
+}
+
 
 /* ================= vision extraction ================= */
 async function extract(model, dataUrl, extraNote, signal, maxTokens){
@@ -3176,8 +3291,7 @@ async function extract(model, dataUrl, extraNote, signal, maxTokens){
   const t0 = performance.now();
   const d = await chat({ model, messages: msgs, temperature: S.scan.temp,
     max_tokens: maxTokens || S.scan.maxTokens,
-    response_format:{ type:"json_schema",
-      json_schema:{ name:"photo_record", strict:true, schema: TPL.schema } } }, signal);
+    response_format: structuredFormat("photo_record", TPL.schema) }, signal);
   if (!d.choices || !d.choices[0])
     throw new Error("the model returned no choices: " + JSON.stringify(d).slice(0, 200));
   const m = d.choices[0].message;
@@ -3234,8 +3348,7 @@ async function ocrPass(model, dataUrl, signal, maxTokens){
       { role:"user", content:[
         { type:"text", text:"List every line of text you can see." },
         { type:"image_url", image_url:{ url:dataUrl } }]}],
-    response_format:{ type:"json_schema",
-      json_schema:{ name:"ocr_lines", strict:true, schema:OCR_SCHEMA } } }, signal);
+    response_format: structuredFormat("ocr_lines", OCR_SCHEMA) }, signal);
   if (!d.choices || !d.choices[0])
     throw new Error("the model returned no choices: " + JSON.stringify(d).slice(0, 200));
   const m = d.choices[0].message;
@@ -3924,17 +4037,26 @@ async function preflightScan(){
     return "No scan model selected. Open Settings, press Test connection, then pick a "
          + "vision model under Model roles.";
   if ($("#mock").checked) return null;
-  const m = await jget("/api/v0/models", 8000);
-  if (!m.ok){
-    const v = await jget("/v1/models", 8000);
-    if (!v.ok) return "Cannot reach LM Studio at " + S.baseUrl + " (" + m.error + "). "
-      + "Start it with:  lms server start --cors --port 1234";
-    return null;
+  /* Works against any OpenAI-compatible server, so check the endpoints in order
+     of how much they tell us rather than assuming one product. */
+  let ids = null;
+  const m = await jgetAbs(apiRoot() + "/api/v0/models", 8000);
+  if (m.ok && m.data) ids = (m.data.data || []).map(x => x.id);
+  if (ids === null){
+    const t = await jgetAbs(apiRoot() + "/api/tags", 8000);
+    if (t.ok && t.data) ids = (t.data.models || []).map(x => x.name || x.model);
   }
-  const ids = (m.data.data || []).map(x => x.id);
+  if (ids === null){
+    const v = await jget("/v1/models", 8000);
+    if (v.ok && v.data) ids = (v.data.data || []).map(x => x.id);
+  }
+  if (ids === null)
+    return "Cannot reach " + serverName() + " at " + S.baseUrl + " (" + m.error + "). "
+      + "A page opened from a file needs the server to allow any origin:  " + corsHint();
   if (ids.length && !ids.includes(S.roles.scan))
-    return "The selected scan model '" + S.roles.scan + "' is not in LM Studio. "
-         + "Available: " + ids.slice(0,6).join(", ") + ". Press Test connection in Settings.";
+    return "The selected scan model '" + S.roles.scan + "' is not loaded in "
+         + serverName() + ". Available: " + ids.slice(0,6).join(", ")
+         + ". Press Test connection in Settings.";
   const entry = (m.data.data || []).find(x => x.id === S.roles.scan);
   if (entry && entry.type === "embeddings")
     return "'" + S.roles.scan + "' is an embedding model and cannot read images. "
@@ -4584,7 +4706,7 @@ $("#btnTest").onclick = async () => {
   saveSettings();
   const checks = [], isFile = location.protocol === "file:";
   checks.push({ status:"ok", title:"Page origin",
-    detail: isFile ? "file:// — requests carry Origin: null, so LM Studio must allow it"
+    detail: isFile ? "file:// — requests carry Origin: null, which the server must allow"
                    : location.origin });
   if ($("#mock").checked)
     checks.push({ status:"warn", title:"Mock mode is ON", detail:"No server is contacted." });
@@ -4594,29 +4716,56 @@ $("#btnTest").onclick = async () => {
     const netErr = /Failed to fetch|NetworkError|load failed/i.test(r.error || "");
     checks.push({ status:"err", title:"Server reachable at " + S.baseUrl, detail:r.error });
     checks.push({ status:"err", title:"What to switch on", detail: netErr
-      ? "Run:  lms server start --cors --port 1234   — or in LM Studio open the Developer tab, "
-        + "set Status to Running and tick 'Enable CORS'."
-      : "Check the URL and that LM Studio's server is running." });
+      ? corsHint() + "   — any OpenAI-compatible server works; the default URL is "
+        + "LM Studio's 1234, Ollama's is 11434."
+      : "Check the URL and that the server is running." });
     if (!/^https?:\/\/(localhost|127\.0\.0\.1)/.test(S.baseUrl))
-      checks.push({ status:"warn", title:"Remote LM Studio",
-        detail:"Also enable 'Serve on Local Network'. Chrome may prompt for local-network access." });
+      checks.push({ status:"warn", title:"Server is not local",
+        detail:"Allow connections from the network as well as CORS. Chrome may prompt "
+          + "for local-network access." });
     renderChecks($("#diag"), checks);
     btn.disabled = false; btn.textContent = "Test connection"; return;
   }
   S.connected = true; setConn("on","Connected");
-  checks.push({ status:"ok", title:"Server reachable", detail:S.baseUrl });
+  checks.push({ status:"ok", title:"Server reachable",
+    detail:(S.provider ? S.provider + " at " : "") + S.baseUrl });
   checks.push({ status:"ok", title:"CORS allows this page",
     detail:"Model list fetched from " + (isFile ? "file://" : location.origin) });
   checks.push({ status:S.nativeApi ? "ok" : "warn", title:"Loaded-model detection",
     detail:S.nativeApi ? "Using " + S.nativeApi + " — reports type and load state."
-                       : "Fell back to /v1/models (no type or state)." });
+                       : "Fell back to /v1/models — only model ids, so types are "
+                         + "guessed from the name. Correct them under Model roles." });
   const vlm = S.models.filter(m => m.type === "vlm");
   checks.push({ status:vlm.length ? "ok" : "err", title:"Vision model for scanning",
     detail:vlm.length ? vlm.map(m => m.id + " (" + m.state + ")").join(", ")
-                      : "No vision model found. Download Qwen3.5-9B in LM Studio." });
+                      : "No vision model found. Load one that can read images — "
+                        + "Qwen3.5-VL, Gemma 3, llava, minicpm-v, moondream. If one IS "
+                        + "loaded but not listed here, pick it by hand under Model roles." });
   const emb = S.models.filter(m => m.type === "embeddings");
   checks.push({ status:emb.length ? "ok" : "warn", title:"Embedding model",
     detail:emb.length ? emb.map(m => m.id).join(", ") : "None — search falls back to keywords." });
+  /* Ask the server whether it can actually enforce a schema. Everything about
+     scan cost depends on it, and a server that ignores the field looks fine
+     until every photo comes back as prose. */
+  const scanModel = S.roles.scan
+    || (vlm[0] && vlm[0].id)
+    || (S.models[0] && S.models[0].id);
+  if (scanModel && !$("#mock").checked){
+    const pr = await probeStructured(scanModel);
+    S.structuredMode = pr.ok ? pr.mode : "none";
+    saveSettings();
+    checks.push(pr.mode === "json_schema"
+      ? { status:"ok", title:"Structured output",
+          detail:"Schema enforced. This is what keeps a reasoning model from "
+            + "spending its whole budget thinking — 13 tokens instead of 799." }
+      : pr.mode === "json_object"
+      ? { status:"warn", title:"Structured output",
+          detail:"This server does not enforce a schema, only \u201cJSON only\u201d. "
+            + "Scanning works but costs more tokens and needs more repair. (" + pr.why + ")" }
+      : { status:"warn", title:"Structured output",
+          detail:"This server enforces neither a schema nor JSON-only, so answers are "
+            + "parsed from prose and some photos will fail. (" + pr.why + ")" });
+  }
   renderChecks($("#diag"), checks);
   renderModels();
   btn.disabled = false; btn.textContent = "Test connection";
@@ -8271,7 +8420,8 @@ $("#chatSave").onclick = async () => {
 
 /* ==================== 90-selftest.js ==================== */
 
-/* ================= self-test =================
+/* ================= self-test ==========    }
+
    Runs the real pipeline against an OPFS scratch folder with mock model
    responses, so the worker, index, plan, move detection, vectors, checkpoint
    and derived data are all genuinely exercised without a picked folder. */
@@ -10094,6 +10244,63 @@ async function selfTest(){
         IDX.records = keepRecords;
         GAL.built = 0; GAL.cell = 0; GAL.list = [];
       }
+=======
+    /* ---- any OpenAI-compatible server, not just LM Studio ---- */
+    {
+      const keepUrl = S.baseUrl, keepMode = S.structuredMode;
+      /* A URL that already ends in /v1 -- which is how Ollama's is usually
+         written down -- must not produce /v1/v1 and a baffling 404. */
+      S.baseUrl = "http://localhost:11434/v1";
+      eq("a base URL ending in /v1 is not doubled",
+         url("/v1/chat/completions"), "http://localhost:11434/v1/chat/completions");
+      eq("and root endpoints drop the /v1", apiRoot() + "/api/tags",
+         "http://localhost:11434/api/tags");
+      /* A pasted ".../v1" must not demote a recognised server to the generic
+         path: its native endpoint is at the root, not under /v1. */
+      S.baseUrl = "http://localhost:1234/v1";
+      eq("the native endpoint resolves against the root too",
+         apiRoot() + "/api/v0/models", "http://localhost:1234/api/v0/models");
+      S.baseUrl = "http://localhost:1234";
+      eq("a bare base URL still works",
+         url("/v1/chat/completions"), "http://localhost:1234/v1/chat/completions");
+      eq("trailing slashes are tolerated", (() => {
+        S.baseUrl = "http://localhost:1234/"; return url("/v1/models"); })(),
+        "http://localhost:1234/v1/models");
+
+      /* Model types have to be guessed when a server only reports ids. */
+      eq("an Ollama vision model is recognised", guessType("llava:13b"), "vlm");
+      eq("so is llama 3.2 vision", guessType("llama3.2-vision:11b"), "vlm");
+      eq("and moondream", guessType("moondream:latest"), "vlm");
+      eq("and minicpm-v", guessType("minicpm-v:8b"), "vlm");
+      eq("and qwen2.5vl", guessType("qwen2.5vl:7b"), "vlm");
+      eq("an embedding model is recognised", guessType("nomic-embed-text"), "embeddings");
+      eq("and mxbai", guessType("mxbai-embed-large"), "embeddings");
+      eq("a plain chat model is neither", guessType("llama3.1:8b"), "llm");
+
+      /* The schema contract degrades in steps rather than failing outright. */
+      S.structuredMode = "json_schema";
+      eq("a capable server gets a schema",
+         structuredFormat("x", { type:"object" }).type, "json_schema");
+      S.structuredMode = "json_object";
+      eq("a weaker one is asked for JSON only",
+         structuredFormat("x", { type:"object" }).type, "json_object");
+      S.structuredMode = "none";
+      eq("and one that supports neither is asked for nothing",
+         structuredFormat("x", { type:"object" }), undefined);
+
+      /* The advice must match the server, since every one of them refuses a
+         file:// origin by default and it looks like being offline. */
+      S.provider = "Ollama";
+      ok("Ollama is told about OLLAMA_ORIGINS", /OLLAMA_ORIGINS/.test(corsHint()),
+         corsHint());
+      S.provider = "LM Studio";
+      ok("LM Studio is told about --cors", /--cors/.test(corsHint()), corsHint());
+      S.provider = null;
+      S.baseUrl = "http://localhost:11434";
+      ok("and the port alone is enough of a hint",
+         /OLLAMA_ORIGINS/.test(corsHint()), corsHint());
+
+      S.baseUrl = keepUrl; S.structuredMode = keepMode; S.provider = null;
     }
 
     /* ---- escape sequences must never reach the screen ----
