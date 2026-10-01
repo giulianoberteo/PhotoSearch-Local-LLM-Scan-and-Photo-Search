@@ -50,8 +50,9 @@ The code is plain ES2020 with no build tooling beyond concatenation. Match what 
   claim something is faster or more accurate, say how you know.
 - **Keep the one-file promise.** Anything requiring a server or a build step to *run* is out
   of scope.
-- **Do not add identity recognition.** Faces, names, ethnicity and health are deliberately
-  out of scope, and the extraction prompt forbids them. This is not an oversight.
+- **Names come from the user.** Local face grouping and user-assigned names are supported.
+  The caption model must not invent identities or infer sensitive attributes. Preserve
+  corrections, isolate libraries, and test migrations without touching real photo data.
 - **Assume the storage is hostile.** Network shares drop reads, timestamps get lost, scans
   are interrupted after two days. Anything that cannot resume is not finished.
 

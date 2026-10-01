@@ -1,5 +1,10 @@
 # PhotoSearch — how it works and where everything is
 
+Current workspace: `~/Desktop/PhotoSearch`; open its `PhotoSearch.html`.
+The older measurements below are historical. See [the current review](CONSUMER-REVIEW.md)
+for the live library audit and the people/search update at the end of this document
+for the new face-backup format.
+
 Operating notes: where everything lives, how to back up by hand, and what to do when
 network storage misbehaves. Paths below use `/Volumes/Photos` as an example library.
 
@@ -11,8 +16,8 @@ network storage misbehaves. Paths below use `/Volumes/Photos` as an example libr
 
 | | |
 |---|---|
-| `~/PhotoSearch.html` | The app. One file, ~310 KB. Double-click to open in Chrome. |
-| `~/PhotoSearch-dev/` | Source code + build script (a git clone of the GitHub repo). |
+| `~/Desktop/PhotoSearch/PhotoSearch.html` | The current app. Double-click to open in Chrome. |
+| `~/Desktop/PhotoSearch/` | Active source, build script, review and roadmap. |
 | GitHub | https://github.com/giuvilas/PhotoSearch-Local-LLM-Scan-and-Photo-Search |
 
 To use it on another machine, copy **`PhotoSearch.html`** only. Nothing else is needed
@@ -273,3 +278,23 @@ records belonging to the folder actually walked are considered.
 3. **Refresh plan** to see what is outstanding.
 4. **Retry failed** recovers anything that errored.
 5. Back up with the shell command in section 2 if the share is slow.
+
+## People/search update — 1 October 2026
+
+The active app is now `~/Desktop/PhotoSearch/PhotoSearch.html`; source and builds live
+in that Desktop folder. The index remains `/Volumes/Photos/.photoindex/`.
+
+New backups include the essential `faces/` records, vector files, `people.json`
+(names, corrections and undo), and `people.previous.json`. Face files have checksums.
+The older instructions above describe backups that predate face support. Manual
+backups must also copy those face files to protect naming work. Face crops and
+photo thumbnails are excluded from in-app backups and require originals to regenerate.
+
+Use the current build to restore these backups. Older builds do not understand the
+face manifest or correction fields. Restore retains a safety copy; old-format backups
+without a face manifest preserve the current faces. A separate-device copy is still
+necessary to protect against failure of the NAS itself.
+
+The live library contains historical face vectors. Do not delete them to change
+models. See `CONSUMER-REVIEW.md` and the staged migration in `ROADMAP.md` before a
+whole-library remeasurement. Existing names remain searchable and correctable.

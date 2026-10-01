@@ -117,22 +117,25 @@ GeoNames extract. Writes everything to `.photoindex/` beside your photos.
 
 **Searching.** BM25 over an inverted index, cosine similarity over embeddings, merged with
 reciprocal rank fusion. Exact phrases in `"quotes"`. All of it in the browser — there is no
-vector database.
+vector database. The Search tab combines required people, place and date filters with
+paginated results. Keyword and people search work without a chat or embedding server;
+meaning-based matching is optional.
 
-**Chatting.** A tool-calling agent with eight tools over the index (`search_photos`,
+**Chatting.** A tool-calling agent with nine tools over the index (`search_photos`,
 `find_similar`, `list_events`, `look_at_photos`, …). Answers stream in with a grid of
 matching thumbnails; click one for the full image and its metadata. Models without tool
 support fall back to retrieve-then-answer automatically.
 
 **Surviving reality.** Resumable scans with a checkpoint, retries for flaky network shares,
 move detection so reorganising folders costs nothing, per-run backups with verified restore,
-and a 170-assertion self-test you can run in your own browser.
+and a 534-assertion self-test you can run in your own browser. New backups include
+names, corrections and face vectors with checksum verification.
 
 ---
 
 ## Design decisions worth knowing
 
-**One file.** `PhotoSearch.html` is ~240 KB with everything inline. Copy it to any machine
+**One file.** `PhotoSearch.html` has the application code inline. Copy it to any machine
 and it works. Source lives in `src/` and is assembled by `build.py` — see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -152,9 +155,16 @@ and flag `date_suspect` when a date has no camera tags behind it.
 **Photos are identified by content, not by path.** Scan a subfolder today and the whole
 library tomorrow — one index either way, no duplicates, nothing wrongly marked missing.
 
-**No faces, no identities.** The extraction prompt forbids naming or identifying people, and
-guessing ethnicity, religion or health. People are described only by age group, clothing and
-action. This is a deliberate divergence from commercial photo managers.
+**People, named by you.** Face grouping is local and names come from the user. The
+caption model never invents identities. People corrections are saved, uncertain matches
+can be reviewed, and the Search tab requires everyone you select to appear. Names,
+corrections and face vectors are included in new verified backups.
+
+**Consumer-readiness work.** See [the measured review](docs/CONSUMER-REVIEW.md) and
+[actionable roadmap](docs/ROADMAP.md). Historical face measurements may need a staged
+migration; this build preserves them and prevents incompatible regrouping. First-use
+model downloads still require a network connection, and reliable offline installation
+remains a roadmap item.
 
 ---
 
@@ -207,7 +217,8 @@ Working software, used daily against a multi-terabyte NAS library. Rough edges r
 | [FINDINGS.md](docs/FINDINGS.md) | Measured results, and model-server behaviour that cost time to find |
 | [TESTING.md](docs/TESTING.md) | The self-test, and driving it headlessly |
 | [OPERATIONS.md](docs/OPERATIONS.md) | Where every file lives, manual backup, slow-NAS notes |
-| [ROADMAP.md](docs/ROADMAP.md) | What is missing next — people, video, timeline — and what each costs |
+| [CONSUMER-REVIEW.md](docs/CONSUMER-REVIEW.md) | Measured library findings, implemented improvements and remaining limits |
+| [ROADMAP.md](docs/ROADMAP.md) | Sequenced reliability, recognition, search and UX work with estimates and release gates |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Build, code style, how to propose changes |
 
 ## License

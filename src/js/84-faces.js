@@ -4,8 +4,8 @@
 
    WHAT THIS DOES: finds face rectangles, turns each into a vector, and groups
    vectors that are close together. WHAT IT NEVER DOES: decide who anyone is.
-   A group has no name until you type one, and nothing is ever looked up,
-   inferred or suggested.
+   A group has no name until you type one. Later matches can suggest one of
+   those user-supplied names for review; no external identity is looked up.
 
    Age, gender, emotion, ethnicity: not stored, not displayed, not used for
    anything. The emotion, iris, antispoof and liveness models are switched off
@@ -27,12 +27,23 @@ const FACES = {
   clusters: [],                // [{ id, face_ids }]           -- unnamed
   byPhoto: new Map(),          // photo_id -> [face_id]
   namesByPhoto: new Map(),     // photo_id -> [name]
+  separations: [],             // user decisions: faces on opposite sides must stay apart
+  review: [],                  // plausible, ambiguous matches; never searchable as a name
+  undo: null,
   clusteredAt: null
 };
 
 async function facesDir(){
   if (!FACES.dir) FACES.dir = await IDX.dir.getDirectoryHandle("faces", { create:true });
   return FACES.dir;
+}
+
+function resetFaceState(){
+  FACES.dir = null; FACES.loaded = false; faceNamesLoaded = false;
+  FACES.faces = new Map(); FACES.byPhoto = new Map(); FACES.namesByPhoto = new Map();
+  FACES.vec = { dim:0, ids:[], rows:null, index:new Map() };
+  FACES.people = []; FACES.clusters = []; FACES.separations = []; FACES.review = [];
+  FACES.undo = null; FACES.clusteredAt = null;
 }
 
 /* ---- the engine adapter ----
@@ -354,7 +365,7 @@ async function appendFaceVectors(pairs){
   const dim = pairs[0].vec.length;
   if (FACES.vec.dim && FACES.vec.dim !== dim)
     throw new Error("face embedding dim changed (" + FACES.vec.dim + " -> " + dim
-      + "); delete the face data and re-run");
+      + "). Keep your face data: a complete model migration is needed before scanning with this model.");
   const fresh = pairs.filter(p => !FACES.vec.index.has(p.id));
   if (!fresh.length) return;
   const old = FACES.vec.rows || new Float32Array(0);
@@ -406,24 +417,75 @@ async function appendFaces(list){
 
 async function loadPeople(){
   const dir = await facesDir();
-  FACES.people = []; FACES.clusters = []; FACES.clusteredAt = null;
-  const t = await readTextIfAny(dir, "people.json");
-  if (!t) return;
-  try {
-    const d = JSON.parse(t);
-    FACES.people = (d.people || []).filter(p => p && p.id);
-    FACES.clusters = (d.clusters || []).filter(c => c && c.id);
-    FACES.clusteredAt = d.clustered_at || null;
-  } catch {}
+  let t;
+  try { t = await (await (await dir.getFileHandle("people.json")).getFile()).text(); }
+  catch (e){ if (!isNotFound(e)) throw e; }
+  const d = t == null ? { people:[], clusters:[] } : parsePeople(t);
+  applyPeopleState(d);
   rebuildFaceNames();
 }
 
+function parsePeople(text){
+  const d = JSON.parse(text);
+  const strings = a => Array.isArray(a) && a.every(id => typeof id === "string");
+  if (!d || !Array.isArray(d.people) || !Array.isArray(d.clusters)
+      || [...d.people, ...d.clusters].some(g => !g || typeof g.id !== "string" || !strings(g.face_ids)
+        || (g.confirmed_ids && !strings(g.confirmed_ids)) || (g.rejected_ids && !strings(g.rejected_ids)))
+      || (d.separations && (!Array.isArray(d.separations)
+        || d.separations.some(s => !s || !strings(s.a) || !strings(s.b))))
+      || (d.review && (!Array.isArray(d.review)
+        || d.review.some(r => !r || typeof r.face_id !== "string" || typeof r.person_id !== "string"))))
+    throw new Error("People data is damaged. Restore a verified backup before editing names.");
+  if (d.version && d.version > 2) throw new Error("People data needs a newer PhotoSearch app.");
+  return d;
+}
+function peopleState(){
+  return JSON.parse(JSON.stringify({ version:2, clustered_at:FACES.clusteredAt,
+    people:FACES.people, clusters:FACES.clusters, separations:FACES.separations,
+    review:FACES.review }));
+}
+function applyPeopleState(d){
+  FACES.people = d.people || []; FACES.clusters = d.clusters || [];
+  FACES.separations = d.separations || []; FACES.review = d.review || [];
+  FACES.clusteredAt = d.clustered_at || null; FACES.undo = d.undo || null;
+}
 async function savePeople(){
   const dir = await facesDir();
-  await writeFile(await dir.getFileHandle("people.json", { create:true }),
-    JSON.stringify({ version:1, clustered_at: FACES.clusteredAt,
-      people: FACES.people, clusters: FACES.clusters }, null, 1));
+  const next = JSON.stringify({ ...peopleState(), undo:FACES.undo });
+  await exclusive(async () => {
+    let previous = null;
+    try { previous = await (await (await dir.getFileHandle("people.json")).getFile()).text(); }
+    catch (e){ if (!isNotFound(e)) throw e; }
+    // Never replace an unreadable file with an apparently successful empty state.
+    if (previous != null){
+      parsePeople(previous);
+      await writeVerifiedText(dir, "people.previous.json", previous);
+    }
+    await writeVerifiedText(dir, "people.json", next);
+  });
   rebuildFaceNames();
+}
+
+let peopleEditChain = Promise.resolve();
+function editPeople(change, keepUndo = true){
+  const run = peopleEditChain.then(async () => {
+    if (RUN.active || libraryMaintenance) throw new Error("Wait for the current scan, backup or restore before changing people.");
+    const before = peopleState(), oldUndo = FACES.undo;
+    try {
+      const result = change();
+      FACES.undo = keepUndo ? before : null;
+      await savePeople();
+      return result;
+    } catch (e){ applyPeopleState({ ...before, undo:oldUndo }); rebuildFaceNames(); throw e; }
+  });
+  peopleEditChain = run.catch(() => {});
+  return run;
+}
+async function undoPeopleEdit(){
+  return editPeople(() => {
+    if (!FACES.undo) throw new Error("There is no people edit to undo.");
+    applyPeopleState(FACES.undo);
+  }, false);
 }
 
 /* photo -> the names of people appearing in it, for search and captions. */
@@ -449,7 +511,6 @@ function rebuildFaceNames(){
 let faceNamesLoaded = false;
 async function ensureFaceNames(){
   if (faceNamesLoaded || FACES.loaded) return FACES.namesByPhoto;
-  faceNamesLoaded = true;
   try {
     const dir = await facesDir();
     const text = await readTextIfAny(dir, "faces.jsonl");
@@ -457,7 +518,9 @@ async function ensureFaceNames(){
       FACES.faces = new Map();
       for (const ln of text.split("\n")){
         if (!ln.trim()) continue;
-        try { const f = JSON.parse(ln); if (f && f.id && !f.removed) FACES.faces.set(f.id, f); }
+        try { const f = JSON.parse(ln); if (f && f.id){
+          if (f.removed) FACES.faces.delete(f.id); else FACES.faces.set(f.id, f);
+        } }
         catch {}
       }
       FACES.byPhoto = new Map();
@@ -467,7 +530,8 @@ async function ensureFaceNames(){
       }
     }
     await loadPeople();
-  } catch {}
+    faceNamesLoaded = true;
+  } catch (e){ faceNamesLoaded = false; throw e; }
   return FACES.namesByPhoto;
 }
 
@@ -520,14 +584,30 @@ function clusterFaces(threshold){
   const th = threshold != null ? threshold : faceThreshold();
   const dim = FACES.vec.dim;
   if (!dim || !FACES.vec.ids.length){ FACES.clusters = []; return FACES; }
+  if (staleFaceEngines().length)
+    throw new Error("These face measurements use a different model. A complete set of stored crops or a staged migration from originals is needed before regrouping. Your names are kept.");
+
+  FACES.review = [];
+  const constraints = FACES.separations.map(s => ({ a:new Set(s.a), b:new Set(s.b) }));
+  const compatible = (id, members) => {
+    const photo = FACES.faces.get(id).photo_id;
+    if (members.some(mid => FACES.faces.get(mid)?.photo_id === photo)) return false;
+    return !constraints.some(s => (s.a.has(id) && members.some(m => s.b.has(m)))
+      || (s.b.has(id) && members.some(m => s.a.has(m))));
+  };
 
   const assigned = new Set();
   const seeds = [];
   for (const p of FACES.people){
     p.face_ids = p.face_ids.filter(id => FACES.faces.has(id));
     for (const id of p.face_ids) assigned.add(id);
-    const c = faceCentroid(p.face_ids);
-    if (c) seeds.push({ person:p, centroid:c, n:p.face_ids.length });
+    const anchors = (p.confirmed_ids || p.face_ids).filter(id => FACES.faces.has(id));
+    p.confirmed_ids = anchors.slice();
+    // Conflicting history must not become training evidence for more matches.
+    const photos = anchors.map(id => FACES.faces.get(id).photo_id);
+    if (new Set(photos).size !== photos.length) continue;
+    const c = faceCentroid(anchors);
+    if (c) seeds.push({ person:p, centroid:c, anchors });
   }
 
   /* Confident faces first, so a clear photo seeds a group rather than a blur. */
@@ -539,11 +619,13 @@ function clusterFaces(threshold){
     const v = faceVectorOf(id);
     if (!v) continue;
     let best = null, bestSim = th;
+    const matches = [];
     for (const s of seeds){
+      if (!compatible(id, s.person.face_ids) || (s.person.rejected_ids || []).includes(id)) continue;
       const sim = faceDot(v, 0, s.centroid, 0, dim);
-      if (sim < bestSim) continue;
+      if (sim < th) continue;
       let near = -1;
-      for (const mid of s.person.face_ids){
+      for (const mid of s.anchors){
         const mv = faceVectorOf(mid);
         if (!mv) continue;
         const d2 = faceDot(v, 0, mv, 0, dim);
@@ -551,12 +633,16 @@ function clusterFaces(threshold){
         if (near >= th) break;
       }
       if (near < th) continue;        // never auto-join a person on drift alone
-      bestSim = sim; best = s;
+      matches.push({ seed:s, sim });
     }
+    matches.sort((a,b) => b.sim - a.sim);
+    const lead = matches[0], margin = 0.06;
+    if (lead && lead.sim >= Math.min(0.99, th + margin)
+        && (!matches[1] || lead.sim - matches[1].sim >= margin)) best = lead.seed;
+    else if (lead) FACES.review.push({ face_id:id, person_id:lead.seed.person.id,
+      score:lead.sim, reason:matches.length > 1 ? "Looks like more than one person" : "Needs your confirmation" });
     if (best){                                   // joins an existing named person
       best.person.face_ids.push(id);
-      const c = faceCentroid(best.person.face_ids);
-      if (c) best.centroid = c;
       continue;
     }
     /* Match the CENTROID and the nearest MEMBER. Centroid-only merging drifts:
@@ -565,6 +651,7 @@ function clusterFaces(threshold){
        neighbour as well stops that cascade. */
     let bg = null; bestSim = th;
     for (const g of groups){
+      if (!compatible(id, g.face_ids)) continue;
       const sim = faceDot(v, 0, g.centroid, 0, dim);
       if (sim < bestSim) continue;
       let near = -1;
@@ -583,7 +670,7 @@ function clusterFaces(threshold){
       const c = faceCentroid(bg.face_ids);
       if (c) bg.centroid = c;
     } else {
-      groups.push({ id:"c-" + (groups.length + 1) + "-" + Date.now().toString(36),
+      groups.push({ id:"c-" + id,
                     face_ids:[id], centroid: faceNormalise(v) });
     }
   }
@@ -602,6 +689,7 @@ function findCluster(id){ return FACES.clusters.find(c => c.id === id) || null; 
 
 /* Names a cluster (promoting it to a person) or renames an existing person. */
 async function namePerson(id, name){
+  return editPeople(() => {
   name = String(name || "").trim();
   const existing = findPerson(id);
   if (existing){
@@ -609,7 +697,6 @@ async function namePerson(id, name){
       FACES.people = FACES.people.filter(p => p !== existing);
       FACES.clusters.unshift({ id: existing.id, face_ids: existing.face_ids });
     } else existing.name = name;
-    await savePeople();
     return existing;
   }
   const c = findCluster(id);
@@ -617,46 +704,86 @@ async function namePerson(id, name){
   if (!name) return null;
   FACES.clusters = FACES.clusters.filter(x => x !== c);
   const person = { id: c.id, name, face_ids: c.face_ids.slice(),
+                   confirmed_ids:c.face_ids.slice(), rejected_ids:[],
                    named_at: new Date().toISOString() };
   FACES.people.push(person);
-  await savePeople();
   return person;
+  });
 }
 
 /* Clustering will split one person across two groups; this is the fix. */
 async function mergeGroups(intoId, fromId){
+  return editPeople(() => {
   if (intoId === fromId) return null;
   const into = findPerson(intoId) || findCluster(intoId);
   const from = findPerson(fromId) || findCluster(fromId);
   if (!into || !from) throw new Error("no such group");
   for (const id of from.face_ids)
     if (!into.face_ids.includes(id)) into.face_ids.push(id);
+  // An explicit merge overrides earlier separation decisions for these faces.
+  const joined = new Set(into.face_ids);
+  FACES.separations = FACES.separations.filter(s =>
+    !(s.a.some(id => joined.has(id)) && s.b.some(id => joined.has(id))));
+  if (into.name){
+    into.confirmed_ids = [...new Set([...(into.confirmed_ids || into.face_ids), ...from.face_ids])];
+    into.rejected_ids = (into.rejected_ids || []).filter(id => !joined.has(id));
+  }
+  FACES.review = FACES.review.filter(r => !joined.has(r.face_id) && r.person_id !== fromId);
   FACES.people = FACES.people.filter(p => p !== from);
   FACES.clusters = FACES.clusters.filter(c => c !== from);
-  await savePeople();
   return into;
+  });
 }
 
 /* And it will merge two people into one group; this is that fix. */
 async function splitOut(groupId, faceIds){
+  return editPeople(() => {
   const g = findPerson(groupId) || findCluster(groupId);
   if (!g) throw new Error("no such group");
   const moving = faceIds.filter(id => g.face_ids.includes(id));
   if (!moving.length) return null;
   g.face_ids = g.face_ids.filter(id => !moving.includes(id));
-  const fresh = { id: "c-split-" + Date.now().toString(36), face_ids: moving };
+  if (g.face_ids.length) FACES.separations.push({ a:moving.slice(), b:g.face_ids.slice() });
+  if (g.name){
+    g.rejected_ids = [...new Set([...(g.rejected_ids || []), ...moving])];
+    g.confirmed_ids = (g.confirmed_ids || g.face_ids).filter(id => !moving.includes(id));
+  }
+  FACES.review = FACES.review.filter(r => !moving.includes(r.face_id));
+  const fresh = { id: "c-split-" + crypto.randomUUID(), face_ids: moving };
   FACES.clusters.unshift(fresh);
   /* A group emptied by the split disappears rather than lingering as a ghost. */
   if (!g.face_ids.length){
     FACES.people = FACES.people.filter(p => p !== g);
     FACES.clusters = FACES.clusters.filter(c => c !== g);
   }
-  await savePeople();
   return fresh;
+  });
+}
+
+async function reviewFace(faceId, personId, accept){
+  return editPeople(() => {
+    const p = findPerson(personId);
+    if (!p || !FACES.faces.has(faceId)) throw new Error("That face or person is no longer available.");
+    p.confirmed_ids = (p.confirmed_ids || p.face_ids).slice();
+    if (accept){
+      for (const g of [...FACES.people, ...FACES.clusters]){
+        g.face_ids = g.face_ids.filter(id => id !== faceId);
+        if (g !== p && g.confirmed_ids) g.confirmed_ids = g.confirmed_ids.filter(id => id !== faceId);
+      }
+      p.face_ids.push(faceId); p.confirmed_ids.push(faceId);
+      p.rejected_ids = (p.rejected_ids || []).filter(id => id !== faceId);
+      const joined = new Set(p.face_ids);
+      FACES.separations = FACES.separations.filter(s =>
+        !(s.a.some(id => joined.has(id)) && s.b.some(id => joined.has(id))));
+    } else p.rejected_ids = [...new Set([...(p.rejected_ids || []), faceId])];
+    FACES.clusters = FACES.clusters.filter(g => g.face_ids.length);
+    FACES.review = FACES.review.filter(r => r.face_id !== faceId);
+  });
 }
 
 /* Everything, in one action, leaving the rest of the index untouched. */
 async function deleteAllFaceData(){
+  if (libraryMaintenance) throw new Error("Wait for the backup or restore before deleting face data.");
   /* Drop the cached handle FIRST so nothing re-creates the folder behind the
      removal, then take the whole directory in one call. */
   FACES.dir = null;
@@ -664,6 +791,7 @@ async function deleteAllFaceData(){
   FACES.faces = new Map(); FACES.byPhoto = new Map(); FACES.namesByPhoto = new Map();
   FACES.vec = { dim:0, ids:[], rows:null, index:new Map() };
   FACES.people = []; FACES.clusters = []; FACES.clusteredAt = null;
+  FACES.separations = []; FACES.review = []; FACES.undo = null;
   FACES.loaded = false;
   faceNamesLoaded = false;
   return true;
@@ -814,6 +942,8 @@ function boxIoU(a, b){
 }
 
 async function refinePhotoFaces(photoId, bitmap){
+  if (FACES.separations.length || FACES.people.some(p => p.confirmed_ids || p.rejected_ids))
+    throw new Error("Improving faces with saved corrections needs the staged migration described in the roadmap. Your face data has been kept.");
   const olds = (FACES.byPhoto.get(photoId) || [])
     .map(id => FACES.faces.get(id)).filter(Boolean);
   /* Detect fresh on the full-resolution image. */
@@ -862,6 +992,8 @@ async function refinePhotoFaces(photoId, bitmap){
    one to see if it groups better -- costs a pass over a few hundred kilobytes
    instead of 14 GB. This is the whole reason the crops are stored. */
 async function reembedFromCrops(onProgress){
+  if (S.faces.embedder === "faceres")
+    throw new Error("Stored-crop re-measuring supports ArcFace. Select ArcFace first; no face data has been changed.");
   if (S.faces.embedder !== "faceres") await loadArcFace(onProgress);
   const engine = faceEngineId();
   const ids = [...FACES.faces.keys()];
@@ -878,6 +1010,8 @@ async function reembedFromCrops(onProgress){
   }
   if (!pairs.length)
     throw new Error("no stored face crops to re-measure — run Find faces first");
+  if (missing)
+    throw new Error(missing + " crops are unavailable. No vectors were replaced; a complete migration from originals is needed.");
   /* Replace rather than append: these are the same faces, measured again. */
   FACES.vec = { dim:0, ids:[], rows:null, index:new Map() };
   await appendFaceVectors(pairs);

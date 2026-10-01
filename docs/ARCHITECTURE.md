@@ -29,6 +29,11 @@ Plain files, readable with anything:
 | `config.json` | settings, the full extraction schema, `schema_hash`, `prompt_hash` |
 | `runs.jsonl` | one line per scan: timing, errors, models, hashes |
 | `state.json` | resume checkpoint: the pending queue |
+| `faces/faces.jsonl` | face geometry, source and engine provenance |
+| `faces/facevecs.bin`, `faces/facevecs.json` | face vectors and their row mapping |
+| `faces/people.json` | version 2: names, memberships, confirmations, rejections, separations, review and one-step undo |
+| `faces/people.previous.json` | verified previous people state, retained before a replacement |
+| `faces/crops/<face-id>.jpg` | aligned 112px crops when available; excluded from backups |
 
 Append-only means a crash truncates at most the last line, which the loader skips. It also
 means the file grows on re-scans — **Compact log** rewrites it to latest-state-only.
@@ -86,7 +91,7 @@ crash leaves the checkpoint stale rather than ahead of the data.
 No vector database. At 20k photos a brute-force pass is a few milliseconds; an ANN index
 would add a dependency and a build step to save time nobody is spending.
 
-1. **filter** — dates, place, `image_type`, occasion, entities, text
+1. **filter** — required/excluded people, dates, place, `image_type`, occasion, entities, text
 2. **BM25** over the inverted index (k1 = 1.4, b = 0.75), built at load
 3. **cosine** over `vectors.bin`, with a **relevance floor** — cosine is never zero, so
    without one a nonsense query returns a confident list of junk
@@ -96,14 +101,20 @@ would add a dependency and a build step to save time nobody is spending.
 Exact phrases in `"quotes"` are a filter, not a ranking signal, and are stripped before
 ranking so the rest of the query still scores.
 
+The direct Search tab uses the same retrieval function as chat. Known unquoted names
+become hard person-ID filters; multiple names require everyone to appear. Quoted names
+stay literal, name interpretation can be disabled, and duplicate names require an explicit
+person selection. The response includes applied filters and a full result count for
+pagination. Metadata and keywords need no model server; semantic ranking is optional.
+
 ## The chat agent
 
 A `while` loop against `/v1/chat/completions` with `tools`, capped at six rounds. **Tools
 execute locally** — the model never sees the index, only compact JSON rows (id, date, place,
-caption ≤150 chars, score). The one exception is `look_at_photos`, which sends up to six
+caption ≤150 chars, user-assigned names, score). The one exception is `look_at_photos`, which sends up to six
 stored thumbnails back to the vision model.
 
-Eight tools: `search_photos`, `filter_photos`, `find_similar`, `get_photo`, `list_entities`,
+Nine tools: `search_photos`, `filter_photos`, `list_people`, `find_similar`, `get_photo`, `list_entities`,
 `list_events`, `library_stats`, `look_at_photos`.
 
 History is trimmed to a character budget, never orphaning a tool reply from the assistant
@@ -124,16 +135,21 @@ nodes, so a caption containing markup stays inert. There is a test asserting exa
 - index writes are serialised: `appendLines` reads a size then seeks to it, so concurrent
   appends would otherwise overwrite each other
 - restoring a backup first copies the current state, so a mistaken restore is undoable
-- thumbnails are the only derived part of the index, and the only part excluded from
-  backups — which is honest because **Rebuild thumbnails** remakes them from the originals
-  with no model calls, matching photos by content rather than by stored path
+- new backups include essential face files with SHA-256 checksums and vector-length
+  validation; thumbnails and face crops are excluded and require originals to regenerate
+- restore validates the face snapshot before writing, retains a safety copy, and does not
+  prune its selected source; legacy backups without face manifests preserve live faces
+- people edits are serialized, checked by read-back, and rolled back in memory if saving
+  fails; scans/backups/restores block concurrent people edits within this tab
+- restoring several files is not atomic; generation-level transactions remain a roadmap item
 - an index that cannot be read is an **empty** index, never a stale one: loading a location
   with no `records.jsonl` clears memory rather than leaving the previous location's records
   behind, where they would be planned against and then flushed into the new index
 - `vectors.bin` is reconciled to its id list in both directions on load, and a write that
   does not land at the expected length is refused before the ids describing it are recorded
 - a stalled write cannot wedge the index: the serialising lock has a timeout, so one
-  unresponsive NAS operation does not block every write that follows
+  unresponsive NAS operation does not block every write that follows. A timeout does not
+  cancel the underlying write; generation fencing is still required for late completions
 - the model can fill in fields but never *identify* a record: `id`, `path`, `fingerprint`,
   `size`, `mtime` and `scanned_at` are reserved and stripped from model output
 - a failure keeps its `cause`, so callers can tell a deleted folder from an unreachable
@@ -175,13 +191,13 @@ is reported, because the weaker the contract the more the validator has to repai
 
 ## Faces
 
-Detection and embedding run **in the browser** — LM Studio's embeddings endpoint is
-text-only, so there is no alternative. `.photoindex/faces/` holds `faces.jsonl` (geometry
+Detection and embedding run **in the browser**, separately from scene captioning.
+`.photoindex/faces/` holds `faces.jsonl` (geometry
 and provenance), `facevecs.bin`/`.json` (unit-length vectors, reconciled both ways on load
 like the photo vectors), and `people.json` (groups and the names you gave them).
 
-- **No crops are stored.** A face box is kept in 0..1, so a tile is the photo's existing
-  thumbnail zoomed to that box. One less file per face, and one less write path.
+- **Tiles use normalized face boxes.** The current tile renderer zooms the stored photo
+  thumbnail; aligned crops are also stored when available for later remeasurement.
 - **Alignment is mandatory.** The descriptor runs on the crop it is given, so `face.mesh`
   and `face.detection.rotation` are on: without them the vector encodes head angle rather
   than identity (0.53 self-similarity versus 0.93 — see FINDINGS §10).
@@ -192,8 +208,13 @@ like the photo vectors), and `people.json` (groups and the names you gave them).
 - **The engine configuration is recorded on every face.** Vectors from a different
   configuration are not comparable, so they are reported rather than silently mixed in.
 - **A name is authoritative.** Re-grouping never re-clusters a named person's faces away,
-  and unnamed faces are matched against named people first, so new photos join by
-  themselves. Merge and split exist because clustering gets some wrong.
+  and unnamed faces are compared with fixed confirmed anchors. Automatic matches need
+  a threshold margin and separation from competing people; ambiguous matches enter
+  review and remain absent from named search until confirmed. Conflicting anchor sets
+  and same-photo assignments are excluded from automatic matching.
+- **Corrections persist.** Splits record separation constraints; rejections are remembered.
+  Explicit merges can override earlier decisions. One previous people edit is saved for
+  undo, and switching libraries clears face/name caches.
 - **Nothing is inferred.** A group is "Group 1" until you type a name. `human`'s descriptor
   model computes age and a gender guess as a side effect of the embedding and cannot be
   asked not to; both are dropped at the adapter boundary, a face row is built field by
@@ -210,8 +231,9 @@ like the photo vectors), and `people.json` (groups and the names you gave them).
   makes changing embedder a minute's work instead of a day's.
 - **Two passes.** Thumbnails first (fast, and tells us which photos have people in them),
   then optionally the originals for just those photos, decoded large, because a face below
-  112 px is upscaled into the model. Re-measuring matches old faces to new by box overlap
-  so names survive.
+  112 px is upscaled into the model. The existing overlap-based refinement does not safely
+  remap correction history and is blocked when saved corrections exist. A staged migration
+  is required for historical model/dimension changes; see the review and roadmap.
 - **One action deletes all of it**, leaving the rest of the index untouched.
 
 ## Known gaps

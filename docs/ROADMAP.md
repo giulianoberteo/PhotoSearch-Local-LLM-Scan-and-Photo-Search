@@ -1,244 +1,207 @@
-# Roadmap — closing the gap to Google Photos
-
-Written 29 September 2026, after 6,635 photos were indexed and searchable.
-
-What exists today is the *hard* half: every photo has a caption, a description, objects,
-activities, transcribed text, a dated and confidence-scored timestamp, an offline place
-name, an occasion, and a 768-dimension embedding. Search fuses BM25 and cosine similarity,
-and chat drives nine tools over it.
-
-What is missing is mostly **browsing** and **two whole media types**, not intelligence.
-This document says what to add, in what order, and what each one actually costs.
-
----
-
-## Findings that shape every option below
-
-These were measured or verified, not assumed.
-
-### 1. LM Studio cannot embed images. Verified.
-
-```
-$ curl localhost:1234/v1/embeddings -d '{"model":"text-embedding-nomic-embed-text-v1.5",
-    "input":[{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}]}'
-{"error":"'input' field must be a string or an array of strings"}
-```
-
-Text input works and returns 768 dimensions. So anything needing an *image* vector — faces,
-visual similarity, true image-text search — must run **in the browser**. There is no way to
-push it onto LM Studio, however convenient that would be.
-
-### 2. The precedent for that already exists in this app
-
-`exifr`, `libheif-js` and `utif` are fetched from jsDelivr at first use, and the GeoNames
-city list is downloaded once and cached into `.photoindex/geo/cities.bin`, after which the
-app is offline for ever. Every model below follows that same pattern: **fetch once, cache
-in `.photoindex/`, never call out again.** No new architectural principle is required.
-
-### 3. `nomic-embed-vision-v1.5` shares the embedding space the index already uses
-
-This is the single luckiest fact available. The index is built with
-`nomic-embed-text-v1.5` at 768 dimensions, and Nomic's vision encoder (92M parameters) is
-deliberately aligned to *that exact space* — the text tower was frozen and the image tower
-trained into it. Consequently:
-
-- image vectors would be directly comparable to the text vectors already on disk
-- a typed query keeps being embedded by LM Studio, for free, with the model already loaded
-- `vectors.bin` stays 768-wide; no second vector store, no re-embedding of existing text
-
-The alternative (CLIP, SigLIP, MobileCLIP) is smaller and faster but lives in its own
-space, which means shipping *two* encoders and a second vector file. ONNX weights for the
-Nomic vision model exist; Transformers.js support has historically been awkward, so plan on
-`onnxruntime-web` directly.
-
-### 4. Video and RAW are classified and then silently dropped
-
-`classifyFile()` already labels them, and the plan counts them — `38 RAW counted, skipped`.
-Nothing else happens. For a library with any phone video in it, a meaningful share of the
-collection is simply invisible to search.
-
-### 5. A second pass over the originals is cheap; a second pass through the model is not
-
-The 68 hours were **entirely** model time at ~21.5 s/photo. Work that only decodes pixels
-runs at disk speed: the thumbnail rebuild proves the pipeline, and face detection plus
-embedding is on the order of 100 ms/photo on Apple silicon.
-
-> **6,635 photos: ~20 minutes for faces, versus 68 hours for a rescan.**
-
-Everything in Phase 1 below is deliberately chosen to need **no model calls**, so it never
-costs another 68 hours.
-
----
-
-## Phase 1 — People, and the browsing you already have the data for
-
-### 1.1 People (face grouping) — **BUILT, 30 September 2026**
-
-**How it works.** Re-read each original (the thumbnail-rebuild path already does exactly
-this), detect faces, embed each face as a 512-d vector, cluster the vectors, and let **you**
-name the clusters. Store crops and vectors in `.photoindex/faces/`.
-
-- **Detection + embedding:** `human` v3.3.6 (on cdnjs and jsDelivr, browser-native,
-  TensorFlow.js) gives detection *and* face embeddings in one library. The alternative is
-  SCRFD + ArcFace ONNX through `onnxruntime-web`, which is the stack every serious local
-  tool uses and is more accurate, at the cost of wiring two models by hand. **Start with
-  `human`** to get the whole flow working end to end, and swap the embedder later if
-  accuracy disappoints — the clustering and UI do not care where a 512-d vector came from.
-- **Clustering:** agglomerative, cosine distance, threshold ~0.6, no target cluster count.
-  Runs on 6,635 photos in memory in seconds. Re-clusterable at any time without re-reading
-  a single photo, because the vectors are on disk.
-- **Naming:** clusters start as *Person 1, Person 2…*. You name the ones you care about.
-  Merging and splitting clusters must both be possible — clustering will get some wrong.
-- **Search:** `people:"Anna"` as a filter, and a People tab of face tiles.
-
-**Where I need your agreement before building this.** A standing rule on this project is
-that the app never identifies people or guesses anything about them. Face grouping does not
-break that rule as I intend to build it, but it sits close enough that I want it stated
-plainly rather than assumed:
-
-- the app groups faces that **look alike**; it never decides *who* anyone is
-- every name comes from you. Nothing is inferred, suggested, or looked up
-- **age, gender, emotion and ethnicity inference will be explicitly disabled.** `human`
-  ships all four. They will be switched off in code, with a comment saying why, and a test
-  asserting the fields never appear in a record
-- face vectors are biometric data. They are written only into `.photoindex/faces/`, never
-  transmitted, and a single **Delete all face data** button removes them completely
-- the existing `people.age_groups` field in the extraction schema is a separate thing —
-  the vision model's rough impression of a scene. Worth revisiting on its own merits
-
-If you would rather this stayed out of the app entirely, say so and I will drop it; the rest
-of the roadmap stands without it.
-
-**Cost:** ~20 minutes of compute for the existing library. Model download ~15 MB, cached.
-**Risk:** medium. Clustering quality is the thing that will need iterating.
-
-### 1.2 Video
-
-Currently invisible. Minimum viable version needs no new model:
-
-1. Decode a handful of frames with `<video>` + `canvas` (no library, no WASM).
-2. Send 3–5 evenly spaced frames to the vision model **as one request** with the existing
-   schema, plus duration and dimensions.
-3. Store as a record with `kind: "video"`, a thumbnail from the middle frame, and the same
-   captions, objects and text as a photo.
-
-Costs one model call per video rather than per frame, so a few hundred videos is an hour or
-two, not days. Audio transcription (Whisper is available in LM Studio) is a separate, later
-question.
-
-**Cost:** medium build, model time proportional to video count. **Risk:** low — codec
-support is whatever Chrome already plays.
-
-### 1.3 Timeline browsing — **BUILT, 30 September 2026**
-
-A Timeline tab grouped by day, newest first, with place and occasion headings, a year bar,
-and a date picker that lands on the nearest earlier day when the exact one has no photos.
-Uncertain dates are marked per photo with their source in the tooltip.
-
-Thumbnails are **windowed**: only days near the viewport are filled, and a day that scrolls
-away releases its images and unpins them. Rendering all 6,635 up front would have been
-6,635 reads from the share. Heights are reserved up front so the scrollbar is honest and
-nothing shifts under the reader.
-
-### 1.4 Map view
-
-GPS is resolved to offline place names already. A clustered-pin map needs an offline tile
-source or a plain coordinate scatter with place labels — an online tile server would break
-the offline rule, so the honest first version is **place-name grouping**: "Staines (412)",
-"Sicily (88)", drilling into a grid.
-
-**Cost:** low for place grouping, medium for real tiles. **Risk:** low.
-
-### 1.5 Near-duplicates, bursts and best-shot
-
-A 64-bit perceptual hash (dHash) per photo costs nothing at scan time and about a second
-across the library at query time. Gives: duplicate detection, burst grouping (near-identical
-hash within seconds of each other), and a "review 8 near-identical shots" screen. Combined
-with the existing `quality` field, the app can propose a best-of-burst — proposing only,
-never deleting.
-
-**Cost:** low. **Risk:** low. Add the hash to the scan now even if the UI comes later, so it
-does not need another pass.
-
----
-
-## Phase 2 — Better search
-
-### 2.1 True image embeddings
-
-Today's "semantic" search embeds a *text summary of what the model said*. If the caption
-never mentions a red car, no amount of cosine similarity finds one. Real image vectors fix
-the class of query where the caption simply missed something, and give visual
-similarity ("more like this") for free.
-
-Use `nomic-embed-vision-v1.5` via `onnxruntime-web` for the reasons in Finding 3: it lands
-in the space the index already uses, and the query side stays on LM Studio. Store alongside
-the existing vectors and fuse as a third ranker in the RRF that already exists.
-
-**Cost:** one pass over originals (~1–2 hours, no model calls), plus a model download in the
-90–370 MB range depending on quantisation — by far the largest download in this document,
-and the main argument for MobileCLIP instead if that proves unacceptable.
-**Risk:** medium-high. This is the one item where I would want to prove the download and
-runtime on your machine before committing to it.
-
-### 2.2 Query understanding
-
-"photos of Anna in Sicily last summer" should decompose into a person filter, a place filter
-and a date range, rather than being embedded whole. The chat agent already has the tools;
-this is about doing it for the plain search box too.
-
-**Cost:** low-medium. **Risk:** low.
-
-### 2.3 Typo tolerance and synonyms
-
-BM25 is exact. "pizzza" finds nothing, and "bike" does not find "bicycle". Trigram fallback
-for the former; the embeddings largely cover the latter already.
-
-**Cost:** low. **Risk:** low.
-
----
-
-## Phase 3 — Nice to have
-
-| item | note |
-|---|---|
-| **Albums and favourites** | User-curated collections in `.photoindex/`. Simple, and expected. |
-| **On this day** | Trivial once the timeline exists. |
-| **Pets as first-class** | Google Photos groups pets. The same clustering machinery, applied to the `animals` field. |
-| **RAW** | Lower value than it looks: most RAW files sit next to a JPEG that is already indexed. Better handled by pairing siblings than by decoding RAW in a browser. |
-| **Live/Motion photos** | Recognise the paired video and treat it as one item. |
-| **Audio transcription for video** | Whisper via LM Studio. Big payoff for home video, own project. |
-
-## Explicitly out of scope
-
-Sharing, cloud sync, editing, auto-enhance, and anything that uploads a photo anywhere.
-The premise is one HTML file that works offline against your own disk.
-
----
-
-## Recommended order
-
-1. ~~**Timeline (1.3)**~~ — done, 30 September 2026.
-2. **Perceptual hash into the scan (1.5)** — cheap, and avoids a future re-pass.
-3. ~~**People (1.1)**~~ — done, 30 September 2026.
-4. **Video (1.2)** — closes the one gap where content is entirely invisible.
-5. **Place grouping (1.4)**, then near-duplicate UI (1.5).
-6. **Image embeddings (2.1)** — last of the substantial items, because it is the largest
-   download and the least certain.
-
-Ordered this way, the first three cost roughly one day of compute between them and **no
-model time at all**. Nothing here requires re-scanning what you already have.
-
-## Sources
-
-- [LM Studio embeddings endpoint](https://lmstudio.ai/docs/developer/openai-compat/embeddings)
-- [nomic-embed-vision-v1.5](https://huggingface.co/nomic-ai/nomic-embed-vision-v1.5) ·
-  [shared latent space](https://www.nomic.ai/news/nomic-embed-vision) ·
-  [paper](https://arxiv.org/pdf/2406.18587)
-- [human (browser face detection + embedding)](https://github.com/vladmandic/human) ·
-  [on cdnjs](https://cdnjs.com/libraries/human)
-- [InsightFace: SCRFD + ArcFace](https://github.com/deepinsight/insightface)
-- [Transformers.js](https://huggingface.co/docs/transformers.js/index) ·
-  [SigLIP ONNX](https://huggingface.co/Xenova/siglip-base-patch16-224) ·
-  [MobileCLIP](https://huggingface.co/Xenova/mobileclip_blt)
-- [Facet — a comparable local-first tool](https://github.com/ncoevoet/facet)
+# Roadmap: dependable local photo finding
+
+Updated 1 October 2026. Evidence and current limits:
+[CONSUMER-REVIEW.md](CONSUMER-REVIEW.md).
+
+The outcome is “I can find the people and moments I remember, and correcting a
+mistake improves future results.” Scene metadata, recognition, recovery and a
+clear search interface all contribute. The single-file app remains the delivery
+format; a companion service is a later decision justified by measured limits.
+
+## Delivered in this change
+
+1. Persistent face separations/rejections, conservative matching, a review queue,
+   saved undo, conflict notices and clearer People controls.
+2. Direct Search with required people filters, exclusions, date/place controls,
+   keyword-only operation, optional semantic ranking and full-result pagination.
+3. Verified face-data backups, source validation on restore, protection against
+   pruning the restore source, checked people saves and library cache isolation.
+
+These are foundations, not parity with Google Photos. Historical names and
+measurements are preserved. Finish recovery and safe migration before promising
+better recognition across this library.
+
+## Milestones
+
+Effort estimates assume one experienced developer, excluding model compute and
+user labelling. Owners are roles to assign.
+
+| Milestone | Owner | Estimate | Dependency | Exit gate |
+|---|---|---|---|---|
+| M0: recoverable library | Storage engineer | 5–8 days | Delivered recovery changes | Crash matrix and independent-device restore pass |
+| M1: trustworthy people | ML/application engineer | 8–12 days | M0, labelled pilot | Held-out recognition targets; corrections survive migration |
+| M2: search intent and quality | Search engineer | 6–10 days | Stable person IDs, query benchmark | Retrieval and interpretation targets met |
+| M3: everyday experience | Product/frontend engineer | 5–8 days | M0; overlap M1/M2 | Five-person usability study passes core tasks |
+| M4: scale and coverage | Application engineer | 8–15 days | M0–M3 | 100k benchmark, media and offline-restart gates |
+
+## M0 — recoverable library first
+
+**ST-01: immutable generations (3–4 days).** Introduce a manifest identifying the
+committed record, vector and people generation. Stage new files, verify hashes,
+byte counts, dimensions and references, then commit one pointer. Keep the previous
+generation. Publish memory/checkpoints only after commit. Add a single-writer
+library lock and fencing so a timed-out write cannot overwrite newer work.
+
+Acceptance: inject termination/failure before and after every write, close,
+verification and pointer update. Reload yields a complete old or new generation,
+never a hybrid. Two tabs have at most one writer. Originals are never modified.
+
+**ST-02: backup/recovery UX (1–2 days).** Support a separate-device backup target;
+display last verified time, included data and crop/thumbnail regeneration cost.
+Offer a read-only recovery screen for damaged people data with a preview of the
+previous file and backup versions. Export diagnostics stripped of personal names,
+captions, paths, images and vectors by default.
+
+Acceptance: restore a copy of the actual library onto local disk, compare hashes
+and counts, then find five known people/photos. Disconnect the NAS at every stage:
+the app must show a recoverable error, never success. Preserve the pre-restore copy.
+Recover captions without a vision-model rescan.
+
+**ST-03: independent stage jobs (1–2 days).** Track decode, EXIF, face detection,
+face embedding, captions, OCR and each embedding space independently. Persist
+stage version, success/zero-results/failure, retry count and elapsed time. Add
+waiting-for-drive/model, pause, retry and resume states; show indexed coverage.
+
+Acceptance: killing the tab loses at most one uncommitted batch. Zero-face photos
+are not repeatedly processed. A caption-model change does not redo faces. An
+unavailable share cannot become an empty/missing library.
+
+## M1 — trustworthy people
+
+**PE-01: labelled pilot and evaluation command (2–3 days).** Select 300–500 local
+photos covering children across years, siblings/relatives, profiles, spectacles,
+low light, small faces, groups, mirrors, collages and no-face images. Keep labels
+separate from automatic groups. Split by event/time to prevent near-duplicate
+leakage. Report detection recall, false detections, identity precision/recall,
+mixed-group rate, fragmentation, unresolved rate and review burden. The six
+existing named groups are not reliable ground truth.
+
+Initial held-out targets: automatic identity precision >=99.5%; recall >=90% on
+reviewable faces at least 80px wide; zero explicit-rejection violations. Report
+small-face and child age-gap results separately, with confidence intervals.
+These are targets, not measured results. Prefer unresolved faces to lower
+precision; tune thresholds only on the calibration split.
+
+**PE-02: safe model/resolution migration (3–4 days).** Use ST-01 to replace old
+1,024-d vectors with the chosen space without appending incompatible dimensions.
+Sample original reads to estimate end-to-end I/O time. Detect at a suitable
+resolution, align, and store quality/provenance: original face pixels, blur,
+pose, detector/model version, source dimensions and crop revision. Re-read
+originals if crops are absent or too small; enlargement is not recovered detail.
+
+Maintain one-to-one old/new detection mapping. Preserve names, confirmations,
+rejections and separations; ambiguous mappings go to review. Test same-box IDs,
+detection reordering, missed detections and partial jobs. Preview conflicts before
+switching the generation. Rollback restores previous groups and search results.
+
+For this NAS, start with 100 photos sampled from the 2,674 known to contain faces.
+Verify timing, mapping and precision before expanding. Save an independent backup.
+Do not ask the user to delete face data to change models.
+
+**PE-03: recognition quality and execution (2–3 days).** Compare the current
+detector/ArcFace pipeline with a pinned SCRFD/recognition candidate on PE-01.
+Choose by measured accuracy, latency, memory and permitted model use. Add several
+confirmed prototypes per person for pose/ageing, quality-weighted comparisons and
+calibrated automatic/review thresholds. Compare robust clustering with the greedy
+baseline. Move detection, embedding and grouping into workers.
+
+**PE-04: corrections people understand (1–2 days).** Show the face in its original
+photo; add “not a face”, move directly to an existing person, cover photo, merge
+preview, nicknames, hidden people and review history. Explain suggestions without
+presenting cosine similarity as probability. Explicit confirmations may handle
+mirrors/collages that automatic same-photo exclusion conservatively leaves apart.
+
+Acceptance: five users can name, merge, split, reject, undo and find someone
+without tuning a numeric threshold. Median correction takes under 10 seconds.
+
+## M2 — search intent and quality
+
+**SE-01: explicit query plan (2–3 days).** Add an AST covering person IDs,
+include/exclude/any/all, dates, places and free text. Parse known names, aliases,
+years, occasions, relative dates and geography with documented timezone/locale.
+Show editable chips; ask one choice for ambiguity. “Anna and Ben in Sicily last
+summer” must display the interpreted season/date range. Keep literal keyword mode.
+
+Acceptance: a versioned set of at least 100 queries, including duplicate names,
+non-Latin names, quotes, exclusions, uncertain dates and boolean language. Require
+100% person-constraint correctness and >=95% interpretation accuracy on the
+supported grammar. Never silently broaden a requested identity.
+
+**SE-02: image/text hybrid retrieval (2–4 days).** Add separately versioned image
+embeddings to find details omitted by captions. Choose a paired text/image encoder
+by local benchmark: equal dimensions alone do not imply comparable vectors.
+Fuse keywords, scene-text and image rankings after hard person/metadata filters.
+Record model revision, preprocessing and normalization for every vector space.
+
+Acceptance: >=100 judged searches with caption misses, screenshots/OCR, objects,
+activities and genuine no-match cases. Target Recall@20 >=90% and nDCG@20 >=0.85
+on the agreed set. Report people/scene/OCR separately and require no regression
+on exact names or phrases. Compare against the existing baseline.
+
+**SE-03: trust and speed (2–3 days).** Explain confirmed/suggested people, date
+provenance and retrieval evidence. Add typo suggestions, saved searches, sorting
+and image-based similarity. Cache query embeddings, cancel stale requests and
+show useful keyword results when the server is unavailable.
+
+Acceptance: warm keyword/person search p95 <250ms at 10k records and <1s at 100k
+on the documented reference Mac. Report cold load, NAS thumbnail latency and
+embedding time separately. Keep search and corrections keyboard operable.
+
+## M3 — everyday experience
+
+**UX-01: onboarding/reconnect (2 days).** Lead with Search and a sample import.
+Explain photo location versus index location. Offer a local cache for NAS
+originals once relocation/recovery is safe. Check capabilities, storage health
+and model availability. Make faces/EXIF/thumbnails useful before background
+captioning finishes. Show measured progress and searchable coverage.
+
+**UX-02: browsing/lightbox (2–3 days).** Add next/previous and keyboard navigation,
+people overlays, clear original/thumbnail state, reveal-original, date/place
+correction and confidence display. Add favorites, local albums, place browsing
+and a date scrubber. Preserve scroll, filters and selection. Virtualize large
+groups/days and release unused image resources.
+
+**UX-03: accessibility/usability (1–2 days).** Audit focus order/return, labels,
+screen-reader status, contrast, 200% zoom, narrow windows and empty/error/loading
+states. Test five participants on connecting, finding two people together,
+correcting a false match, reconnecting a drive and restoring a backup. At least
+four of five complete each task unaided; no task silently loses data.
+
+## M4 — scale, offline and media coverage
+
+**PL-01: offline asset installation (2–3 days).** Pin immutable model/runtime
+revisions and checksums, show download size/progress, verify installation and
+recover interrupted downloads. Persist assets intentionally rather than relying
+on HTTP caches. Prove detection/search after restarting the browser with networking
+disabled. Confirm model distribution terms before product release.
+
+**PL-02: media coverage (3–5 days).** Add video records with timecoded keyframes
+and face appearances; add speech transcription as an optional stage. Pair Live
+Photos and RAW/JPEG siblings. Show unsupported codecs and decode failures;
+metadata-only records should remain browseable. Never imply skipped video is
+indexed. Group duplicates/bursts for review without deleting originals.
+
+**PL-03: scale/soak testing (3–5 days).** Benchmark 10k/50k/100k libraries and long
+jobs. Measure memory, UI responsiveness, I/O amplification, requests, storage
+growth and recovery time. Evaluate a database/cache or companion service only
+when measured limits justify it. Scope caches to a library and keep heavy work
+off the UI thread.
+
+## Release gates and rollout
+
+1. CI: reproducible build and syntax; repeated same-page regressions; corruption,
+   short-write, permission and timeout cases; separate real-model smoke tests
+   using pinned artifacts. Synthetic vectors cannot establish recognition accuracy.
+2. Recovery: independent backup and restore drill, old-format migration, crash
+   matrix and rollback; originals untouched.
+3. Private pilot: 100-photo subset, labelled evaluation and measured NAS timings.
+   Inspect false positives before expanding to the existing face subset.
+4. Library migration: pause/resume, preview and previous generation retained
+   until representative results are reviewed.
+5. Consumer beta: M0–M3 gates complete; publish measured coverage and remaining
+   limits. Feature-gate unfinished media/offline support; do not claim parity.
+
+Track locally: searchable coverage, failed stages, person-constraint failures,
+identity precision, correction survival, review burden, p95 search time, time to
+first useful result, and last independently verified backup. No telemetry or
+personal photo data collection by default.

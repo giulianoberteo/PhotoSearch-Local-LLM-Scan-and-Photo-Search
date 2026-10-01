@@ -19,6 +19,52 @@ function phrasesIn(q){
 }
 const stripPhrases = q => String(q || "").replace(/"[^"]*"/g, " ").trim();
 
+function personKey(s){ return String(s || "").normalize("NFKC").toLocaleLowerCase().trim(); }
+function escapeSearchRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function resolvePersonName(name){
+  const found = FACES.people.filter(p => personKey(p.name) === personKey(name));
+  if (!found.length) throw new Error("No person named “" + name + "”. Name them in People first.");
+  if (found.length > 1) throw new Error("More than one person is named “" + name + "”. Choose a person in the People filter.");
+  return found[0];
+}
+/* Interpret only names supplied by the user. Captions and the language model
+   never supply identities. Quoted text remains literal, including a name. */
+function peopleSearchArgs(input){
+  const args = { ...input }, applied = [];
+  let q = String(args.query || "");
+  const ids = new Set([].concat(args.person_ids || []));
+  const excluded = new Set([].concat(args.exclude_person_ids || []));
+  q = q.replace(/\b(?:person|people):"([^"]+)"/gi, (_, name) => {
+    const p = resolvePersonName(name); ids.add(p.id); return " ";
+  });
+  if (args.interpret_people !== false){
+    const parts = q.split(/("[^"]*")/g);
+    const names = [...new Set(FACES.people.map(p => p.name).filter(Boolean))]
+      .sort((a,b) => b.length - a.length);
+    for (let i = 0; i < parts.length; i += 2){
+      for (const name of names){
+        const rx = new RegExp("(^|[^\\p{L}\\p{N}_])(?:(without|except|not)\\s+)?("
+          + escapeSearchRegex(name) + ")(?=$|[^\\p{L}\\p{N}_])", "giu");
+        parts[i] = parts[i].replace(rx, (_, before, negative) => {
+          const p = resolvePersonName(name);
+          (negative ? excluded : ids).add(p.id); return before + " ";
+        });
+      }
+    }
+    q = parts.join("");
+  }
+  if (ids.size || excluded.size){
+    q = q.split(/("[^"]*")/g).map((part, i) => i % 2 ? part : part.replace(
+      /\b(show|find|me|my|photos?|pictures?|images?|please|and|with|of|the|at|in|on|from)\b/gi, " ")
+      .replace(/\s+/g, " ")).join("").trim();
+  }
+  args.query = q;
+  args.person_ids = [...ids]; args.exclude_person_ids = [...excluded];
+  for (const id of ids) applied.push("With " + (findPerson(id)?.name || "unknown person"));
+  for (const id of excluded) applied.push("Without " + (findPerson(id)?.name || "unknown person"));
+  return { args, applied };
+}
+
 function candidateSet(f){
   const out = [];
   const from = f.date_from ? String(f.date_from) : null;
@@ -28,6 +74,14 @@ function candidateSet(f){
   const ents  = f.entities ? [].concat(f.entities).map(s => singular(String(s).toLowerCase())) : null;
   const occ   = f.occasion ? [].concat(f.occasion).map(s => String(s).toLowerCase()) : null;
   const who   = f.person ? [].concat(f.person).map(s => String(s).toLowerCase()) : null;
+  if (who) for (const name of who){
+    if (FACES.people.filter(p => personKey(p.name) === personKey(name)).length > 1)
+      throw new Error("More than one person is named “" + name + "”. Choose a person in the People filter.");
+  }
+  const personPhotos = new Map([...(f.person_ids || []), ...(f.exclude_person_ids || [])].map(id => {
+    const p = findPerson(id);
+    return [id, new Set((p?.face_ids || []).map(fid => FACES.faces.get(fid)?.photo_id).filter(Boolean))];
+  }));
   for (const r of IDX.records.values()){
     if (r.deleted || r.status === "error" || r.probe) continue;
     if (from && (!r.date_taken || r.date_taken.slice(0,10) < from)) continue;
@@ -38,8 +92,11 @@ function candidateSet(f){
     /* EVERY named person must appear, so "Anna and Ben" means both of them. */
     if (who){
       const names = faceNamesFor(r.id).map(n => n.toLowerCase());
-      if (!who.every(w => names.some(n => n.includes(w)))) continue;
+      if (!who.every(w => names.some(n => personKey(n) === personKey(w)))) continue;
     }
+    const present = pid => personPhotos.get(pid)?.has(r.id);
+    if (f.person_ids && !f.person_ids.every(present)) continue;
+    if (f.exclude_person_ids && f.exclude_person_ids.some(present)) continue;
     if (f.text){
       const needle = String(f.text).toLowerCase();
       if (!textOf(r).toLowerCase().includes(needle)) continue;
@@ -128,7 +185,13 @@ function rrf(maps, k = 60){
 }
 
 async function searchPhotos(args){
+  if (IDX.dir) await ensureFaceNames();
+  const parsed = peopleSearchArgs(args);
+  args = parsed.args;
   const limit = Math.min(60, Math.max(1, args.limit || 12));
+  const offset = Math.max(0, Math.trunc(Number(args.offset) || 0));
+  const page = results => ({ used, applied:parsed.applied, total:results.length,
+    results:results.slice(offset, offset + limit) });
   const cands = candidateSet(args);
   const allowed = new Set(cands.map(r => r.id));
   const q = (args.query || "").trim();
@@ -138,7 +201,7 @@ async function searchPhotos(args){
     // No text: newest first within the filters.
     const sorted = cands.sort((a,b) => (b.date_taken || "").localeCompare(a.date_taken || ""));
     used.push("filters only, newest first");
-    return { used, results: sorted.slice(0, limit).map(r => ({ rec:r, score:null })) };
+    return page(sorted.map(r => ({ rec:r, score:null })));
   }
   /* Exact phrases first: they are a filter, not a ranking signal. */
   const phrases = phrasesIn(q);
@@ -151,13 +214,13 @@ async function searchPhotos(args){
       if (phrases.every(ph => hay.includes(ph))) pool.add(id);
     }
     used.push(phrases.length + " exact phrase(s) matched " + pool.size + " photo(s)");
-    if (!pool.size) return { used, results: [] };
+    if (!pool.size) return page([]);
   }
   const bare = phrases.length ? stripPhrases(q) : q;
   if (!bare){
     const recs = [...pool].map(id => IDX.records.get(id)).filter(Boolean)
       .sort((a,b) => (b.date_taken || "").localeCompare(a.date_taken || ""));
-    return { used, results: recs.slice(0, limit).map(r => ({ rec:r, score:null })) };
+    return page(recs.map(r => ({ rec:r, score:null })));
   }
   const terms = tokenise(bare);
   let kw = bm25Scores(terms, pool);
@@ -183,7 +246,7 @@ async function searchPhotos(args){
     kw = kept;
   } else used.push("BM25 over " + pool.size + " candidates");
   let vecMap = new Map();
-  if (S.roles.embed && IDX.vec.ids.length){
+  if (args.semantic !== false && S.roles.embed && IDX.vec.ids.length){
     try {
       /* Vectors made by a different model are meaningless against this query,
          and a different dimension silently produces NaN scores that read as
@@ -193,7 +256,7 @@ async function searchPhotos(args){
           + S.roles.embed + " is selected — skipping semantic search until you re-embed");
         throw new Error("embedding model mismatch");
       }
-      const qv = Float32Array.from(await embed(S.roles.embed, bare, args.signal, 45000));
+      const qv = Float32Array.from(await embed(S.roles.embed, bare, args.signal, args.embeddingTimeoutMs || 5000));
       if (IDX.vec.dim && qv.length !== IDX.vec.dim)
         throw new Error("this model returns " + qv.length + "-dim vectors but the index "
           + "holds " + IDX.vec.dim + "-dim — re-embed before searching");
@@ -206,19 +269,19 @@ async function searchPhotos(args){
       used.push("cosine over " + raw.size + " embeddings, " + vecMap.size
         + " above the " + floor + " relevance floor");
     } catch (e){ used.push("embeddings unavailable (" + (e.message || e) + "), keywords only"); }
-  } else used.push("no embedding model — keyword matching only");
+  } else used.push(args.semantic === false ? "keyword matching (meaning-based search is off)"
+    : "no embedding model — keyword matching only");
 
   if (!kw.size && !vecMap.size)
-    return { used: used.concat("nothing passed either matcher"), results: [] };
+    { used.push("nothing passed either matcher"); return page([]); }
 
   const maps = [kw];
   if (vecMap.size) maps.push(vecMap);
   fused = maps.length > 1 ? rrf(maps) : kw;
   if (maps.length > 1) used.push("merged with reciprocal rank fusion");
 
-  const ranked = [...fused.entries()].sort((a,b) => b[1] - a[1]).slice(0, limit);
-  return { used, results: ranked.map(([id, score]) => ({ rec: IDX.records.get(id), score }))
-    .filter(x => x.rec) };
+  const ranked = [...fused.entries()].sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return page(ranked.map(([id, score]) => ({ rec: IDX.records.get(id), score })).filter(x => x.rec));
 }
 
 function findSimilar(id, limit){
@@ -245,6 +308,7 @@ function compact(r, score){
     when: r.when_phrase || null,
     place: r.place || null,
     type: r.image_type,
+    named_people: faceNamesFor(r.id),
     caption: (r.caption || "").slice(0,150),
     text: r.text_chars ? textOf(r).slice(0,180) : null,
     score: score == null ? null : +score.toFixed(4)

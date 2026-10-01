@@ -3,6 +3,7 @@ const PORT = 9222;
 const target = process.argv[2];
 const expr = process.argv[3] || "window.__selftest";
 const maxMs = +(process.argv[4] || 180000);
+const repeats = Math.max(1, Math.min(5, +(process.argv[5] || 2)));
 
 async function http(path){
   const r = await fetch(`http://127.0.0.1:${PORT}${path}`);
@@ -45,19 +46,30 @@ const send = (method, params) => new Promise(res => {
 await new Promise(res => ws.onopen = res);
 await send("Runtime.enable");
 await send("Page.enable");
-await send("Page.navigate", { url: target });
+const testUrl = new URL(target);
+testUrl.searchParams.set("testRun", String(Date.now()));
+await send("Page.navigate", { url: testUrl.href });
 
-const t0 = Date.now();
-let result = null;
-while (Date.now() - t0 < maxMs){
-  await sleep(1000);
-  const r = await send("Runtime.evaluate",
-    { expression: `JSON.stringify(${expr} || null)`, returnByValue: true, awaitPromise: false });
-  const v = r.result?.result?.value;
-  if (v && v !== "null"){ result = JSON.parse(v); break; }
+for (let run = 1; run <= repeats; run++){
+  if (run > 1) await send("Runtime.evaluate", {
+    expression:"window.__selftest = null; setTimeout(() => selfTest(), 0); true", returnByValue:true });
+  const t0 = Date.now();
+  let result = null;
+  while (Date.now() - t0 < maxMs){
+    await sleep(1000);
+    const r = await Promise.race([send("Runtime.evaluate",
+      { expression: `JSON.stringify(${expr} || null)`, returnByValue:true, awaitPromise:false }),
+      sleep(20000).then(() => { throw new Error("Renderer did not answer; last log: " + logs.at(-1)); })]);
+    const v = r.result?.result?.value;
+    if (v && v !== "null"){ result = JSON.parse(v); break; }
+  }
+  if (!result){ console.error("TIMEOUT; last log: " + logs.at(-1)); process.exit(1); }
+  for (const line of result.lines || []) if (line.startsWith("FAIL")) console.error(line);
+  const exceptions = logs.filter(l => l.startsWith("EXCEPTION"));
+  for (const line of exceptions) console.error(line);
+  console.log(`Run ${run}/${repeats}: ${result.pass} passed, ${result.fail} failed`);
+  if (result.fail || exceptions.length) process.exit(1);
+  logs.length = 0;
 }
-if (logs.length) console.log("--- console ---\n" + logs.join("\n") + "\n---------------");
-if (!result){ console.error("TIMEOUT after " + ((Date.now()-t0)/1000).toFixed(0) + "s"); process.exit(1); }
-console.log(result.lines ? result.lines.join("\n") : JSON.stringify(result, null, 1));
-if (result.pass != null) console.log(`\n==> ${result.pass} passed, ${result.fail} failed`);
-process.exit(result.fail ? 1 : 0);
+ws.close();
+process.exit(0);

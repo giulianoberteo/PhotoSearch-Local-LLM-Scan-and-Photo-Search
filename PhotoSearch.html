@@ -175,6 +175,7 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
 <header>
   <h1>PhotoSearch</h1>
   <nav role="tablist">
+    <button role="tab" data-tab="search" aria-selected="false">Search</button>
     <button role="tab" data-tab="chat" aria-selected="false">Chat</button>
     <button role="tab" data-tab="timeline" aria-selected="false">Timeline</button>
     <button role="tab" data-tab="people" aria-selected="false">People</button>
@@ -187,6 +188,39 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
 
 <main>
   <div id="browserWarn" class="note" hidden></div>
+
+  <section id="tab-search" hidden>
+    <div class="card">
+      <h2>Find your photos</h2>
+      <form id="photoSearchForm">
+        <label for="photoQuery">Search by person, subject or words in a picture</label>
+        <div class="row">
+          <input id="photoQuery" type="search" placeholder="Anna and Ben at the beach" style="flex:1;min-width:180px">
+          <button class="btn" id="photoSearchSubmit" type="submit">Search</button>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <div><label for="photoPlace">Place</label><input id="photoPlace" placeholder="e.g. Sicily"></div>
+          <div><label for="photoFrom">From</label><input id="photoFrom" type="date"></div>
+          <div><label for="photoTo">To</label><input id="photoTo" type="date"></div>
+        </div>
+        <fieldset style="border:1px solid var(--line);border-radius:8px;margin:12px 0;padding:10px">
+          <legend>People — everyone selected must appear</legend>
+          <div id="photoPeople" class="row"><span class="hint">Connect your index to see named people.</span></div>
+        </fieldset>
+        <div class="row">
+          <label class="switch"><input id="photoInterpret" type="checkbox" checked>Recognise names in my search</label>
+          <label class="switch"><input id="photoSemantic" type="checkbox">Include meaning-based matches</label>
+          <button class="btn sec" id="photoSearchClear" type="button">Clear filters</button>
+        </div>
+      </form>
+      <p class="hint">People, dates and keywords work without a model server. Meaning-based search uses your configured embedding server. Put literal text in double quotes.</p>
+      <div id="photoSearchStatus" role="status" aria-live="polite"></div>
+      <div id="photoSearchApplied" class="row" style="margin:10px 0"></div>
+      <div id="photoSearchResults"></div>
+      <div id="photoSearchPages" class="row" style="margin-top:12px"></div>
+      <details id="photoSearchDetails" hidden><summary>How these results were found</summary><div id="photoSearchHow" class="hint"></div></details>
+    </div>
+  </section>
 
   <section id="tab-scan" hidden>
     <div class="card">
@@ -307,6 +341,12 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
       <div class="hint" id="faceNote">Faces are grouped by how alike they look.
         Nothing is named until you name it.</div>
       <div id="faceOut"></div>
+      <div class="row" style="margin:12px 0">
+        <button class="btn sec" id="peopleUndo" disabled>Undo last people edit</button>
+        <label for="peopleFilter">Find a group</label>
+        <input type="search" id="peopleFilter" placeholder="Type a name…">
+      </div>
+      <div id="peopleReview" aria-live="polite"></div>
       <div id="peopleBox"><span class="dim">Press "Find faces" to begin.</span></div>
     </div>
   </section>
@@ -644,7 +684,7 @@ async function idbGet(k){ const db = await idb(); return new Promise((res, rej) 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x =>
     x.setAttribute("aria-selected", String(x === b)));
-  ["chat","timeline","people","scan","settings"].forEach(t =>
+  ["search","chat","timeline","people","scan","settings"].forEach(t =>
     $("#tab-" + t).hidden = (t !== b.dataset.tab));
   /* The timeline reads the whole index, so it is built on first view rather
      than at boot -- opening the app must not wait for it. */
@@ -652,6 +692,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
     onTimelineShown();
   if (b.dataset.tab === "people" && typeof onPeopleShown === "function")
     onPeopleShown();
+  if (b.dataset.tab === "search" && typeof onSearchShown === "function") onSearchShown();
 });
 
 /* ================= browser gate ================= */
@@ -1847,6 +1888,11 @@ const IDX = {
   vec:{ dim:0, ids:[], rows:null, index:new Map() },
   loaded:false, checkpoint:null, lastConfig:null
 };
+let libraryMaintenance = 0;
+async function withLibraryMaintenance(fn){
+  libraryMaintenance++;
+  try { return await fn(); } finally { libraryMaintenance--; }
+}
 /* Heavy fields are stripped before a record enters memory, so a 50k-photo
    library costs kilobytes per record rather than tens of kilobytes. */
 const HEAVY = ["raw_model_json","embedding"];
@@ -1888,6 +1934,14 @@ async function writeBinary(handle, buf){
   const w = await handle.createWritable();
   await w.write(buf); await w.close();
 }
+async function writeVerifiedText(dir, name, text){
+  const fh = await dir.getFileHandle(name, { create:true });
+  const w = await fh.createWritable();
+  try { await w.write(text); await w.close(); }
+  catch (e){ try { await w.abort(); } catch {} throw e; }
+  if (await (await fh.getFile()).text() !== text)
+    throw new Error(name + " failed read-back verification; the change was not safely saved.");
+}
 async function readTextIfAny(dir, name){
   try { return await (await (await dir.getFileHandle(name)).getFile()).text(); }
   catch { return null; }
@@ -1915,7 +1969,18 @@ async function ensureIndex(onPhase, opts){
      every deadline in the app is sized from what it costs. Measuring work that
      has to happen anyway keeps the probe free. */
   const tOpen = performance.now();
-  IDX.dir = await parent.getDirectoryHandle(".photoindex", { create:true });
+  const nextDir = await parent.getDirectoryHandle(".photoindex", { create:true });
+  if (IDX.dir){
+    let same;
+    try { same = await IDX.dir.isSameEntry(nextDir); }
+    catch (e){
+      // Decorated handles (including the fault harness) unwrap at their boundary.
+      if (!(e instanceof TypeError)) throw e;
+      same = await nextDir.isSameEntry(IDX.dir);
+    }
+    if (!same) resetFaceState();
+  }
+  IDX.dir = nextDir;
   noteStorageTiming("openMs", performance.now() - tOpen);
   IDX.thumbs = null;
   /* thumbs/ is NOT opened here. It holds one file per photo -- 6,568 of them on
@@ -2299,6 +2364,79 @@ async function clearCheckpoint(){
    backed up — they are the bulk of the index and can be rebuilt by re-decoding
    the originals, which costs no model calls at all. */
 const BACKUP_FILES = ["records.jsonl", "vectors.bin", "vectors.json", "config.json"];
+const FACE_BACKUP_FILES = ["faces.jsonl", "facevecs.bin", "facevecs.json", "people.json",
+  "people.previous.json"];
+
+async function optionalFile(dir, name){
+  try { return await (await dir.getFileHandle(name)).getFile(); }
+  catch (e){ if (isNotFound(e)) return null; throw e; }
+}
+async function optionalDir(dir, name){
+  try { return await dir.getDirectoryHandle(name); }
+  catch (e){ if (isNotFound(e)) return null; throw e; }
+}
+async function fileDigest(file){
+  const hash = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return [...new Uint8Array(hash)].map(v => v.toString(16).padStart(2,"0")).join("");
+}
+// Face crops are regenerable. Names, corrections, geometry and vectors are not
+// cheap to reconstruct and belong in every new backup, including safety copies.
+async function copyFaceData(from, to, onProgress){
+  const source = await optionalDir(from, "faces");
+  if (!source) return { present:false, files:[] };
+  const dest = await to.getDirectoryHandle("faces", { create:true });
+  const files = [];
+  for (const name of FACE_BACKUP_FILES){
+    if (onProgress) await onProgress("Copying faces/" + name + "…");
+    const r = await copyInto(source, dest, name);
+    if (r){
+      if (!r.ok) throw new Error("Incomplete face backup: " + name);
+      const a = await optionalFile(source, name), b = await optionalFile(dest, name);
+      const digest = await fileDigest(a);
+      if (digest !== await fileDigest(b)) throw new Error("Face backup checksum mismatch: " + name);
+      files.push({ ...r, sha256:digest });
+    }
+  }
+  const people = await optionalFile(dest, "people.json");
+  if (people) parsePeople(await people.text());
+  const rows = await optionalFile(dest, "faces.jsonl");
+  if (rows){
+    const check = await verifyRecordsFile(await dest.getFileHandle("faces.jsonl"));
+    if (check.bad) throw new Error("Face records contain unreadable lines; the backup is incomplete.");
+  }
+  await verifyFaceVectorFiles(dest);
+  return { present:true, files, crops:"excluded; regenerate from originals" };
+}
+async function verifyFaceVectorFiles(dir){
+  const meta = await optionalFile(dir, "facevecs.json");
+  const bin = await optionalFile(dir, "facevecs.bin");
+  if (!!meta !== !!bin) throw new Error("Face vectors are incomplete; both data and mapping are required.");
+  if (!meta) return;
+  const d = JSON.parse(await meta.text());
+  if (!Number.isInteger(d.dim) || d.dim <= 0 || !Array.isArray(d.ids)
+      || bin.size !== d.ids.length * d.dim * 4)
+    throw new Error("Face vector data does not match its mapping.");
+}
+async function verifyFaceBackup(src, meta){
+  if (!meta) return; // Older backups predate faces; restoring them preserves live faces.
+  if (!meta.present) return;
+  if (!Array.isArray(meta.files)) throw new Error("Face backup manifest is incomplete.");
+  const dir = await src.getDirectoryHandle("faces");
+  const listed = new Set(meta.files.map(f => f.name));
+  if (listed.size !== meta.files.length) throw new Error("Duplicate files in face backup manifest.");
+  for (const name of FACE_BACKUP_FILES)
+    if (await optionalFile(dir, name) && !listed.has(name))
+      throw new Error("Face backup manifest omits " + name);
+  for (const f of meta.files){
+    if (!FACE_BACKUP_FILES.includes(f.name)) throw new Error("Unexpected face backup file.");
+    const file = await optionalFile(dir, f.name);
+    if (!file || file.size !== f.bytes || await fileDigest(file) !== f.sha256)
+      throw new Error("Face backup is damaged: " + f.name + ". Nothing has been restored.");
+  }
+  const people = await optionalFile(dir, "people.json");
+  if (people) parsePeople(await people.text());
+  await verifyFaceVectorFiles(dir);
+}
 
 async function backupsDir(){
   return IDX.dir.getDirectoryHandle("backups", { create:true });
@@ -2323,7 +2461,7 @@ const COPY_CHUNK = 4 * 1024 * 1024;
 async function copyInto(srcDir, destDir, name, onProgress){
   let src;
   try { src = await (await srcDir.getFileHandle(name)).getFile(); }
-  catch { return null; }                       // absent is fine (no vectors yet)
+  catch (e){ if (isNotFound(e)) return null; throw e; }
   const fh = await destDir.getFileHandle(name, { create:true });
   const w = await fh.createWritable();
   try {
@@ -2372,9 +2510,8 @@ async function listBackups(){
       try {
         meta = JSON.parse(await (await (await h.getFileHandle("manifest.json")).getFile()).text());
       } catch {}
-      for await (const [, fh] of h.entries()){
-        try { bytes += (await fh.getFile()).size; } catch {}
-      }
+      if (meta) bytes = [...(meta.files || []), ...(meta.faces?.files || [])]
+        .reduce((n, f) => n + (f.bytes || 0), 0);
       out.push({ name, meta, bytes, handle:h });
     }
   } catch {}
@@ -2382,7 +2519,8 @@ async function listBackups(){
 }
 
 async function pruneBackups(keep){
-  const all = await indexOp("listing backups", () => listBackups(), { cost: 8 });
+  const all = (await indexOp("listing backups", () => listBackups(), { cost: 8 }))
+    .filter(b => b.meta && b.meta.records && !b.meta.records.bad);
   const dir = await backupsDir();
   let removed = 0;
   for (const b of all.slice(Math.max(1, keep))){
@@ -2407,7 +2545,13 @@ async function verifyRecordsFile(fileHandle){
   return { lines, bad, unique: ids.size };
 }
 
-async function backupIndex(reason, onProgress){
+async function backupIndex(reason, onProgress, options = {}){
+  return withLibraryMaintenance(async () => {
+    await peopleEditChain; await ioChain;
+    return makeIndexBackup(reason, onProgress, options);
+  });
+}
+async function makeIndexBackup(reason, onProgress, options){
   const say = async m => { if (onProgress) await onProgress(m); };
   /* Deadlines are generous because the storage may legitimately be slow: a
      sleeping share needs ~24s just to answer, and copies run at a few hundred
@@ -2423,7 +2567,7 @@ async function backupIndex(reason, onProgress){
   const dir = await indexOp("opening backups/", () => backupsDir(),
     { onPhase: say, cost: 4 });
   await sweepSwapFiles(dir);
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID().slice(0,8);
   await say("Creating " + stamp + "…");
   const dest = await indexOp("creating the backup folder",
     () => dir.getDirectoryHandle(stamp, { create:true }), { onPhase: say, cost: 4 });
@@ -2453,6 +2597,8 @@ async function backupIndex(reason, onProgress){
       }), { onPhase: say, timeoutMs: 1800000 });
     if (r){ copied.push(r); doneBytes = before + r.bytes; }
   }
+  const faces = await indexOp("backing up people and faces",
+    () => copyFaceData(IDX.dir, dest, say), { timeoutMs:1800000, onPhase:say });
   await say("Verifying…");
   let check = null;
   try { check = await verifyRecordsFile(await dest.getFileHandle("records.jsonl")); }
@@ -2461,6 +2607,7 @@ async function backupIndex(reason, onProgress){
     created_at: new Date().toISOString(),
     reason: reason || "manual",
     files: copied,
+    version:2, faces,
     records: check,
     photo_root: (S.dirHandle && S.dirHandle.name) || null,
     schema_hash: SCHEMA_HASH(), prompt_hash: PROMPT_HASH(),
@@ -2486,9 +2633,9 @@ async function backupIndex(reason, onProgress){
     throw new Error("backup failed verification (" + why + ") and was removed, "
       + "so it cannot displace a good one");
   }
-  const pruned = await pruneBackups(S.backup.keep);
+  const pruned = options.noPrune ? 0 : await pruneBackups(S.backup.keep);
   return { stamp, manifest, pruned,
-    bytes: copied.reduce((a, c) => a + c.bytes, 0) };
+    bytes: [...copied, ...faces.files].reduce((a, c) => a + c.bytes, 0) };
 }
 
 /* ---- relocating the index ----
@@ -2517,6 +2664,7 @@ async function moveIndexTo(destParent, onProgress){
     const r = await withDeadline("copying " + name, 900000, copyInto(from, to, name));
     if (r) moved.push(r);
   }
+  await copyFaceData(from, to, say);
   // the cached place-name data is small and tedious to re-fetch
   try {
     const gFrom = await from.getDirectoryHandle("geo");
@@ -2552,10 +2700,17 @@ async function moveIndexTo(destParent, onProgress){
 /* Restoring overwrites the live index, so take a safety copy of the CURRENT
    state first — otherwise a mistaken restore is unrecoverable. */
 async function restoreBackup(name, onProgress){
+  if (RUN.active || libraryMaintenance) throw new Error("Wait for the current library operation before restoring.");
+  return withLibraryMaintenance(() => restoreIndexBackup(name, onProgress));
+}
+async function restoreIndexBackup(name, onProgress){
   const say = async m => { if (onProgress) await onProgress(m); };
   await ensureIndex(null, { write:false });
   const dir = await backupsDir();
   const src = await dir.getDirectoryHandle(name);
+  const manifestFile = await optionalFile(src, "manifest.json");
+  const manifest = manifestFile ? JSON.parse(await manifestFile.text()) : null;
+  await verifyFaceBackup(src, manifest && manifest.faces);
   /* Verify the SOURCE before it overwrites live data. Restoring an unreadable
      backup over a working index is the worst outcome available here. */
   await say("Checking the backup…");
@@ -2567,7 +2722,8 @@ async function restoreBackup(name, onProgress){
     throw new Error("that backup has " + srcCheck.bad + " unreadable lines of "
       + srcCheck.lines + " — refusing to restore it");
   await say("Saving the current index first…");
-  await backupIndex("pre-restore safety copy", onProgress);
+  // Pruning here could delete the very backup the user selected (keep=1).
+  const safety = await backupIndex("pre-restore safety copy", onProgress, { noPrune:true });
   for (const f of BACKUP_FILES){
     await say("Restoring " + f + "…");
     const r = await withDeadline("restoring " + f, 1800000, copyInto(src, IDX.dir, f,
@@ -2575,6 +2731,27 @@ async function restoreBackup(name, onProgress){
         + Math.round(got / Math.max(1, size) * 100) + "%")));
     if (r && !r.ok) throw new Error("restore of " + f + " did not complete");
   }
+  if (manifest && manifest.faces){
+    const faceMeta = manifest.faces;
+    if (faceMeta.present){
+      const from = await src.getDirectoryHandle("faces");
+      const to = await IDX.dir.getDirectoryHandle("faces", { create:true });
+      const names = new Set(faceMeta.files.map(f => f.name));
+      for (const f of FACE_BACKUP_FILES){
+        if (names.has(f)){
+          await say("Restoring faces/" + f + "…");
+          const r = await copyInto(from, to, f);
+          if (!r || !r.ok) throw new Error("Face restore failed. Recover from safety copy " + safety.stamp);
+        } else { try { await to.removeEntry(f); } catch (e){ if (!isNotFound(e)) throw e; } }
+      }
+      await verifyFaceBackup(IDX.dir, faceMeta);
+    } else {
+      // A new-format backup explicitly records the absence of face data.
+      try { await IDX.dir.removeEntry("faces", { recursive:true }); }
+      catch (e){ if (!isNotFound(e)) throw e; }
+    }
+  }
+  resetFaceState();
   IDX.lastConfig = null;              // the restored config must be re-read
   IDX.thumbs = null;
   for (const [, u] of thumbCache) { try { URL.revokeObjectURL(u); } catch {} }
@@ -2582,6 +2759,7 @@ async function restoreBackup(name, onProgress){
   IDX.loaded = false;
   await loadRecords();
   await loadVectors();
+  await ensureFaceNames();
   rebuildDerived();
   return { records: IDX.records.size, vectors: IDX.vec.ids.length };
 }
@@ -3415,6 +3593,52 @@ function phrasesIn(q){
 }
 const stripPhrases = q => String(q || "").replace(/"[^"]*"/g, " ").trim();
 
+function personKey(s){ return String(s || "").normalize("NFKC").toLocaleLowerCase().trim(); }
+function escapeSearchRegex(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function resolvePersonName(name){
+  const found = FACES.people.filter(p => personKey(p.name) === personKey(name));
+  if (!found.length) throw new Error("No person named “" + name + "”. Name them in People first.");
+  if (found.length > 1) throw new Error("More than one person is named “" + name + "”. Choose a person in the People filter.");
+  return found[0];
+}
+/* Interpret only names supplied by the user. Captions and the language model
+   never supply identities. Quoted text remains literal, including a name. */
+function peopleSearchArgs(input){
+  const args = { ...input }, applied = [];
+  let q = String(args.query || "");
+  const ids = new Set([].concat(args.person_ids || []));
+  const excluded = new Set([].concat(args.exclude_person_ids || []));
+  q = q.replace(/\b(?:person|people):"([^"]+)"/gi, (_, name) => {
+    const p = resolvePersonName(name); ids.add(p.id); return " ";
+  });
+  if (args.interpret_people !== false){
+    const parts = q.split(/("[^"]*")/g);
+    const names = [...new Set(FACES.people.map(p => p.name).filter(Boolean))]
+      .sort((a,b) => b.length - a.length);
+    for (let i = 0; i < parts.length; i += 2){
+      for (const name of names){
+        const rx = new RegExp("(^|[^\\p{L}\\p{N}_])(?:(without|except|not)\\s+)?("
+          + escapeSearchRegex(name) + ")(?=$|[^\\p{L}\\p{N}_])", "giu");
+        parts[i] = parts[i].replace(rx, (_, before, negative) => {
+          const p = resolvePersonName(name);
+          (negative ? excluded : ids).add(p.id); return before + " ";
+        });
+      }
+    }
+    q = parts.join("");
+  }
+  if (ids.size || excluded.size){
+    q = q.split(/("[^"]*")/g).map((part, i) => i % 2 ? part : part.replace(
+      /\b(show|find|me|my|photos?|pictures?|images?|please|and|with|of|the|at|in|on|from)\b/gi, " ")
+      .replace(/\s+/g, " ")).join("").trim();
+  }
+  args.query = q;
+  args.person_ids = [...ids]; args.exclude_person_ids = [...excluded];
+  for (const id of ids) applied.push("With " + (findPerson(id)?.name || "unknown person"));
+  for (const id of excluded) applied.push("Without " + (findPerson(id)?.name || "unknown person"));
+  return { args, applied };
+}
+
 function candidateSet(f){
   const out = [];
   const from = f.date_from ? String(f.date_from) : null;
@@ -3424,6 +3648,14 @@ function candidateSet(f){
   const ents  = f.entities ? [].concat(f.entities).map(s => singular(String(s).toLowerCase())) : null;
   const occ   = f.occasion ? [].concat(f.occasion).map(s => String(s).toLowerCase()) : null;
   const who   = f.person ? [].concat(f.person).map(s => String(s).toLowerCase()) : null;
+  if (who) for (const name of who){
+    if (FACES.people.filter(p => personKey(p.name) === personKey(name)).length > 1)
+      throw new Error("More than one person is named “" + name + "”. Choose a person in the People filter.");
+  }
+  const personPhotos = new Map([...(f.person_ids || []), ...(f.exclude_person_ids || [])].map(id => {
+    const p = findPerson(id);
+    return [id, new Set((p?.face_ids || []).map(fid => FACES.faces.get(fid)?.photo_id).filter(Boolean))];
+  }));
   for (const r of IDX.records.values()){
     if (r.deleted || r.status === "error" || r.probe) continue;
     if (from && (!r.date_taken || r.date_taken.slice(0,10) < from)) continue;
@@ -3434,8 +3666,11 @@ function candidateSet(f){
     /* EVERY named person must appear, so "Anna and Ben" means both of them. */
     if (who){
       const names = faceNamesFor(r.id).map(n => n.toLowerCase());
-      if (!who.every(w => names.some(n => n.includes(w)))) continue;
+      if (!who.every(w => names.some(n => personKey(n) === personKey(w)))) continue;
     }
+    const present = pid => personPhotos.get(pid)?.has(r.id);
+    if (f.person_ids && !f.person_ids.every(present)) continue;
+    if (f.exclude_person_ids && f.exclude_person_ids.some(present)) continue;
     if (f.text){
       const needle = String(f.text).toLowerCase();
       if (!textOf(r).toLowerCase().includes(needle)) continue;
@@ -3524,7 +3759,13 @@ function rrf(maps, k = 60){
 }
 
 async function searchPhotos(args){
+  if (IDX.dir) await ensureFaceNames();
+  const parsed = peopleSearchArgs(args);
+  args = parsed.args;
   const limit = Math.min(60, Math.max(1, args.limit || 12));
+  const offset = Math.max(0, Math.trunc(Number(args.offset) || 0));
+  const page = results => ({ used, applied:parsed.applied, total:results.length,
+    results:results.slice(offset, offset + limit) });
   const cands = candidateSet(args);
   const allowed = new Set(cands.map(r => r.id));
   const q = (args.query || "").trim();
@@ -3534,7 +3775,7 @@ async function searchPhotos(args){
     // No text: newest first within the filters.
     const sorted = cands.sort((a,b) => (b.date_taken || "").localeCompare(a.date_taken || ""));
     used.push("filters only, newest first");
-    return { used, results: sorted.slice(0, limit).map(r => ({ rec:r, score:null })) };
+    return page(sorted.map(r => ({ rec:r, score:null })));
   }
   /* Exact phrases first: they are a filter, not a ranking signal. */
   const phrases = phrasesIn(q);
@@ -3547,13 +3788,13 @@ async function searchPhotos(args){
       if (phrases.every(ph => hay.includes(ph))) pool.add(id);
     }
     used.push(phrases.length + " exact phrase(s) matched " + pool.size + " photo(s)");
-    if (!pool.size) return { used, results: [] };
+    if (!pool.size) return page([]);
   }
   const bare = phrases.length ? stripPhrases(q) : q;
   if (!bare){
     const recs = [...pool].map(id => IDX.records.get(id)).filter(Boolean)
       .sort((a,b) => (b.date_taken || "").localeCompare(a.date_taken || ""));
-    return { used, results: recs.slice(0, limit).map(r => ({ rec:r, score:null })) };
+    return page(recs.map(r => ({ rec:r, score:null })));
   }
   const terms = tokenise(bare);
   let kw = bm25Scores(terms, pool);
@@ -3579,7 +3820,7 @@ async function searchPhotos(args){
     kw = kept;
   } else used.push("BM25 over " + pool.size + " candidates");
   let vecMap = new Map();
-  if (S.roles.embed && IDX.vec.ids.length){
+  if (args.semantic !== false && S.roles.embed && IDX.vec.ids.length){
     try {
       /* Vectors made by a different model are meaningless against this query,
          and a different dimension silently produces NaN scores that read as
@@ -3589,7 +3830,7 @@ async function searchPhotos(args){
           + S.roles.embed + " is selected — skipping semantic search until you re-embed");
         throw new Error("embedding model mismatch");
       }
-      const qv = Float32Array.from(await embed(S.roles.embed, bare, args.signal, 45000));
+      const qv = Float32Array.from(await embed(S.roles.embed, bare, args.signal, args.embeddingTimeoutMs || 5000));
       if (IDX.vec.dim && qv.length !== IDX.vec.dim)
         throw new Error("this model returns " + qv.length + "-dim vectors but the index "
           + "holds " + IDX.vec.dim + "-dim — re-embed before searching");
@@ -3602,19 +3843,19 @@ async function searchPhotos(args){
       used.push("cosine over " + raw.size + " embeddings, " + vecMap.size
         + " above the " + floor + " relevance floor");
     } catch (e){ used.push("embeddings unavailable (" + (e.message || e) + "), keywords only"); }
-  } else used.push("no embedding model — keyword matching only");
+  } else used.push(args.semantic === false ? "keyword matching (meaning-based search is off)"
+    : "no embedding model — keyword matching only");
 
   if (!kw.size && !vecMap.size)
-    return { used: used.concat("nothing passed either matcher"), results: [] };
+    { used.push("nothing passed either matcher"); return page([]); }
 
   const maps = [kw];
   if (vecMap.size) maps.push(vecMap);
   fused = maps.length > 1 ? rrf(maps) : kw;
   if (maps.length > 1) used.push("merged with reciprocal rank fusion");
 
-  const ranked = [...fused.entries()].sort((a,b) => b[1] - a[1]).slice(0, limit);
-  return { used, results: ranked.map(([id, score]) => ({ rec: IDX.records.get(id), score }))
-    .filter(x => x.rec) };
+  const ranked = [...fused.entries()].sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return page(ranked.map(([id, score]) => ({ rec: IDX.records.get(id), score })).filter(x => x.rec));
 }
 
 function findSimilar(id, limit){
@@ -3641,6 +3882,7 @@ function compact(r, score){
     when: r.when_phrase || null,
     place: r.place || null,
     type: r.image_type,
+    named_people: faceNamesFor(r.id),
     caption: (r.caption || "").slice(0,150),
     text: r.text_chars ? textOf(r).slice(0,180) : null,
     score: score == null ? null : +score.toFixed(4)
@@ -3903,6 +4145,7 @@ async function preflightScan(){
 }
 
 async function runScan(files, mode, resuming){
+  if (libraryMaintenance) throw new Error("Wait for the backup or restore before scanning.");
   if (!files.length){ toast("Nothing to do."); return; }
 
   /* Everything between pressing Scan and the first photo can take MINUTES on a
@@ -4386,6 +4629,9 @@ async function planFaceRefine(onPhase, signal){
 }
 
 async function runFaceRefine(files){
+  if (libraryMaintenance) throw new Error("Wait for the backup or restore before improving faces.");
+  if (FACES.separations.length || FACES.people.some(p => p.confirmed_ids || p.rejected_ids))
+    throw new Error("Your saved corrections need a staged migration before re-detection. Current names and faces are preserved.");
   if (!files.length){ toast("Nothing to improve."); return null; }
   RUN.active = true; RUN.paused = false; RUN.stop = false;
   RUN.abort = new AbortController();
@@ -4445,6 +4691,7 @@ async function runFaceRefine(files){
 }
 
 async function runFaceScan(files){
+  if (libraryMaintenance) throw new Error("Wait for the backup or restore before scanning faces.");
   if (!files.length){ toast("No photos left to look at."); return null; }
   RUN.active = true; RUN.paused = false; RUN.stop = false;
   RUN.abort = new AbortController();
@@ -5453,12 +5700,12 @@ async function runTool(name, args){
   switch (name){
     case "search_photos": {
       const r = await searchPhotos({ ...args, signal: CHAT.abort && CHAT.abort.signal });
-      return { how:r.used, count:r.results.length,
+      return { how:r.used, filters:r.applied, count:r.results.length, total:r.total,
         results:r.results.map(x => compact(x.rec, x.score)) };
     }
     case "filter_photos": {
       const r = await searchPhotos({ ...args, query:"" });
-      return { how:r.used, count:r.results.length,
+      return { how:r.used, filters:r.applied, count:r.results.length, total:r.total,
         results:r.results.map(x => compact(x.rec, null)) };
     }
     case "list_people": {
@@ -6010,8 +6257,8 @@ async function onTimelineShown(force){
 
    WHAT THIS DOES: finds face rectangles, turns each into a vector, and groups
    vectors that are close together. WHAT IT NEVER DOES: decide who anyone is.
-   A group has no name until you type one, and nothing is ever looked up,
-   inferred or suggested.
+   A group has no name until you type one. Later matches can suggest one of
+   those user-supplied names for review; no external identity is looked up.
 
    Age, gender, emotion, ethnicity: not stored, not displayed, not used for
    anything. The emotion, iris, antispoof and liveness models are switched off
@@ -6033,12 +6280,23 @@ const FACES = {
   clusters: [],                // [{ id, face_ids }]           -- unnamed
   byPhoto: new Map(),          // photo_id -> [face_id]
   namesByPhoto: new Map(),     // photo_id -> [name]
+  separations: [],             // user decisions: faces on opposite sides must stay apart
+  review: [],                  // plausible, ambiguous matches; never searchable as a name
+  undo: null,
   clusteredAt: null
 };
 
 async function facesDir(){
   if (!FACES.dir) FACES.dir = await IDX.dir.getDirectoryHandle("faces", { create:true });
   return FACES.dir;
+}
+
+function resetFaceState(){
+  FACES.dir = null; FACES.loaded = false; faceNamesLoaded = false;
+  FACES.faces = new Map(); FACES.byPhoto = new Map(); FACES.namesByPhoto = new Map();
+  FACES.vec = { dim:0, ids:[], rows:null, index:new Map() };
+  FACES.people = []; FACES.clusters = []; FACES.separations = []; FACES.review = [];
+  FACES.undo = null; FACES.clusteredAt = null;
 }
 
 /* ---- the engine adapter ----
@@ -6360,7 +6618,7 @@ async function appendFaceVectors(pairs){
   const dim = pairs[0].vec.length;
   if (FACES.vec.dim && FACES.vec.dim !== dim)
     throw new Error("face embedding dim changed (" + FACES.vec.dim + " -> " + dim
-      + "); delete the face data and re-run");
+      + "). Keep your face data: a complete model migration is needed before scanning with this model.");
   const fresh = pairs.filter(p => !FACES.vec.index.has(p.id));
   if (!fresh.length) return;
   const old = FACES.vec.rows || new Float32Array(0);
@@ -6412,24 +6670,75 @@ async function appendFaces(list){
 
 async function loadPeople(){
   const dir = await facesDir();
-  FACES.people = []; FACES.clusters = []; FACES.clusteredAt = null;
-  const t = await readTextIfAny(dir, "people.json");
-  if (!t) return;
-  try {
-    const d = JSON.parse(t);
-    FACES.people = (d.people || []).filter(p => p && p.id);
-    FACES.clusters = (d.clusters || []).filter(c => c && c.id);
-    FACES.clusteredAt = d.clustered_at || null;
-  } catch {}
+  let t;
+  try { t = await (await (await dir.getFileHandle("people.json")).getFile()).text(); }
+  catch (e){ if (!isNotFound(e)) throw e; }
+  const d = t == null ? { people:[], clusters:[] } : parsePeople(t);
+  applyPeopleState(d);
   rebuildFaceNames();
 }
 
+function parsePeople(text){
+  const d = JSON.parse(text);
+  const strings = a => Array.isArray(a) && a.every(id => typeof id === "string");
+  if (!d || !Array.isArray(d.people) || !Array.isArray(d.clusters)
+      || [...d.people, ...d.clusters].some(g => !g || typeof g.id !== "string" || !strings(g.face_ids)
+        || (g.confirmed_ids && !strings(g.confirmed_ids)) || (g.rejected_ids && !strings(g.rejected_ids)))
+      || (d.separations && (!Array.isArray(d.separations)
+        || d.separations.some(s => !s || !strings(s.a) || !strings(s.b))))
+      || (d.review && (!Array.isArray(d.review)
+        || d.review.some(r => !r || typeof r.face_id !== "string" || typeof r.person_id !== "string"))))
+    throw new Error("People data is damaged. Restore a verified backup before editing names.");
+  if (d.version && d.version > 2) throw new Error("People data needs a newer PhotoSearch app.");
+  return d;
+}
+function peopleState(){
+  return JSON.parse(JSON.stringify({ version:2, clustered_at:FACES.clusteredAt,
+    people:FACES.people, clusters:FACES.clusters, separations:FACES.separations,
+    review:FACES.review }));
+}
+function applyPeopleState(d){
+  FACES.people = d.people || []; FACES.clusters = d.clusters || [];
+  FACES.separations = d.separations || []; FACES.review = d.review || [];
+  FACES.clusteredAt = d.clustered_at || null; FACES.undo = d.undo || null;
+}
 async function savePeople(){
   const dir = await facesDir();
-  await writeFile(await dir.getFileHandle("people.json", { create:true }),
-    JSON.stringify({ version:1, clustered_at: FACES.clusteredAt,
-      people: FACES.people, clusters: FACES.clusters }, null, 1));
+  const next = JSON.stringify({ ...peopleState(), undo:FACES.undo });
+  await exclusive(async () => {
+    let previous = null;
+    try { previous = await (await (await dir.getFileHandle("people.json")).getFile()).text(); }
+    catch (e){ if (!isNotFound(e)) throw e; }
+    // Never replace an unreadable file with an apparently successful empty state.
+    if (previous != null){
+      parsePeople(previous);
+      await writeVerifiedText(dir, "people.previous.json", previous);
+    }
+    await writeVerifiedText(dir, "people.json", next);
+  });
   rebuildFaceNames();
+}
+
+let peopleEditChain = Promise.resolve();
+function editPeople(change, keepUndo = true){
+  const run = peopleEditChain.then(async () => {
+    if (RUN.active || libraryMaintenance) throw new Error("Wait for the current scan, backup or restore before changing people.");
+    const before = peopleState(), oldUndo = FACES.undo;
+    try {
+      const result = change();
+      FACES.undo = keepUndo ? before : null;
+      await savePeople();
+      return result;
+    } catch (e){ applyPeopleState({ ...before, undo:oldUndo }); rebuildFaceNames(); throw e; }
+  });
+  peopleEditChain = run.catch(() => {});
+  return run;
+}
+async function undoPeopleEdit(){
+  return editPeople(() => {
+    if (!FACES.undo) throw new Error("There is no people edit to undo.");
+    applyPeopleState(FACES.undo);
+  }, false);
 }
 
 /* photo -> the names of people appearing in it, for search and captions. */
@@ -6455,7 +6764,6 @@ function rebuildFaceNames(){
 let faceNamesLoaded = false;
 async function ensureFaceNames(){
   if (faceNamesLoaded || FACES.loaded) return FACES.namesByPhoto;
-  faceNamesLoaded = true;
   try {
     const dir = await facesDir();
     const text = await readTextIfAny(dir, "faces.jsonl");
@@ -6463,7 +6771,9 @@ async function ensureFaceNames(){
       FACES.faces = new Map();
       for (const ln of text.split("\n")){
         if (!ln.trim()) continue;
-        try { const f = JSON.parse(ln); if (f && f.id && !f.removed) FACES.faces.set(f.id, f); }
+        try { const f = JSON.parse(ln); if (f && f.id){
+          if (f.removed) FACES.faces.delete(f.id); else FACES.faces.set(f.id, f);
+        } }
         catch {}
       }
       FACES.byPhoto = new Map();
@@ -6473,7 +6783,8 @@ async function ensureFaceNames(){
       }
     }
     await loadPeople();
-  } catch {}
+    faceNamesLoaded = true;
+  } catch (e){ faceNamesLoaded = false; throw e; }
   return FACES.namesByPhoto;
 }
 
@@ -6526,14 +6837,30 @@ function clusterFaces(threshold){
   const th = threshold != null ? threshold : faceThreshold();
   const dim = FACES.vec.dim;
   if (!dim || !FACES.vec.ids.length){ FACES.clusters = []; return FACES; }
+  if (staleFaceEngines().length)
+    throw new Error("These face measurements use a different model. A complete set of stored crops or a staged migration from originals is needed before regrouping. Your names are kept.");
+
+  FACES.review = [];
+  const constraints = FACES.separations.map(s => ({ a:new Set(s.a), b:new Set(s.b) }));
+  const compatible = (id, members) => {
+    const photo = FACES.faces.get(id).photo_id;
+    if (members.some(mid => FACES.faces.get(mid)?.photo_id === photo)) return false;
+    return !constraints.some(s => (s.a.has(id) && members.some(m => s.b.has(m)))
+      || (s.b.has(id) && members.some(m => s.a.has(m))));
+  };
 
   const assigned = new Set();
   const seeds = [];
   for (const p of FACES.people){
     p.face_ids = p.face_ids.filter(id => FACES.faces.has(id));
     for (const id of p.face_ids) assigned.add(id);
-    const c = faceCentroid(p.face_ids);
-    if (c) seeds.push({ person:p, centroid:c, n:p.face_ids.length });
+    const anchors = (p.confirmed_ids || p.face_ids).filter(id => FACES.faces.has(id));
+    p.confirmed_ids = anchors.slice();
+    // Conflicting history must not become training evidence for more matches.
+    const photos = anchors.map(id => FACES.faces.get(id).photo_id);
+    if (new Set(photos).size !== photos.length) continue;
+    const c = faceCentroid(anchors);
+    if (c) seeds.push({ person:p, centroid:c, anchors });
   }
 
   /* Confident faces first, so a clear photo seeds a group rather than a blur. */
@@ -6545,11 +6872,13 @@ function clusterFaces(threshold){
     const v = faceVectorOf(id);
     if (!v) continue;
     let best = null, bestSim = th;
+    const matches = [];
     for (const s of seeds){
+      if (!compatible(id, s.person.face_ids) || (s.person.rejected_ids || []).includes(id)) continue;
       const sim = faceDot(v, 0, s.centroid, 0, dim);
-      if (sim < bestSim) continue;
+      if (sim < th) continue;
       let near = -1;
-      for (const mid of s.person.face_ids){
+      for (const mid of s.anchors){
         const mv = faceVectorOf(mid);
         if (!mv) continue;
         const d2 = faceDot(v, 0, mv, 0, dim);
@@ -6557,12 +6886,16 @@ function clusterFaces(threshold){
         if (near >= th) break;
       }
       if (near < th) continue;        // never auto-join a person on drift alone
-      bestSim = sim; best = s;
+      matches.push({ seed:s, sim });
     }
+    matches.sort((a,b) => b.sim - a.sim);
+    const lead = matches[0], margin = 0.06;
+    if (lead && lead.sim >= Math.min(0.99, th + margin)
+        && (!matches[1] || lead.sim - matches[1].sim >= margin)) best = lead.seed;
+    else if (lead) FACES.review.push({ face_id:id, person_id:lead.seed.person.id,
+      score:lead.sim, reason:matches.length > 1 ? "Looks like more than one person" : "Needs your confirmation" });
     if (best){                                   // joins an existing named person
       best.person.face_ids.push(id);
-      const c = faceCentroid(best.person.face_ids);
-      if (c) best.centroid = c;
       continue;
     }
     /* Match the CENTROID and the nearest MEMBER. Centroid-only merging drifts:
@@ -6571,6 +6904,7 @@ function clusterFaces(threshold){
        neighbour as well stops that cascade. */
     let bg = null; bestSim = th;
     for (const g of groups){
+      if (!compatible(id, g.face_ids)) continue;
       const sim = faceDot(v, 0, g.centroid, 0, dim);
       if (sim < bestSim) continue;
       let near = -1;
@@ -6589,7 +6923,7 @@ function clusterFaces(threshold){
       const c = faceCentroid(bg.face_ids);
       if (c) bg.centroid = c;
     } else {
-      groups.push({ id:"c-" + (groups.length + 1) + "-" + Date.now().toString(36),
+      groups.push({ id:"c-" + id,
                     face_ids:[id], centroid: faceNormalise(v) });
     }
   }
@@ -6608,6 +6942,7 @@ function findCluster(id){ return FACES.clusters.find(c => c.id === id) || null; 
 
 /* Names a cluster (promoting it to a person) or renames an existing person. */
 async function namePerson(id, name){
+  return editPeople(() => {
   name = String(name || "").trim();
   const existing = findPerson(id);
   if (existing){
@@ -6615,7 +6950,6 @@ async function namePerson(id, name){
       FACES.people = FACES.people.filter(p => p !== existing);
       FACES.clusters.unshift({ id: existing.id, face_ids: existing.face_ids });
     } else existing.name = name;
-    await savePeople();
     return existing;
   }
   const c = findCluster(id);
@@ -6623,46 +6957,86 @@ async function namePerson(id, name){
   if (!name) return null;
   FACES.clusters = FACES.clusters.filter(x => x !== c);
   const person = { id: c.id, name, face_ids: c.face_ids.slice(),
+                   confirmed_ids:c.face_ids.slice(), rejected_ids:[],
                    named_at: new Date().toISOString() };
   FACES.people.push(person);
-  await savePeople();
   return person;
+  });
 }
 
 /* Clustering will split one person across two groups; this is the fix. */
 async function mergeGroups(intoId, fromId){
+  return editPeople(() => {
   if (intoId === fromId) return null;
   const into = findPerson(intoId) || findCluster(intoId);
   const from = findPerson(fromId) || findCluster(fromId);
   if (!into || !from) throw new Error("no such group");
   for (const id of from.face_ids)
     if (!into.face_ids.includes(id)) into.face_ids.push(id);
+  // An explicit merge overrides earlier separation decisions for these faces.
+  const joined = new Set(into.face_ids);
+  FACES.separations = FACES.separations.filter(s =>
+    !(s.a.some(id => joined.has(id)) && s.b.some(id => joined.has(id))));
+  if (into.name){
+    into.confirmed_ids = [...new Set([...(into.confirmed_ids || into.face_ids), ...from.face_ids])];
+    into.rejected_ids = (into.rejected_ids || []).filter(id => !joined.has(id));
+  }
+  FACES.review = FACES.review.filter(r => !joined.has(r.face_id) && r.person_id !== fromId);
   FACES.people = FACES.people.filter(p => p !== from);
   FACES.clusters = FACES.clusters.filter(c => c !== from);
-  await savePeople();
   return into;
+  });
 }
 
 /* And it will merge two people into one group; this is that fix. */
 async function splitOut(groupId, faceIds){
+  return editPeople(() => {
   const g = findPerson(groupId) || findCluster(groupId);
   if (!g) throw new Error("no such group");
   const moving = faceIds.filter(id => g.face_ids.includes(id));
   if (!moving.length) return null;
   g.face_ids = g.face_ids.filter(id => !moving.includes(id));
-  const fresh = { id: "c-split-" + Date.now().toString(36), face_ids: moving };
+  if (g.face_ids.length) FACES.separations.push({ a:moving.slice(), b:g.face_ids.slice() });
+  if (g.name){
+    g.rejected_ids = [...new Set([...(g.rejected_ids || []), ...moving])];
+    g.confirmed_ids = (g.confirmed_ids || g.face_ids).filter(id => !moving.includes(id));
+  }
+  FACES.review = FACES.review.filter(r => !moving.includes(r.face_id));
+  const fresh = { id: "c-split-" + crypto.randomUUID(), face_ids: moving };
   FACES.clusters.unshift(fresh);
   /* A group emptied by the split disappears rather than lingering as a ghost. */
   if (!g.face_ids.length){
     FACES.people = FACES.people.filter(p => p !== g);
     FACES.clusters = FACES.clusters.filter(c => c !== g);
   }
-  await savePeople();
   return fresh;
+  });
+}
+
+async function reviewFace(faceId, personId, accept){
+  return editPeople(() => {
+    const p = findPerson(personId);
+    if (!p || !FACES.faces.has(faceId)) throw new Error("That face or person is no longer available.");
+    p.confirmed_ids = (p.confirmed_ids || p.face_ids).slice();
+    if (accept){
+      for (const g of [...FACES.people, ...FACES.clusters]){
+        g.face_ids = g.face_ids.filter(id => id !== faceId);
+        if (g !== p && g.confirmed_ids) g.confirmed_ids = g.confirmed_ids.filter(id => id !== faceId);
+      }
+      p.face_ids.push(faceId); p.confirmed_ids.push(faceId);
+      p.rejected_ids = (p.rejected_ids || []).filter(id => id !== faceId);
+      const joined = new Set(p.face_ids);
+      FACES.separations = FACES.separations.filter(s =>
+        !(s.a.some(id => joined.has(id)) && s.b.some(id => joined.has(id))));
+    } else p.rejected_ids = [...new Set([...(p.rejected_ids || []), faceId])];
+    FACES.clusters = FACES.clusters.filter(g => g.face_ids.length);
+    FACES.review = FACES.review.filter(r => r.face_id !== faceId);
+  });
 }
 
 /* Everything, in one action, leaving the rest of the index untouched. */
 async function deleteAllFaceData(){
+  if (libraryMaintenance) throw new Error("Wait for the backup or restore before deleting face data.");
   /* Drop the cached handle FIRST so nothing re-creates the folder behind the
      removal, then take the whole directory in one call. */
   FACES.dir = null;
@@ -6670,6 +7044,7 @@ async function deleteAllFaceData(){
   FACES.faces = new Map(); FACES.byPhoto = new Map(); FACES.namesByPhoto = new Map();
   FACES.vec = { dim:0, ids:[], rows:null, index:new Map() };
   FACES.people = []; FACES.clusters = []; FACES.clusteredAt = null;
+  FACES.separations = []; FACES.review = []; FACES.undo = null;
   FACES.loaded = false;
   faceNamesLoaded = false;
   return true;
@@ -6820,6 +7195,8 @@ function boxIoU(a, b){
 }
 
 async function refinePhotoFaces(photoId, bitmap){
+  if (FACES.separations.length || FACES.people.some(p => p.confirmed_ids || p.rejected_ids))
+    throw new Error("Improving faces with saved corrections needs the staged migration described in the roadmap. Your face data has been kept.");
   const olds = (FACES.byPhoto.get(photoId) || [])
     .map(id => FACES.faces.get(id)).filter(Boolean);
   /* Detect fresh on the full-resolution image. */
@@ -6868,6 +7245,8 @@ async function refinePhotoFaces(photoId, bitmap){
    one to see if it groups better -- costs a pass over a few hundred kilobytes
    instead of 14 GB. This is the whole reason the crops are stored. */
 async function reembedFromCrops(onProgress){
+  if (S.faces.embedder === "faceres")
+    throw new Error("Stored-crop re-measuring supports ArcFace. Select ArcFace first; no face data has been changed.");
   if (S.faces.embedder !== "faceres") await loadArcFace(onProgress);
   const engine = faceEngineId();
   const ids = [...FACES.faces.keys()];
@@ -6884,6 +7263,8 @@ async function reembedFromCrops(onProgress){
   }
   if (!pairs.length)
     throw new Error("no stored face crops to re-measure — run Find faces first");
+  if (missing)
+    throw new Error(missing + " crops are unavailable. No vectors were replaced; a complete migration from originals is needed.");
   /* Replace rather than append: these are the same faces, measured again. */
   FACES.vec = { dim:0, ids:[], rows:null, index:new Map() };
   await appendFaceVectors(pairs);
@@ -6985,9 +7366,40 @@ function faceSizeReport(){
 
 /* ================= the People tab =================
    Groups of faces that look alike, and a box to type a name into. The app
-   proposes nothing: a group is "Group 1" until you say otherwise. */
+   invents no names: a group is "Group 1" until you name it. Later possible
+   matches to your named people can be confirmed in the review queue. */
 
-const PUI = { open: null, picked: new Set(), mergeFrom: null };
+const PUI = { open: null, picked: new Set(), mergeFrom: null, faceLimit:80, groupLimit:60 };
+
+function renderPeopleReview(){
+  $("#peopleUndo").disabled = !FACES.undo || RUN.active || libraryMaintenance;
+  const host = $("#peopleReview"); host.textContent = "";
+  const pending = FACES.review.filter(r => FACES.faces.has(r.face_id) && findPerson(r.person_id));
+  if (!pending.length) return;
+  host.append(el("h3", null, pending.length + " possible matches to review"));
+  host.append(el("p", "hint", "These faces are not included under the suggested name until you confirm them."));
+  for (const r of pending.slice(0, 12)){
+    const p = findPerson(r.person_id), row = el("div", "row");
+    row.append(faceTile(FACES.faces.get(r.face_id)), faceTile(bestFaceOf(p)),
+      el("span", null, "Is this " + p.name + "? " + r.reason));
+    for (const [label, accept] of [["Yes, same person", true], ["No, different person", false]]){
+      const b = el("button", "btn sec", label); b.disabled = RUN.active;
+      b.onclick = async () => {
+        b.disabled = true;
+        try { await reviewFace(r.face_id, p.id, accept); rebuildDerived(); renderPeople(); }
+        catch (e){ toast(errText(e)); b.disabled = false; }
+      };
+      row.append(b);
+    }
+    host.append(row);
+  }
+  if (pending.length > 12) host.append(el("p", "hint", "More matches appear as you review these."));
+}
+$("#peopleUndo").onclick = async () => {
+  try { await undoPeopleEdit(); rebuildDerived(); renderPeople(); toast("People edit undone."); }
+  catch (e){ toast(errText(e)); }
+};
+$("#peopleFilter").oninput = () => { PUI.groupLimit = 60; renderPeople(); };
 
 /* A face tile is the photo's existing thumbnail, zoomed to the face box. No
    crops are stored: the box is kept in 0..1 so it maps onto any size, which
@@ -7025,6 +7437,7 @@ function groupLabel(g, i){
 }
 
 function renderPeople(){
+  renderPeopleReview();
   const box = $("#peopleBox");
   box.textContent = "";
   const all = [...FACES.people, ...FACES.clusters];
@@ -7040,8 +7453,8 @@ function renderPeople(){
     + FACES.clusters.length + " unnamed group"
     + (FACES.clusters.length === 1 ? "" : "s")
     + ". Type a name to label a group; it becomes searchable straight away."
-    + "  If people are mixed together, raise the strictness and re-group — it is "
-    + "instant and keeps your names.";
+    + "  If a group contains the wrong person, select their faces and move them out. "
+    + "Your corrections survive re-grouping; Undo restores the previous edit.";
   const rep = faceSizeReport();
   if (rep && rep.belowPct >= 25)
     $("#faceNote").textContent += "  " + rep.belowPct + "% of faces are smaller than the "
@@ -7052,7 +7465,9 @@ function renderPeople(){
       + rep.belowPct + "% below the model's 112px input.";
 
   const grid = el("div", "people");
-  all.forEach((g, i) => {
+  const filter = personKey($("#peopleFilter").value);
+  const visible = all.filter((g,i) => personKey(groupLabel(g,i)).includes(filter));
+  visible.slice(0, PUI.groupLimit).forEach((g, i) => {
     const named = !!g.name;
     const card = el("div", "pcard" + (PUI.mergeFrom === g.id ? " sel" : ""));
     const top = el("div", "top");
@@ -7062,6 +7477,8 @@ function renderPeople(){
     right.style.minWidth = "0";
     const inp = el("input");
     inp.type = "text";
+    inp.setAttribute("aria-label", "Name for " + groupLabel(g, i));
+    inp.disabled = RUN.active;
     inp.value = g.name || "";
     inp.placeholder = named ? "" : "Name this group…";
     inp.onchange = async () => {
@@ -7070,19 +7487,20 @@ function renderPeople(){
         rebuildDerived();                 // names are searchable text
         renderPeople();
         toast(inp.value ? "Named " + inp.value + "." : "Name cleared.");
-      } catch (e){ toast(errText(e)); }
+      } catch (e){ renderPeople(); toast(errText(e)); }
     };
     right.append(inp);
-    right.append(Object.assign(el("div", "hint"),
-      { textContent: g.face_ids.length + " face"
-        + (g.face_ids.length === 1 ? "" : "s") }));
+    const photoCount = new Set(g.face_ids.map(id => FACES.faces.get(id)?.photo_id).filter(Boolean)).size;
+    right.append(el("div", "hint", photoCount + " photos · " + g.face_ids.length + " faces"));
+    if (g.face_ids.length > photoCount)
+      right.append(el("div", "hint", "Review: more than one face in the same photo is assigned here."));
     top.append(right);
     card.append(top);
 
     const acts = el("div", "acts");
     const view = el("button", null, PUI.open === g.id ? "Hide faces" : "Show faces");
     view.onclick = () => { PUI.open = PUI.open === g.id ? null : g.id;
-      PUI.picked.clear(); renderPeople(); };
+      PUI.faceLimit = 80; PUI.picked.clear(); renderPeople(); };
     acts.append(view);
 
     const photos = el("button", null, "Photos");
@@ -7109,18 +7527,26 @@ function renderPeople(){
 
     if (PUI.open === g.id){
       const strip = el("div", "facestrip");
-      for (const fid of g.face_ids){
+      for (const fid of g.face_ids.slice(0, PUI.faceLimit)){
         const f = FACES.faces.get(fid);
         if (!f) continue;
         const t = faceTile(f, PUI.picked.has(fid) ? "pick" : "");
         t.title = "Select to move this face out of the group";
+        t.tabIndex = 0; t.setAttribute("role", "button");
+        t.setAttribute("aria-label", "Select face from " + (IDX.records.get(f.photo_id)?.name || "photo"));
+        t.setAttribute("aria-pressed", String(PUI.picked.has(fid)));
         t.onclick = () => {
           PUI.picked.has(fid) ? PUI.picked.delete(fid) : PUI.picked.add(fid);
           renderPeople();
         };
+        t.onkeydown = e => { if (e.key === " " || e.key === "Enter"){ e.preventDefault(); t.click(); } };
         strip.append(t);
       }
       card.append(strip);
+      if (g.face_ids.length > PUI.faceLimit){
+        const more = el("button", "btn sec", "Show more faces (" + g.face_ids.length + " total)");
+        more.onclick = () => { PUI.faceLimit += 80; renderPeople(); }; card.append(more);
+      }
       const picked = g.face_ids.filter(id => PUI.picked.has(id));
       const sp = el("div", "acts");
       const b = el("button", null, "Move " + picked.length + " out to a new group");
@@ -7139,6 +7565,11 @@ function renderPeople(){
     grid.append(card);
   });
   box.append(grid);
+  if (visible.length > PUI.groupLimit){
+    const more = el("button", "btn sec", "Show more groups");
+    more.onclick = () => { PUI.groupLimit += 60; renderPeople(); }; box.append(more);
+  }
+  if (!visible.length) box.append(el("p", "hint", "No groups match that name."));
 }
 
 function showPersonPhotos(g, label){
@@ -7147,7 +7578,15 @@ function showPersonPhotos(g, label){
     const f = FACES.faces.get(fid);
     if (f) ids.add(f.photo_id);
   }
-  const recs = [...ids].map(id => IDX.records.get(id)).filter(Boolean)
+  if (g.name){
+    document.querySelector('nav [data-tab="search"]').click();
+    renderSearchPeople();
+    $("#photoQuery").value = ""; $("#photoPlace").value = "";
+    $("#photoFrom").value = ""; $("#photoTo").value = "";
+    for (const input of $("#photoPeople").querySelectorAll("input")) input.checked = input.value === g.id;
+    submitPhotoSearch(); return;
+  }
+  const recs = [...ids].map(id => IDX.records.get(id)).filter(r => r && !r.deleted && r.status !== "error" && !r.probe)
     .sort((a, b) => (b.date_taken || "").localeCompare(a.date_taken || ""));
   const host = $("#faceOut");
   host.textContent = "";
@@ -7171,23 +7610,10 @@ function renderFaceStale(){
   box.hidden = false;
   box.textContent = "";
   box.append(el("b", null, "These faces were measured the old way. "));
-  box.append(document.createTextNode(
-    "They were described without landmark alignment (" + stale.join(", ")
-    + "), which encodes the angle of the head rather than who it is — which is "
-    + "why groups mixed people together. Re-grouping cannot fix it; the faces "
-    + "have to be looked at again. Delete the face data and press Find faces."));
-  const b = el("button", "btn");
-  b.textContent = "Delete face data and start again";
-  b.style.marginTop = "8px";
-  b.onclick = async () => {
-    try {
-      await deleteAllFaceData();
-      rebuildDerived(); renderFaceStale(); renderPeople();
-      toast("Face data deleted — press Find faces.");
-    } catch (e){ toast(errText(e)); }
-  };
-  box.append(el("div"));
-  box.append(b);
+  box.append(document.createTextNode("The stored measurements use " + stale.join(", ")
+    + ". Re-grouping is paused because they cannot be compared with the selected model. "
+    + "Back up first. Re-measure requires a complete set of stored crops; otherwise a staged migration from originals is needed. "
+    + "Existing names remain available for search and correction."));
 }
 
 /* ---- actions ---- */
@@ -7257,11 +7683,12 @@ $("#btnRefine").onclick = async () => {
 };
 
 $("#btnReembed").onclick = async () => {
+  if (RUN.active || libraryMaintenance){ toast("Wait for the current library operation."); return; }
   if (!FACES.faces.size){ toast("Press Find faces first."); return; }
   const host = $("#faceOut"); resetChecks(host);
   const st = step(host, "Re-measure faces");
   try {
-    const r = await reembedFromCrops(async m => { await st.note(m); });
+    const r = await withLibraryMaintenance(() => reembedFromCrops(async m => { await st.note(m); }));
     rebuildDerived(); renderFaceStale(); renderPeople();
     (r.missing ? st.warn : st.ok)(r.measured + " faces re-measured with "
       + faceEngineId() + (r.missing ? ", " + r.missing + " had no stored crop" : "")
@@ -7352,8 +7779,9 @@ $("#sFaceTh").onchange = async () => {
   if (!FACES.vec.ids.length) return;
   /* Instant: the vectors are already on disk, so trying a different strictness
      costs nothing and never re-reads a photo. */
-  clusterFaces();
-  await savePeople();
+  if (RUN.active || libraryMaintenance){ toast("Wait for the current library operation before re-grouping."); return; }
+  try { clusterFaces(); await savePeople(); }
+  catch (e){ toast(errText(e)); return; }
   rebuildDerived();
   renderPeople();
   toast("Re-grouped at " + faceThreshold().toFixed(2) + " — "
@@ -7431,6 +7859,7 @@ $("#btnFaceScan").onclick = async () => {
 };
 
 $("#btnRecluster").onclick = async () => {
+  if (RUN.active || libraryMaintenance){ toast("Wait for the current library operation before re-grouping."); return; }
   if (!FACES.loaded){ toast("Press Find faces first."); return; }
   const host = $("#faceOut"); resetChecks(host);
   const st = step(host, "Re-group");
@@ -7784,6 +8213,109 @@ $("#chatSave").onclick = async () => {
   } catch (e){ toast("Could not save: " + errText(e)); }
 };
 
+/* ==================== 88-searchui.js ==================== */
+/* Direct retrieval never needs the chat model. Filters are visible and results
+   are paginated, so a family album does not quietly stop at twelve photos. */
+const SEARCH_UI = { request:0, abort:null, offset:0, pinned:[], filters:null };
+
+function renderSearchPeople(){
+  const host = $("#photoPeople");
+  const selected = new Set([...host.querySelectorAll("input:checked")].map(x => x.value));
+  host.textContent = "";
+  for (const p of FACES.people.filter(p => p.name).sort((a,b) => a.name.localeCompare(b.name))){
+    const label = el("label", "switch");
+    const input = el("input"); input.type = "checkbox"; input.value = p.id;
+    input.checked = selected.has(p.id);
+    label.append(input, document.createTextNode(p.name)); host.append(label);
+  }
+  if (!host.children.length) host.append(el("span", "hint", "Name a group in People to search for someone."));
+}
+
+async function openSearchIndex(){
+  if (!IDX.loaded){
+    if (!(await ensureIndexConnected()) || !(await ensureConnected("photo search")))
+      throw new Error("Connect your photo index in Settings to search it.");
+    await indexOp("opening photo search", async () => {
+      await ensureIndex(null, { write:false });
+      await loadRecords(); await loadVectors(); await ensureFaceNames();
+      rebuildDerived();
+    }, { cost:8 });
+  } else await ensureFaceNames();
+}
+async function onSearchShown(){
+  renderSearchPeople();
+  $("#photoQuery").focus();
+}
+function clearSearchResults(){
+  for (const id of SEARCH_UI.pinned) thumbUnpin(id);
+  SEARCH_UI.pinned = [];
+  $("#photoSearchResults").textContent = "";
+  $("#photoSearchPages").textContent = "";
+}
+async function submitPhotoSearch(offset = 0){
+  const request = ++SEARCH_UI.request;
+  if (SEARCH_UI.abort) SEARCH_UI.abort.abort();
+  const abort = new AbortController(); SEARCH_UI.abort = abort;
+  const status = $("#photoSearchStatus");
+  status.textContent = "Opening your index…";
+  clearSearchResults();
+  $("#photoSearchApplied").textContent = "";
+  $("#photoSearchDetails").hidden = true;
+  try {
+    await openSearchIndex();
+    if (request !== SEARCH_UI.request) return;
+    renderSearchPeople();
+    const filters = offset && SEARCH_UI.filters ? SEARCH_UI.filters : {
+      query:$("#photoQuery").value.trim(), place:$("#photoPlace").value.trim(),
+      date_from:$("#photoFrom").value, date_to:$("#photoTo").value,
+      person_ids:[...$("#photoPeople").querySelectorAll("input:checked")].map(x => x.value),
+      semantic:$("#photoSemantic").checked, interpret_people:$("#photoInterpret").checked
+    };
+    if (filters.date_from && filters.date_to && filters.date_from > filters.date_to)
+      throw new Error("The From date must be on or before the To date.");
+    SEARCH_UI.filters = filters;
+    status.textContent = "Searching…";
+    const result = await searchPhotos({ ...filters, offset, limit:60, signal:abort.signal });
+    if (request !== SEARCH_UI.request) return;
+    const applied = [...result.applied];
+    if (filters.place) applied.push("Place: " + filters.place);
+    if (filters.date_from) applied.push("From " + filters.date_from);
+    if (filters.date_to) applied.push("To " + filters.date_to);
+    for (const label of applied) $("#photoSearchApplied").append(el("span", "pill", label));
+    status.textContent = result.total ? result.total.toLocaleString() + " matching photos"
+      : "No photos match. Try fewer filters, another word, or review the person's group in People.";
+    if (result.results.length){
+      const records = result.results.map(x => x.rec);
+      SEARCH_UI.pinned = records.map(r => r.id);
+      renderGrid($("#photoSearchResults"), records);
+    }
+    const pages = $("#photoSearchPages");
+    if (result.total){
+      const prev = el("button", "btn sec", "Previous"); prev.disabled = !offset;
+      prev.onclick = () => submitPhotoSearch(Math.max(0, offset - 60));
+      const next = el("button", "btn sec", "Next"); next.disabled = offset + 60 >= result.total;
+      next.onclick = () => submitPhotoSearch(offset + 60);
+      pages.append(prev, el("span", "hint", (offset + 1) + "–"
+        + (offset + result.results.length) + " of " + result.total), next);
+    }
+    $("#photoSearchHow").textContent = result.used.join(". ");
+    $("#photoSearchDetails").hidden = false;
+  } catch (e){
+    if (request === SEARCH_UI.request) status.textContent = "Could not search: " + errText(e);
+  }
+}
+$("#photoSearchForm").onsubmit = e => { e.preventDefault(); submitPhotoSearch(); };
+$("#photoSearchClear").onclick = () => {
+  ++SEARCH_UI.request; if (SEARCH_UI.abort) SEARCH_UI.abort.abort();
+  $("#photoSearchForm").reset();
+  for (const input of $("#photoPeople").querySelectorAll("input")) input.checked = false;
+  SEARCH_UI.filters = null; clearSearchResults();
+  $("#photoSearchApplied").textContent = "";
+  $("#photoSearchStatus").textContent = "Filters cleared. Search again to browse your photos.";
+  $("#photoSearchDetails").hidden = true;
+  $("#photoQuery").focus();
+};
+
 /* ==================== 90-selftest.js ==================== */
 
 /* ================= self-test =================
@@ -7826,9 +8358,13 @@ async function selfTest(){
   const host = $("#selfOut"); resetChecks(host);
   const st = step(host, "Self-test");
   const wasMock = $("#mock").checked, savedDir = S.dirHandle, savedRoles = { ...S.roles };
+  const savedIndexMode = S.indexMode, savedIndexDir = S.indexDirHandle;
+  const savedSettings = localStorage.getItem(LS);
   // Boot-time detection runs in the background and rewrites S.roles when it
   // lands. Let it finish first, or it clobbers the mock roles mid-test.
   try { if (connecting) await connecting; } catch {}
+  S.indexMode = "folder"; S.indexDirHandle = null;
+  IDX.dir = null; resetFaceState();
   $("#mock").checked = true;
   S.roles = { scan:"mock-vlm", embed:"mock-embed", chat:"auto" };
   ok("mock roles are in place for the run", S.roles.embed === "mock-embed", S.roles.embed);
@@ -9252,7 +9788,7 @@ async function selfTest(){
     ok("find_similar excludes the source photo", sim.every(x => x.rec.id !== anyRec.id));
     const cm = compact(anyRec, 0.5);
     ok("tool results stay compact", (cm.caption || "").length <= 150
-       && Object.keys(cm).length <= 8, Object.keys(cm).join(","));
+       && Object.keys(cm).length <= 9 && Array.isArray(cm.named_people), Object.keys(cm).join(","));
     const libStats = await runTool("library_stats", {});
     ok("library_stats tool answers", libStats.photos >= 1, JSON.stringify(libStats).slice(0,80));
     const ents = await runTool("list_entities", { type:"object", limit:5 });
@@ -10186,6 +10722,8 @@ async function selfTest(){
       }
     }
 
+    await consumerSelfTest(scratch);
+
     /* ---- compaction ---- */
     const c = await compactRecords();
     ok("compaction shrinks the log", c.after <= c.before, c.before + " -> " + c.after);
@@ -10201,6 +10739,8 @@ async function selfTest(){
   } finally {
     $("#mock").checked = wasMock;
     S.dirHandle = savedDir; S.roles = savedRoles;
+    S.indexMode = savedIndexMode; S.indexDirHandle = savedIndexDir;
+    if (savedSettings == null) localStorage.removeItem(LS); else localStorage.setItem(LS, savedSettings);
     IDX.loaded = false;
   }
   const pre = el("pre");
@@ -10210,6 +10750,178 @@ async function selfTest(){
   return T;
 }
 $("#btnSelfTest").onclick = selfTest;
+
+/* ==================== 91-consumer-selftest.js ==================== */
+/* Regressions use synthetic vectors and OPFS only, never the personal library. */
+async function consumerSelfTest(scratch){
+  const keep = { records:IDX.records, vec:IDX.vec, settings:{ ...S.faces },
+    roles:{ ...S.roles }, backup:{ ...S.backup }, dir:IDX.dir };
+  const rejected = async fn => { try { await fn(); return false; } catch { return true; } };
+  try {
+    await deleteAllFaceData();
+    S.faces.embedder = "arcface"; S.faces.threshold = 0.7;
+    S.roles.embed = "";
+    const records = Array.from({ length:75 }, (_,i) => ({ id:"consumer-" + i,
+      name:"photo-" + i + ".jpg", caption:i % 2 ? "a beach holiday" : "a garden",
+      place:i % 2 ? "Sicily" : "London", status:"ok", date_taken:"2024-07-20" }));
+    IDX.records = new Map(records.map(r => [r.id,r]));
+    const add = async (id, photo, vector) => {
+      await appendFaceVectors([{ id, vec:Float32Array.from(vector) }]);
+      await appendFaces([{ id, photo_id:photo, box:[0.1,0.1,0.2,0.2],
+        engine:faceEngineId(), score:0.95, px:160, src:"original" }]);
+    };
+    await add("a", "consumer-1", [1,0,0]);
+    await add("b", "consumer-3", [1,0.01,0]);
+    await add("c", "consumer-5", [0,1,0]);
+    clusterFaces();
+    const group = FACES.clusters.find(g => g.face_ids.includes("a"));
+    await namePerson(group.id, "Anna");
+    const annaId = group.id;
+    await namePerson(FACES.clusters[0].id, "Ben");
+    const benId = FACES.people.find(p => p.name === "Ben").id;
+    const moved = await splitOut(annaId, ["b"]);
+    clusterFaces();
+    ok("a rejected face cannot silently rejoin its named person", !findPerson(annaId).face_ids.includes("b"));
+    await savePeople(); await loadFaces(); clusterFaces();
+    ok("a rejection survives reload and regrouping", !findPerson(annaId).face_ids.includes("b"));
+    eq("the separation decision was persisted", FACES.separations.length, 1);
+    await undoPeopleEdit();
+    ok("undo restores the face membership", findPerson(annaId).face_ids.includes("b"));
+    eq("undo restores the earlier constraints", FACES.separations.length, 0);
+    eq("undo is consumed rather than silently toggling to redo", FACES.undo, null);
+    const splitAgain = await splitOut(annaId, ["b"]);
+    await namePerson(annaId, "");
+    clusterFaces();
+    ok("separations also protect unnamed groups", !FACES.clusters.some(g => g.face_ids.includes("a") && g.face_ids.includes("b")));
+    const aGroup = FACES.clusters.find(g => g.face_ids.includes("a"));
+    await namePerson(aGroup.id, "Anna");
+    const anna = FACES.people.find(p => p.name === "Anna");
+    await mergeGroups(anna.id, FACES.clusters.find(g => g.face_ids.includes("b")).id);
+    ok("an explicit merge overrides a previous separation", anna.face_ids.includes("b") && !FACES.separations.length);
+
+    await add("same-photo", "consumer-1", [1,0,0]);
+    clusterFaces();
+    ok("two faces from one photo are never automatically assigned to one person", !anna.face_ids.includes("same-photo"));
+    await add("ambiguous", "consumer-7", [0.72,0.69,0]);
+    clusterFaces();
+    ok("a close match to two people goes to review", FACES.review.some(r => r.face_id === "ambiguous"));
+    eq("an uncertain match is absent from named search", faceNamesFor("consumer-7"), []);
+    await reviewFace("ambiguous", anna.id, false);
+    clusterFaces();
+    ok("a rejected suggestion is not offered for that person again", !FACES.review.some(r => r.face_id === "ambiguous" && r.person_id === anna.id));
+    await reviewFace("ambiguous", benId, true);
+    ok("confirmation makes a face searchable", faceNamesFor("consumer-7").includes("Ben"));
+    await loadFaces();
+    ok("confirmed and rejected decisions survive reload", findPerson(benId).confirmed_ids.includes("ambiguous")
+      && FACES.people.find(p => p.name === "Anna").rejected_ids.includes("ambiguous"));
+    ok("refinement cannot discard saved corrections", await rejected(() => refinePhotoFaces("consumer-1", {})));
+    ok("malformed correction data is rejected", await rejected(async () => parsePeople(
+      JSON.stringify({ people:[], clusters:[], separations:[{}] }))));
+
+    rebuildDerived();
+    let result = await searchPhotos({ query:"photos of Anna at the beach", semantic:false });
+    eq("natural people search cannot return other people's beach photos", result.results.map(x => x.rec.id).sort(), ["consumer-1","consumer-3"]);
+    eq("the applied name filter is explained", result.applied, ["With Anna"]);
+    eq("short names do not match a substring of another name", (await searchPhotos({ query:"", person:"Ann" })).total, 0);
+    eq("names within words are not parsed as people", peopleSearchArgs({ query:"annals of a holiday" }).args.person_ids, []);
+    eq("quoted names stay literal", peopleSearchArgs({ query:'"Anna"' }).args.person_ids, []);
+    eq("quoted filler words remain exact", peopleSearchArgs({ query:'Anna "the beach"' }).args.query, '"the beach"');
+    eq("quoted whitespace remains exact", peopleSearchArgs({ query:'Anna "the  beach"' }).args.query, '"the  beach"');
+    eq("people can be excluded explicitly", (await searchPhotos({ query:"beach without Anna", semantic:false })).results.some(x => faceNamesFor(x.rec.id).includes("Anna")), false);
+    eq("everyone named must be in the photo", (await searchPhotos({ query:"Anna and Ben", semantic:false })).total, 0);
+    await add("together", "consumer-1", [0,1,0]);
+    await reviewFace("together", benId, true);
+    result = await searchPhotos({ query:"Anna and Ben", semantic:false });
+    eq("multiple people finds photos together", result.results.map(x => x.rec.id), ["consumer-1"]);
+    result = await searchPhotos({ query:"Anna", place:"London", semantic:false });
+    eq("person and place filters intersect", result.total, 0);
+    eq("person and date filters intersect", (await searchPhotos({ query:"Anna", date_from:"2025-01-01" })).total, 0);
+    eq("a user can search a name as ordinary text", peopleSearchArgs({ query:"Anna beach", interpret_people:false }).args.person_ids, []);
+    ok("an explicit unknown name gives an actionable error", await rejected(() => searchPhotos({ query:'person:"Nobody"' })));
+    const first = await searchPhotos({ query:"", limit:60 });
+    const second = await searchPhotos({ query:"", limit:60, offset:60 });
+    eq("pagination reports the full album count", first.total, 75);
+    eq("pagination reaches the photos after sixty", second.results.length, 15);
+    ok("pages do not overlap", !second.results.some(x => first.results.some(y => y.rec.id === x.rec.id)));
+    FACES.people.push({ id:"duplicate-name", name:"Anna", face_ids:[] });
+    ok("ambiguous names ask for an explicit person selection", await rejected(() => searchPhotos({ query:"Anna" })));
+    ok("chat filters cannot silently choose between duplicate names", await rejected(() => searchPhotos({ query:"", person:["Anna"] })));
+    FACES.people.pop();
+    // Exercise the actual form/rendering path with the server disabled.
+    const wasLoaded = IDX.loaded; IDX.loaded = true;
+    renderSearchPeople();
+    $("#photoQuery").value = "Anna and Ben"; $("#photoSemantic").checked = false;
+    await submitPhotoSearch();
+    eq("the Search screen shows the required people", [...$("#photoSearchApplied").children].map(x => x.textContent), ["With Anna","With Ben"]);
+    ok("the Search screen renders matching thumbnails", $("#photoSearchResults").querySelectorAll("figure").length === 1);
+    $("#photoSearchClear").click();
+    eq("clearing filters clears old results", $("#photoSearchResults").children.length, 0);
+    $("#photoFrom").value = "2025-01-01"; $("#photoTo").value = "2024-01-01";
+    await submitPhotoSearch();
+    ok("invalid date bounds have readable feedback", /From date/.test($("#photoSearchStatus").textContent));
+    $("#photoSearchClear").click(); IDX.loaded = wasLoaded;
+    const one = FACES.faces.get("a"), originalEngine = one.engine;
+    one.engine = "old-incompatible-model";
+    ok("incompatible face spaces cannot be regrouped", await rejected(async () => clusterFaces()));
+    one.engine = originalEngine;
+
+    // Back up real on-disk test records rather than the synthetic search map.
+    IDX.records = keep.records; IDX.vec = keep.vec;
+    await savePeople();
+    const beforePeople = JSON.stringify(peopleState());
+    const faceDir = await facesDir();
+    const prior = await (await (await faceDir.getFileHandle("people.json")).getFile()).text();
+    FACES.dir = faultFS(faceDir, { failWrites:1 });
+    ok("a failed correction is reported", await rejected(() => namePerson(benId, "Lost name")));
+    eq("a failed correction rolls memory back", findPerson(benId).name, "Ben");
+    FACES.dir = faceDir;
+    eq("a failed correction leaves saved names intact", await (await (await faceDir.getFileHandle("people.json")).getFile()).text(), prior);
+    libraryMaintenance++;
+    try { ok("backup/restore excludes concurrent people edits", await rejected(() => namePerson(benId, "Racing edit"))); }
+    finally { libraryMaintenance--; }
+    const scratchText = await scratch.getDirectoryHandle("verified-text", { create:true });
+    ok("short writes fail verification", await rejected(() => writeVerifiedText(faultFS(scratchText, { shortWrites:0.5 }), "test.json", '{"saved":true}')));
+    S.backup.keep = 1;
+    const backup = await backupIndex("consumer regression");
+    ok("backups include people and face vectors", ["people.json","faces.jsonl","facevecs.json","facevecs.bin"].every(n => backup.manifest.faces.files.some(f => f.name === n)));
+    ok("every face backup file has a checksum", backup.manifest.faces.files.every(f => /^[0-9a-f]{64}$/.test(f.sha256)));
+    await namePerson(benId, "Renamed after backup");
+    await restoreBackup(backup.stamp);
+    eq("restoring recovers the name", findPerson(benId).name, "Ben");
+    ok("restoring recovers correction decisions", FACES.people.find(p => p.name === "Anna").rejected_ids.includes("ambiguous"));
+    const backups = await backupsDir();
+    ok("keep=1 does not delete the restore source", !!(await backups.getDirectoryHandle(backup.stamp)));
+    const source = await backups.getDirectoryHandle(backup.stamp);
+    const sourceFaces = await source.getDirectoryHandle("faces");
+    const peopleFile = await sourceFaces.getFileHandle("people.json");
+    const valid = await (await peopleFile.getFile()).text();
+    await writeFile(peopleFile, valid.replace("Ben", "Bad")); // same size corruption
+    ok("checksum rejects same-size corruption before restore", await rejected(() => restoreBackup(backup.stamp)));
+    eq("a corrupt source cannot change live names", findPerson(benId).name, "Ben");
+    await writeFile(peopleFile, valid);
+    const legacy = await backups.getDirectoryHandle("legacy-consumer-test", { create:true });
+    for (const file of BACKUP_FILES) await copyInto(IDX.dir, legacy, file);
+    await restoreBackup("legacy-consumer-test");
+    eq("restoring an older backup preserves existing people", findPerson(benId).name, "Ben");
+    const blank = await scratch.getDirectoryHandle("second-library", { create:true });
+    const oldMode = S.indexMode, oldParent = S.indexDirHandle;
+    try {
+      S.indexMode = "custom"; S.indexDirHandle = blank;
+      await ensureIndex();
+      eq("switching libraries clears the previous names", FACES.people.length, 0);
+      eq("switching libraries clears previous face lookup", faceNamesFor("consumer-1"), []);
+    } finally {
+      S.indexMode = oldMode; S.indexDirHandle = oldParent;
+      await ensureIndex();
+    }
+  } finally {
+    IDX.dir = keep.dir; resetFaceState();
+    await deleteAllFaceData();
+    IDX.records = keep.records; IDX.vec = keep.vec;
+    S.faces = keep.settings; S.roles = keep.roles; S.backup = keep.backup;
+    rebuildDerived();
+  }
+}
 
 /* ==================== 95-faultfs.js ==================== */
 

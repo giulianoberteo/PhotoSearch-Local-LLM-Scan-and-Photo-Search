@@ -1,0 +1,22 @@
+PhotoSearch — local copies, and which is which
+==============================================
+Made 1 October 2026 from commit d9a4237.
+
+THIS FOLDER (~/Desktop/PhotoSearch) is the active app and source workspace,
+as requested on 1 October 2026. Double-click PhotoSearch.html in this folder.
+The consumer-readiness changes and roadmap are here.
+
+~/PhotoSearch-dev and ~/PhotoSearch.html are older copies. They are not
+automatically updated when this workspace is changed.
+
+GitHub: https://github.com/giuvilas/PhotoSearch-Local-LLM-Scan-and-Photo-Search
+
+To rebuild the single file from source, in either copy:
+    python3 build.py            # writes PhotoSearch.html
+    python3 build.py --check    # fails if the committed file is out of date
+
+To bring this copy up to date later:
+    cd ~/Desktop/PhotoSearch && git pull
+
+Your scanned data is NOT in here. It lives on the NAS at
+/Volumes/Photos/.photoindex/ — see docs/OPERATIONS.md.
