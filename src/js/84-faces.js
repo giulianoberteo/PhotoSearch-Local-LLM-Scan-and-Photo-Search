@@ -310,7 +310,7 @@ async function loadFaces(){
       } catch {}
     }
   }
-  for (const f of FACES.faces.values()){
+  for (const f of [...FACES.faces.values()]){
     if (f.removed) { FACES.faces.delete(f.id); continue; }
     if (!FACES.byPhoto.has(f.photo_id)) FACES.byPhoto.set(f.photo_id, []);
     FACES.byPhoto.get(f.photo_id).push(f.id);
@@ -706,6 +706,13 @@ async function faceCropCanvas(id){
    does NOT, because one Human instance is not re-entrant. Parallel readers
    feeding a serialised detector is the shape that fits both. */
 let faceDetectChain = Promise.resolve();
+/* Anything that runs the detector must go through the same queue, refinement
+   included, or two detections overlap on a non-re-entrant instance. */
+function faceDetectChainRun(fn){
+  const run = faceDetectChain.then(fn, fn);
+  faceDetectChain = run.then(() => {}, () => {});
+  return run;
+}
 function detectFacesSerial(photoId, bitmap){
   const run = faceDetectChain.then(
     () => detectAndEmbed(photoId, bitmap),
@@ -714,8 +721,11 @@ function detectFacesSerial(photoId, bitmap){
   return run;
 }
 
-/* One photo, already decoded. Returns the face rows written. */
-async function detectFacesIn(photoId, bitmap){
+/* Storage path: takes an already-detected set and writes it. The production
+   pipeline is detectAndEmbed below, which aligns and embeds first; this stays
+   as the narrow seam the suite drives, so storage, grouping and naming can be
+   exercised without a 13 MB model download or a drawable bitmap. */
+async function detectFacesIn(photoId, bitmap, src){
   if (!FACE_ENGINE) throw new Error("no face engine loaded");
   const found = await FACE_ENGINE(bitmap);
   /* A face 30 pixels across carries no identity: the descriptor returns
@@ -737,6 +747,7 @@ async function detectFacesIn(photoId, bitmap){
     if (FACES.faces.has(id)) continue;
     rows.push({ id, photo_id: photoId, box: f.box.map(v => +v.toFixed(4)),
                 score: +(f.score || 0).toFixed(4), px: Math.round(facePx(f)),
+                src: src || "thumb",
                 engine: FACE_ENGINE_NAME, detected_at: new Date().toISOString() });
     pairs.push({ id, vec: f.vec });
   }
@@ -748,7 +759,7 @@ async function detectFacesIn(photoId, bitmap){
 
 /* Detect, align, store the crop, and embed with whichever embedder is chosen.
    Replaces the old path that embedded a raw box crop. */
-async function detectAndEmbed(photoId, bitmap){
+async function detectAndEmbed(photoId, bitmap, src){
   if (!FACE_ENGINE) throw new Error("no face detector loaded");
   const W = bitmap.width || 1, H = bitmap.height || 1;
   const facePx = f => Math.max(f.box[2] * W, f.box[3] * H);
@@ -774,6 +785,7 @@ async function detectAndEmbed(photoId, bitmap){
     try { await saveFaceCrop(id, crop); } catch {}
     rows.push({ id, photo_id: photoId, box: f.box.map(v => +v.toFixed(4)),
                 score: +(f.score || 0).toFixed(4), px: Math.round(facePx(f)),
+                src: src || "thumb",
                 engine, detected_at: new Date().toISOString() });
     pairs.push({ id, vec });
   }
@@ -781,6 +793,67 @@ async function detectAndEmbed(photoId, bitmap){
   await appendFaceVectors(pairs);
   await appendFaces(rows);
   return rows;
+}
+
+/* ---- re-measuring one photo at full resolution ----
+   A face read from a 384px thumbnail is usually smaller than the 112px the
+   model consumes, so it was upscaled and the detail is simply not there. This
+   replaces that photo's faces with ones taken from the original.
+
+   The names the user assigned must survive it, so old faces are matched to new
+   ones by overlap and every reference is rewritten. Losing someone's naming
+   work to a quality improvement would not be a trade worth making. */
+function boxIoU(a, b){
+  const ax2 = a[0] + a[2], ay2 = a[1] + a[3];
+  const bx2 = b[0] + b[2], by2 = b[1] + b[3];
+  const ix = Math.max(0, Math.min(ax2, bx2) - Math.max(a[0], b[0]));
+  const iy = Math.max(0, Math.min(ay2, by2) - Math.max(a[1], b[1]));
+  const inter = ix * iy;
+  const uni = a[2]*a[3] + b[2]*b[3] - inter;
+  return uni > 0 ? inter / uni : 0;
+}
+
+async function refinePhotoFaces(photoId, bitmap){
+  const olds = (FACES.byPhoto.get(photoId) || [])
+    .map(id => FACES.faces.get(id)).filter(Boolean);
+  /* Detect fresh on the full-resolution image. */
+  const before = new Set(olds.map(f => f.id));
+  for (const f of olds) FACES.faces.delete(f.id);
+  FACES.byPhoto.delete(photoId);
+  let fresh = [];
+  try {
+    fresh = await detectAndEmbed(photoId, bitmap, "original");
+  } catch (e){
+    for (const f of olds){                      // put it back on failure
+      FACES.faces.set(f.id, f);
+      if (!FACES.byPhoto.has(photoId)) FACES.byPhoto.set(photoId, []);
+      FACES.byPhoto.get(photoId).push(f.id);
+    }
+    throw e;
+  }
+  /* Carry every name across by overlap, then retire the old rows. */
+  let remapped = 0;
+  for (const group of [...FACES.people, ...FACES.clusters]){
+    for (let i = 0; i < group.face_ids.length; i++){
+      const oldId = group.face_ids[i];
+      if (!before.has(oldId)) continue;
+      const oldFace = olds.find(f => f.id === oldId);
+      let best = null, bestIoU = 0.25;
+      for (const nf of fresh){
+        const v = boxIoU(oldFace.box, nf.box);
+        if (v > bestIoU){ bestIoU = v; best = nf; }
+      }
+      group.face_ids[i] = best ? best.id : null;
+      if (best) remapped++;
+    }
+    group.face_ids = group.face_ids.filter(Boolean);
+  }
+  const retired = olds.map(f => ({ id:f.id, photo_id:photoId, removed:true }));
+  if (retired.length) await appendFaces(retired);
+  for (const r of retired) FACES.faces.delete(r.id);
+  FACES.people = FACES.people.filter(p => p.face_ids.length);
+  FACES.clusters = FACES.clusters.filter(c => c.face_ids.length);
+  return { replaced: olds.length, found: fresh.length, remapped };
 }
 
 
@@ -884,4 +957,20 @@ async function compareEmbedders(onProgress){
   };
   return { people: byPerson.size, faces: crops, missingCrops: gone,
            arcface: score("arc"), current: score("old") };
+}
+
+
+/* How big the faces in this library actually are. ArcFace consumes 112x112, so
+   anything below that was upscaled and is costing accuracy -- this says how
+   much of the library is in that position, from the real stored sizes. */
+function faceSizeReport(){
+  const px = [...FACES.faces.values()].map(f => f.px || 0).filter(v => v > 0).sort((a,b) => a-b);
+  if (!px.length) return null;
+  const at = q => px[Math.min(px.length-1, Math.floor(px.length*q))];
+  const below = px.filter(v => v < ARC_SIZE).length;
+  const fromThumb = [...FACES.faces.values()].filter(f => f.src !== "original").length;
+  return { faces: px.length, median: at(0.5), p10: at(0.1), p90: at(0.9),
+           belowModelInput: below,
+           belowPct: Math.round(below / px.length * 100),
+           fromThumbnails: fromThumb };
 }

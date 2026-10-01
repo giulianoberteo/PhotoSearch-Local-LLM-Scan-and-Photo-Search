@@ -58,6 +58,14 @@ function renderPeople(){
     + ". Type a name to label a group; it becomes searchable straight away."
     + "  If people are mixed together, raise the strictness and re-group — it is "
     + "instant and keeps your names.";
+  const rep = faceSizeReport();
+  if (rep && rep.belowPct >= 25)
+    $("#faceNote").textContent += "  " + rep.belowPct + "% of faces are smaller than the "
+      + "112px the model reads (median " + rep.median + "px), so they were enlarged and "
+      + "the detail was never there — “Improve from originals” fixes that.";
+  else if (rep)
+    $("#faceNote").textContent += "  Median face " + rep.median + "px; "
+      + rep.belowPct + "% below the model's 112px input.";
 
   const grid = el("div", "people");
   all.forEach((g, i) => {
@@ -209,6 +217,52 @@ $("#sFaceEmb").onchange = async () => {
     ? "ArcFace: a purpose-built recognition model. Press \u201cRe-measure\u201d to apply it "
       + "to the faces already found — it uses the stored crops, so no photo is re-read."
     : "faceres: kept for comparison only. It is a by-product of age/gender estimation.");
+};
+
+$("#btnRefine").onclick = async () => {
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the improvement pass"))) return;
+  if (RUN.active){ toast("Stop the scan first."); return; }
+  const host = $("#faceOut"); resetChecks(host);
+  const st = step(host, "Improve from originals");
+  let p;
+  try {
+    await st.note("Loading the models…");
+    await loadHumanEngine(async m => { await st.note(m); });
+    if (S.faces.embedder !== "faceres") await loadArcFace(async m => { await st.note(m); });
+    p = await planFaceRefine(async m => { await st.note(m); });
+  } catch (e){ st.err(errText(e)); return; }
+
+  if (!p.candidates){ st.ok("Every face already came from a full-size original."); return; }
+  if (!p.files.length){
+    st.warn(p.candidates + " photos have faces taken from thumbnails, but none of those "
+      + "photos are in the folder you have open. Connect the folder they live in "
+      + "(Settings) and try again.");
+    return;
+  }
+  const unit = storageUnitMs();
+  const secs = (p.bytes / (430*1024) + p.files.length * ((unit != null ? unit : 50)/1000))
+    / Math.max(1, Math.min(8, S.faces.readConcurrency)) + p.files.length * 0.08;
+  if (!confirm("Re-read " + p.files.length.toLocaleString() + " photos that contain faces, "
+      + "at full size?\n\n" + (p.bytes/1073741824).toFixed(1) + " GB, roughly "
+      + fmtDur(secs) + ".\n\nA face from a 384px thumbnail is usually smaller than the "
+      + "112px the model reads, so it was enlarged and the detail was never there. This "
+      + "replaces those with faces measured from the originals.\n\nThe names you have "
+      + "assigned are carried across."
+      + (p.notInFolder ? "\n\n" + p.notInFolder + " are in another folder and will be "
+          + "skipped." : ""))) return;
+
+  try {
+    await st.note("Improving " + p.files.length.toLocaleString() + " photos…");
+    const r = await runFaceRefine(p.files);
+    if (!r) return;
+    clusterFaces(); await savePeople(); rebuildDerived();
+    renderFaceStale(); renderPeople();
+    const bits = [r.improved + " photos re-read", r.found + " faces measured at full size"];
+    if (r.remapped) bits.push(r.remapped + " names carried across");
+    if (r.failed) bits.push(r.failed + " could not be read");
+    if (r.stopped) bits.push("stopped early — press again to carry on");
+    (r.failed || r.stopped ? st.warn : st.ok)(bits.join(", ") + ".");
+  } catch (e){ st.err(errText(e)); }
 };
 
 $("#btnReembed").onclick = async () => {

@@ -1859,7 +1859,7 @@ async function selfTest(){
            the face in pixels -- geometry, like the box. */
         eq("a face row carries only geometry and provenance",
            Object.keys([...FACES.faces.values()][0]).sort().join(","),
-           "box,detected_at,engine,id,photo_id,px,score");
+           "box,detected_at,engine,id,photo_id,px,score,src");
 
         /* ---- grouping ---- */
         clusterFaces();
@@ -2016,6 +2016,35 @@ async function selfTest(){
              "worst error " + worst2.toFixed(2) + "px");
           ok("degenerate points do not produce a transform",
              faceSimTransform([[5,5],[5,5],[5,5],[5,5],[5,5]], ARC_TEMPLATE) === null);
+        }
+
+        /* ---- re-measuring a photo at full size must not lose a name ----
+           A face read from a 384px thumbnail is usually below the model's
+           112px input, so it was enlarged and the detail was never there.
+           Replacing it is worthwhile -- but only if the naming survives, which
+           means old faces have to be matched to new ones by overlap. */
+        {
+          eq("identical boxes overlap completely",
+             +boxIoU([0.1,0.1,0.2,0.2],[0.1,0.1,0.2,0.2]).toFixed(3), 1);
+          ok("a slightly shifted box still matches",
+             boxIoU([0.1,0.1,0.2,0.2],[0.11,0.11,0.2,0.2]) > 0.7);
+          eq("boxes that do not touch do not match",
+             boxIoU([0.0,0.0,0.1,0.1],[0.5,0.5,0.1,0.1]), 0);
+          ok("a different face in the same photo does not match",
+             boxIoU([0.1,0.1,0.15,0.15],[0.6,0.1,0.15,0.15]) < 0.25);
+        }
+
+        /* ---- the size report drives the decision ---- */
+        {
+          const rep = faceSizeReport();
+          ok("the report describes the faces found", !!rep && rep.faces > 0);
+          ok("and says how many are below the model's input",
+             rep.belowModelInput >= 0 && rep.belowPct >= 0 && rep.belowPct <= 100,
+             rep.belowPct + "%");
+          ok("and where they came from", rep.fromThumbnails >= 0);
+          ok("every face records its source",
+             [...FACES.faces.values()].every(f => f.src === "thumb" || f.src === "original"),
+             [...new Set([...FACES.faces.values()].map(f => f.src))].join(","));
         }
 
         /* ---- the two embedders are different spaces ---- */

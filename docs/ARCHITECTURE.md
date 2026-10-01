@@ -189,6 +189,13 @@ like the photo vectors), and `people.json` (groups and the names you gave them).
 - **Names work everywhere**, not only in the People tab: `ensureFaceNames()` reads the two
   small files (not the vectors, which are tens of megabytes) so chat and the search box can
   filter by a name without loading the grouping machinery.
+- **The aligned 112×112 crop is stored** (~5 KB a face). It is the output of work that
+  cannot be cheaply redone — reading a photo off the share and detecting — so keeping it
+  makes changing embedder a minute's work instead of a day's.
+- **Two passes.** Thumbnails first (fast, and tells us which photos have people in them),
+  then optionally the originals for just those photos, decoded large, because a face below
+  112 px is upscaled into the model. Re-measuring matches old faces to new by box overlap
+  so names survive.
 - **One action deletes all of it**, leaving the rest of the index untouched.
 
 ## Known gaps

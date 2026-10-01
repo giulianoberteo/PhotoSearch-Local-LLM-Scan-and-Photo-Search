@@ -265,6 +265,7 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
       <div class="row" style="margin-bottom:10px">
         <button class="btn" id="btnFaceScan">Find faces</button>
         <button class="btn sec" id="btnRecluster">Re-group</button>
+        <button class="btn sec" id="btnRefine">Improve from originals</button>
         <button class="btn sec" id="btnReembed">Re-measure</button>
         <button class="btn sec" id="btnCompare">Compare models</button>
         <button class="btn sec" id="btnFaceWipe">Delete all face data</button>
@@ -549,9 +550,15 @@ const S = {
      estimating age and gender, and is kept only so the two can be compared on
      the same faces. Threshold depends on the embedder -- they are different
      spaces -- so each carries its own. */
+  /* refinePx: when re-reading an original, decode this big. ArcFace consumes
+     112x112, so a face below that is UPSCALED and real detail is gone -- the
+     measured cost is 0.899 similarity at 103px against 1.000 at 412px. A 384px
+     thumbnail only yields a 112px face when the face fills 29% of the frame,
+     which most snapshots do not. Decoding to 2048 puts a typical face well
+     above 112px, and detection there costs 32ms. */
   faces: { enabled:false, embedder:"arcface",
            threshold:0.42, faceresThreshold:0.75,
-           minScore:0.4, minFacePx:40,
+           minScore:0.4, minFacePx:40, refinePx:2048,
            maxPerPhoto:20, source:"thumbs", readConcurrency:5 },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null
@@ -4212,6 +4219,95 @@ async function planFaceScan(onPhase, signal){
            notInFolder: outstanding.length - files.length };
 }
 
+/* Only photos ALREADY KNOWN to contain a face are worth re-reading at full
+   resolution. That is the whole optimisation: the thumbnail pass costs 8
+   minutes and tells us which 35-or-so percent of the library has people in it,
+   so the expensive pass reads a few gigabytes instead of all 14.3. */
+async function planFaceRefine(onPhase, signal){
+  const say = async m => { if (onPhase) await onPhase(m); };
+  await say("Opening the index…");
+  await indexOp("opening the index", note => ensureIndex(note, { write:false }),
+    { onPhase: say, cost: 4 });
+  if (!IDX.loaded){ await say("Loading records…"); await loadRecords(); }
+  if (!FACES.loaded){ await say("Loading known faces…"); await loadFaces(); }
+
+  const wanted = new Set();
+  for (const f of FACES.faces.values())
+    if (f.src !== "original") wanted.add(f.photo_id);
+  if (!wanted.size)
+    return { files: [], candidates: 0, notInFolder: 0, bytes: 0 };
+
+  await say("Finding the originals for " + wanted.size + " photos with faces…");
+  let plan = (S.plan && !S.planStale && !S.plan.folderLooksEmpty) ? S.plan : null;
+  if (!plan) plan = await buildPlan(async m => { await say(m); }, signal);
+  const files = [];
+  for (const g of ["ok","stale","changed","failed","moved"])
+    for (const f of plan[g])
+      if (wanted.has(f.id) && !files.some(x => x.id === f.id)) files.push(f);
+  const bytes = files.reduce((a, f) => a + (f.size || 2.2*1048576), 0);
+  return { files, candidates: wanted.size,
+           notInFolder: wanted.size - files.length, bytes };
+}
+
+async function runFaceRefine(files){
+  if (!files.length){ toast("Nothing to improve."); return null; }
+  RUN.active = true; RUN.paused = false; RUN.stop = false;
+  RUN.abort = new AbortController();
+  RUN.done = 0; RUN.total = files.length; RUN.errors = []; RUN.times = [];
+  RUN.tokens = []; RUN.errorCount = 0; RUN.started = Date.now(); RUN.mode = "faces";
+  RUN.batch = []; RUN.vecBatch = []; RUN.pending = new Set();
+  await acquireWakeLock();
+  scanUi(true);
+  $("#progCard").hidden = false;
+  $("#facesProg").hidden = false;
+  updateProgress();
+
+  const queue = files.slice();
+  let improved = 0, found = 0, remapped = 0;
+  const conc = Math.max(1, Math.min(8, S.faces.readConcurrency));
+  async function loop(){
+    for(;;){
+      await waitIfPaused();
+      if (RUN.stop) return;
+      const f = queue.shift();
+      if (!f) return;
+      const t0 = performance.now();
+      try {
+        await withDeadline("improving " + f.name, ioDeadline(10, 90000), (async () => {
+          const file = await withRetry("read " + f.name, () => f.handle.getFile());
+          /* Decode BIG: the point of this pass is pixels on the face. */
+          const img = await processImage(file, f.kind, { bigPx: S.faces.refinePx });
+          const bmp = await createImageBitmap(img.big);
+          try {
+            const r = await faceDetectChainRun(() => refinePhotoFaces(f.id, bmp));
+            improved++; found += r.found; remapped += r.remapped;
+          } finally { bmp.close(); }
+          showCurrent(img.thumb, f.path);
+        })());
+        RUN.times.push((performance.now() - t0) / 1000);
+      } catch (e){
+        if (e.name === "AbortError") return;
+        RUN.errorCount++;
+        if (RUN.errors.length < 200) RUN.errors.push({ path:f.path, error:errText(e) });
+        if (RUN.errorCount < 20 || RUN.errorCount % 25 === 0) renderErrors();
+      }
+      RUN.done++;
+      updateProgress();
+    }
+  }
+  try { await Promise.all(Array.from({ length: conc }, loop)); }
+  finally {
+    RUN.active = false;
+    releaseWakeLock();
+    scanUi(false);
+    updateProgress();
+    renderErrors();
+    $("#facesProg").hidden = true;
+    await savePeople();
+  }
+  return { improved, found, remapped, failed: RUN.errorCount, stopped: RUN.stop };
+}
+
 async function runFaceScan(files){
   if (!files.length){ toast("No photos left to look at."); return null; }
   RUN.active = true; RUN.paused = false; RUN.stop = false;
@@ -6057,7 +6153,7 @@ async function loadFaces(){
       } catch {}
     }
   }
-  for (const f of FACES.faces.values()){
+  for (const f of [...FACES.faces.values()]){
     if (f.removed) { FACES.faces.delete(f.id); continue; }
     if (!FACES.byPhoto.has(f.photo_id)) FACES.byPhoto.set(f.photo_id, []);
     FACES.byPhoto.get(f.photo_id).push(f.id);
@@ -6453,6 +6549,13 @@ async function faceCropCanvas(id){
    does NOT, because one Human instance is not re-entrant. Parallel readers
    feeding a serialised detector is the shape that fits both. */
 let faceDetectChain = Promise.resolve();
+/* Anything that runs the detector must go through the same queue, refinement
+   included, or two detections overlap on a non-re-entrant instance. */
+function faceDetectChainRun(fn){
+  const run = faceDetectChain.then(fn, fn);
+  faceDetectChain = run.then(() => {}, () => {});
+  return run;
+}
 function detectFacesSerial(photoId, bitmap){
   const run = faceDetectChain.then(
     () => detectAndEmbed(photoId, bitmap),
@@ -6461,8 +6564,11 @@ function detectFacesSerial(photoId, bitmap){
   return run;
 }
 
-/* One photo, already decoded. Returns the face rows written. */
-async function detectFacesIn(photoId, bitmap){
+/* Storage path: takes an already-detected set and writes it. The production
+   pipeline is detectAndEmbed below, which aligns and embeds first; this stays
+   as the narrow seam the suite drives, so storage, grouping and naming can be
+   exercised without a 13 MB model download or a drawable bitmap. */
+async function detectFacesIn(photoId, bitmap, src){
   if (!FACE_ENGINE) throw new Error("no face engine loaded");
   const found = await FACE_ENGINE(bitmap);
   /* A face 30 pixels across carries no identity: the descriptor returns
@@ -6484,6 +6590,7 @@ async function detectFacesIn(photoId, bitmap){
     if (FACES.faces.has(id)) continue;
     rows.push({ id, photo_id: photoId, box: f.box.map(v => +v.toFixed(4)),
                 score: +(f.score || 0).toFixed(4), px: Math.round(facePx(f)),
+                src: src || "thumb",
                 engine: FACE_ENGINE_NAME, detected_at: new Date().toISOString() });
     pairs.push({ id, vec: f.vec });
   }
@@ -6495,7 +6602,7 @@ async function detectFacesIn(photoId, bitmap){
 
 /* Detect, align, store the crop, and embed with whichever embedder is chosen.
    Replaces the old path that embedded a raw box crop. */
-async function detectAndEmbed(photoId, bitmap){
+async function detectAndEmbed(photoId, bitmap, src){
   if (!FACE_ENGINE) throw new Error("no face detector loaded");
   const W = bitmap.width || 1, H = bitmap.height || 1;
   const facePx = f => Math.max(f.box[2] * W, f.box[3] * H);
@@ -6521,6 +6628,7 @@ async function detectAndEmbed(photoId, bitmap){
     try { await saveFaceCrop(id, crop); } catch {}
     rows.push({ id, photo_id: photoId, box: f.box.map(v => +v.toFixed(4)),
                 score: +(f.score || 0).toFixed(4), px: Math.round(facePx(f)),
+                src: src || "thumb",
                 engine, detected_at: new Date().toISOString() });
     pairs.push({ id, vec });
   }
@@ -6528,6 +6636,67 @@ async function detectAndEmbed(photoId, bitmap){
   await appendFaceVectors(pairs);
   await appendFaces(rows);
   return rows;
+}
+
+/* ---- re-measuring one photo at full resolution ----
+   A face read from a 384px thumbnail is usually smaller than the 112px the
+   model consumes, so it was upscaled and the detail is simply not there. This
+   replaces that photo's faces with ones taken from the original.
+
+   The names the user assigned must survive it, so old faces are matched to new
+   ones by overlap and every reference is rewritten. Losing someone's naming
+   work to a quality improvement would not be a trade worth making. */
+function boxIoU(a, b){
+  const ax2 = a[0] + a[2], ay2 = a[1] + a[3];
+  const bx2 = b[0] + b[2], by2 = b[1] + b[3];
+  const ix = Math.max(0, Math.min(ax2, bx2) - Math.max(a[0], b[0]));
+  const iy = Math.max(0, Math.min(ay2, by2) - Math.max(a[1], b[1]));
+  const inter = ix * iy;
+  const uni = a[2]*a[3] + b[2]*b[3] - inter;
+  return uni > 0 ? inter / uni : 0;
+}
+
+async function refinePhotoFaces(photoId, bitmap){
+  const olds = (FACES.byPhoto.get(photoId) || [])
+    .map(id => FACES.faces.get(id)).filter(Boolean);
+  /* Detect fresh on the full-resolution image. */
+  const before = new Set(olds.map(f => f.id));
+  for (const f of olds) FACES.faces.delete(f.id);
+  FACES.byPhoto.delete(photoId);
+  let fresh = [];
+  try {
+    fresh = await detectAndEmbed(photoId, bitmap, "original");
+  } catch (e){
+    for (const f of olds){                      // put it back on failure
+      FACES.faces.set(f.id, f);
+      if (!FACES.byPhoto.has(photoId)) FACES.byPhoto.set(photoId, []);
+      FACES.byPhoto.get(photoId).push(f.id);
+    }
+    throw e;
+  }
+  /* Carry every name across by overlap, then retire the old rows. */
+  let remapped = 0;
+  for (const group of [...FACES.people, ...FACES.clusters]){
+    for (let i = 0; i < group.face_ids.length; i++){
+      const oldId = group.face_ids[i];
+      if (!before.has(oldId)) continue;
+      const oldFace = olds.find(f => f.id === oldId);
+      let best = null, bestIoU = 0.25;
+      for (const nf of fresh){
+        const v = boxIoU(oldFace.box, nf.box);
+        if (v > bestIoU){ bestIoU = v; best = nf; }
+      }
+      group.face_ids[i] = best ? best.id : null;
+      if (best) remapped++;
+    }
+    group.face_ids = group.face_ids.filter(Boolean);
+  }
+  const retired = olds.map(f => ({ id:f.id, photo_id:photoId, removed:true }));
+  if (retired.length) await appendFaces(retired);
+  for (const r of retired) FACES.faces.delete(r.id);
+  FACES.people = FACES.people.filter(p => p.face_ids.length);
+  FACES.clusters = FACES.clusters.filter(c => c.face_ids.length);
+  return { replaced: olds.length, found: fresh.length, remapped };
 }
 
 
@@ -6633,6 +6802,22 @@ async function compareEmbedders(onProgress){
            arcface: score("arc"), current: score("old") };
 }
 
+
+/* How big the faces in this library actually are. ArcFace consumes 112x112, so
+   anything below that was upscaled and is costing accuracy -- this says how
+   much of the library is in that position, from the real stored sizes. */
+function faceSizeReport(){
+  const px = [...FACES.faces.values()].map(f => f.px || 0).filter(v => v > 0).sort((a,b) => a-b);
+  if (!px.length) return null;
+  const at = q => px[Math.min(px.length-1, Math.floor(px.length*q))];
+  const below = px.filter(v => v < ARC_SIZE).length;
+  const fromThumb = [...FACES.faces.values()].filter(f => f.src !== "original").length;
+  return { faces: px.length, median: at(0.5), p10: at(0.1), p90: at(0.9),
+           belowModelInput: below,
+           belowPct: Math.round(below / px.length * 100),
+           fromThumbnails: fromThumb };
+}
+
 /* ==================== 86-peopleui.js ==================== */
 
 /* ================= the People tab =================
@@ -6694,6 +6879,14 @@ function renderPeople(){
     + ". Type a name to label a group; it becomes searchable straight away."
     + "  If people are mixed together, raise the strictness and re-group — it is "
     + "instant and keeps your names.";
+  const rep = faceSizeReport();
+  if (rep && rep.belowPct >= 25)
+    $("#faceNote").textContent += "  " + rep.belowPct + "% of faces are smaller than the "
+      + "112px the model reads (median " + rep.median + "px), so they were enlarged and "
+      + "the detail was never there — “Improve from originals” fixes that.";
+  else if (rep)
+    $("#faceNote").textContent += "  Median face " + rep.median + "px; "
+      + rep.belowPct + "% below the model's 112px input.";
 
   const grid = el("div", "people");
   all.forEach((g, i) => {
@@ -6845,6 +7038,52 @@ $("#sFaceEmb").onchange = async () => {
     ? "ArcFace: a purpose-built recognition model. Press \u201cRe-measure\u201d to apply it "
       + "to the faces already found — it uses the stored crops, so no photo is re-read."
     : "faceres: kept for comparison only. It is a by-product of age/gender estimation.");
+};
+
+$("#btnRefine").onclick = async () => {
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the improvement pass"))) return;
+  if (RUN.active){ toast("Stop the scan first."); return; }
+  const host = $("#faceOut"); resetChecks(host);
+  const st = step(host, "Improve from originals");
+  let p;
+  try {
+    await st.note("Loading the models…");
+    await loadHumanEngine(async m => { await st.note(m); });
+    if (S.faces.embedder !== "faceres") await loadArcFace(async m => { await st.note(m); });
+    p = await planFaceRefine(async m => { await st.note(m); });
+  } catch (e){ st.err(errText(e)); return; }
+
+  if (!p.candidates){ st.ok("Every face already came from a full-size original."); return; }
+  if (!p.files.length){
+    st.warn(p.candidates + " photos have faces taken from thumbnails, but none of those "
+      + "photos are in the folder you have open. Connect the folder they live in "
+      + "(Settings) and try again.");
+    return;
+  }
+  const unit = storageUnitMs();
+  const secs = (p.bytes / (430*1024) + p.files.length * ((unit != null ? unit : 50)/1000))
+    / Math.max(1, Math.min(8, S.faces.readConcurrency)) + p.files.length * 0.08;
+  if (!confirm("Re-read " + p.files.length.toLocaleString() + " photos that contain faces, "
+      + "at full size?\n\n" + (p.bytes/1073741824).toFixed(1) + " GB, roughly "
+      + fmtDur(secs) + ".\n\nA face from a 384px thumbnail is usually smaller than the "
+      + "112px the model reads, so it was enlarged and the detail was never there. This "
+      + "replaces those with faces measured from the originals.\n\nThe names you have "
+      + "assigned are carried across."
+      + (p.notInFolder ? "\n\n" + p.notInFolder + " are in another folder and will be "
+          + "skipped." : ""))) return;
+
+  try {
+    await st.note("Improving " + p.files.length.toLocaleString() + " photos…");
+    const r = await runFaceRefine(p.files);
+    if (!r) return;
+    clusterFaces(); await savePeople(); rebuildDerived();
+    renderFaceStale(); renderPeople();
+    const bits = [r.improved + " photos re-read", r.found + " faces measured at full size"];
+    if (r.remapped) bits.push(r.remapped + " names carried across");
+    if (r.failed) bits.push(r.failed + " could not be read");
+    if (r.stopped) bits.push("stopped early — press again to carry on");
+    (r.failed || r.stopped ? st.warn : st.ok)(bits.join(", ") + ".");
+  } catch (e){ st.err(errText(e)); }
 };
 
 $("#btnReembed").onclick = async () => {
@@ -9227,7 +9466,7 @@ async function selfTest(){
            the face in pixels -- geometry, like the box. */
         eq("a face row carries only geometry and provenance",
            Object.keys([...FACES.faces.values()][0]).sort().join(","),
-           "box,detected_at,engine,id,photo_id,px,score");
+           "box,detected_at,engine,id,photo_id,px,score,src");
 
         /* ---- grouping ---- */
         clusterFaces();
@@ -9384,6 +9623,35 @@ async function selfTest(){
              "worst error " + worst2.toFixed(2) + "px");
           ok("degenerate points do not produce a transform",
              faceSimTransform([[5,5],[5,5],[5,5],[5,5],[5,5]], ARC_TEMPLATE) === null);
+        }
+
+        /* ---- re-measuring a photo at full size must not lose a name ----
+           A face read from a 384px thumbnail is usually below the model's
+           112px input, so it was enlarged and the detail was never there.
+           Replacing it is worthwhile -- but only if the naming survives, which
+           means old faces have to be matched to new ones by overlap. */
+        {
+          eq("identical boxes overlap completely",
+             +boxIoU([0.1,0.1,0.2,0.2],[0.1,0.1,0.2,0.2]).toFixed(3), 1);
+          ok("a slightly shifted box still matches",
+             boxIoU([0.1,0.1,0.2,0.2],[0.11,0.11,0.2,0.2]) > 0.7);
+          eq("boxes that do not touch do not match",
+             boxIoU([0.0,0.0,0.1,0.1],[0.5,0.5,0.1,0.1]), 0);
+          ok("a different face in the same photo does not match",
+             boxIoU([0.1,0.1,0.15,0.15],[0.6,0.1,0.15,0.15]) < 0.25);
+        }
+
+        /* ---- the size report drives the decision ---- */
+        {
+          const rep = faceSizeReport();
+          ok("the report describes the faces found", !!rep && rep.faces > 0);
+          ok("and says how many are below the model's input",
+             rep.belowModelInput >= 0 && rep.belowPct >= 0 && rep.belowPct <= 100,
+             rep.belowPct + "%");
+          ok("and where they came from", rep.fromThumbnails >= 0);
+          ok("every face records its source",
+             [...FACES.faces.values()].every(f => f.src === "thumb" || f.src === "original"),
+             [...new Set([...FACES.faces.values()].map(f => f.src))].join(","));
         }
 
         /* ---- the two embedders are different spaces ---- */

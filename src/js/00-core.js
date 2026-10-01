@@ -72,9 +72,15 @@ const S = {
      estimating age and gender, and is kept only so the two can be compared on
      the same faces. Threshold depends on the embedder -- they are different
      spaces -- so each carries its own. */
+  /* refinePx: when re-reading an original, decode this big. ArcFace consumes
+     112x112, so a face below that is UPSCALED and real detail is gone -- the
+     measured cost is 0.899 similarity at 103px against 1.000 at 412px. A 384px
+     thumbnail only yields a 112px face when the face fills 29% of the frame,
+     which most snapshots do not. Decoding to 2048 puts a typical face well
+     above 112px, and detection there costs 32ms. */
   faces: { enabled:false, embedder:"arcface",
            threshold:0.42, faceresThreshold:0.75,
-           minScore:0.4, minFacePx:40,
+           minScore:0.4, minFacePx:40, refinePx:2048,
            maxPerPhoto:20, source:"thumbs", readConcurrency:5 },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null

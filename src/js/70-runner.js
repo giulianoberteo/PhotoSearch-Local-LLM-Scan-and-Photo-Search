@@ -695,6 +695,95 @@ async function planFaceScan(onPhase, signal){
            notInFolder: outstanding.length - files.length };
 }
 
+/* Only photos ALREADY KNOWN to contain a face are worth re-reading at full
+   resolution. That is the whole optimisation: the thumbnail pass costs 8
+   minutes and tells us which 35-or-so percent of the library has people in it,
+   so the expensive pass reads a few gigabytes instead of all 14.3. */
+async function planFaceRefine(onPhase, signal){
+  const say = async m => { if (onPhase) await onPhase(m); };
+  await say("Opening the index…");
+  await indexOp("opening the index", note => ensureIndex(note, { write:false }),
+    { onPhase: say, cost: 4 });
+  if (!IDX.loaded){ await say("Loading records…"); await loadRecords(); }
+  if (!FACES.loaded){ await say("Loading known faces…"); await loadFaces(); }
+
+  const wanted = new Set();
+  for (const f of FACES.faces.values())
+    if (f.src !== "original") wanted.add(f.photo_id);
+  if (!wanted.size)
+    return { files: [], candidates: 0, notInFolder: 0, bytes: 0 };
+
+  await say("Finding the originals for " + wanted.size + " photos with faces…");
+  let plan = (S.plan && !S.planStale && !S.plan.folderLooksEmpty) ? S.plan : null;
+  if (!plan) plan = await buildPlan(async m => { await say(m); }, signal);
+  const files = [];
+  for (const g of ["ok","stale","changed","failed","moved"])
+    for (const f of plan[g])
+      if (wanted.has(f.id) && !files.some(x => x.id === f.id)) files.push(f);
+  const bytes = files.reduce((a, f) => a + (f.size || 2.2*1048576), 0);
+  return { files, candidates: wanted.size,
+           notInFolder: wanted.size - files.length, bytes };
+}
+
+async function runFaceRefine(files){
+  if (!files.length){ toast("Nothing to improve."); return null; }
+  RUN.active = true; RUN.paused = false; RUN.stop = false;
+  RUN.abort = new AbortController();
+  RUN.done = 0; RUN.total = files.length; RUN.errors = []; RUN.times = [];
+  RUN.tokens = []; RUN.errorCount = 0; RUN.started = Date.now(); RUN.mode = "faces";
+  RUN.batch = []; RUN.vecBatch = []; RUN.pending = new Set();
+  await acquireWakeLock();
+  scanUi(true);
+  $("#progCard").hidden = false;
+  $("#facesProg").hidden = false;
+  updateProgress();
+
+  const queue = files.slice();
+  let improved = 0, found = 0, remapped = 0;
+  const conc = Math.max(1, Math.min(8, S.faces.readConcurrency));
+  async function loop(){
+    for(;;){
+      await waitIfPaused();
+      if (RUN.stop) return;
+      const f = queue.shift();
+      if (!f) return;
+      const t0 = performance.now();
+      try {
+        await withDeadline("improving " + f.name, ioDeadline(10, 90000), (async () => {
+          const file = await withRetry("read " + f.name, () => f.handle.getFile());
+          /* Decode BIG: the point of this pass is pixels on the face. */
+          const img = await processImage(file, f.kind, { bigPx: S.faces.refinePx });
+          const bmp = await createImageBitmap(img.big);
+          try {
+            const r = await faceDetectChainRun(() => refinePhotoFaces(f.id, bmp));
+            improved++; found += r.found; remapped += r.remapped;
+          } finally { bmp.close(); }
+          showCurrent(img.thumb, f.path);
+        })());
+        RUN.times.push((performance.now() - t0) / 1000);
+      } catch (e){
+        if (e.name === "AbortError") return;
+        RUN.errorCount++;
+        if (RUN.errors.length < 200) RUN.errors.push({ path:f.path, error:errText(e) });
+        if (RUN.errorCount < 20 || RUN.errorCount % 25 === 0) renderErrors();
+      }
+      RUN.done++;
+      updateProgress();
+    }
+  }
+  try { await Promise.all(Array.from({ length: conc }, loop)); }
+  finally {
+    RUN.active = false;
+    releaseWakeLock();
+    scanUi(false);
+    updateProgress();
+    renderErrors();
+    $("#facesProg").hidden = true;
+    await savePeople();
+  }
+  return { improved, found, remapped, failed: RUN.errorCount, stopped: RUN.stop };
+}
+
 async function runFaceScan(files){
   if (!files.length){ toast("No photos left to look at."); return null; }
   RUN.active = true; RUN.paused = false; RUN.stop = false;

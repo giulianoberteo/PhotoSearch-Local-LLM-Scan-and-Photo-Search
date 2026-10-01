@@ -377,7 +377,46 @@ you downloaded.
 
 ---
 
-## 13. Index size
+## 13. Resolution matters, but bigger thumbnails are the wrong lever
+
+ArcFace consumes 112×112. A face **smaller than that in the source** is enlarged into the
+model, and the detail was never there. Measured by embedding one face rendered at several
+scales and comparing each to the largest:
+
+| face size in the source | cosine against the best |
+|---:|---:|
+| 412 px | 1.000 (reference) |
+| 274 px | 0.965 |
+| 217 px | 0.963 |
+| 139 px | 0.946 |
+| **103 px** | **0.899** |
+
+A 0.10 shift is large when same-person similarity has to be told from different-person
+similarity. And a **384 px thumbnail only yields a 112 px face when the face fills 29% of
+the frame**, which ordinary snapshots do not — so most faces read from thumbnails are
+upscaled.
+
+**Raising the thumbnail size does not fix it.** Regenerating thumbnails means re-reading
+every original (14.3 GB, 9.7 hours here), leaves the index permanently larger, and still
+bakes in one fixed compromise. Reading the originals *for the face pass only* costs the same
+one-time read, gives full-resolution faces, and — because the aligned 112×112 crop is kept —
+never has to be paid again for any future model. There is nothing to gain from storing
+anything larger than the crop, because 112×112 is what the model reads.
+
+**The optimisation that makes it affordable:** the thumbnail pass costs 8 minutes and
+identifies which photos contain people at all. Only those need re-reading at full size, so
+the expensive pass touches a few gigabytes instead of all 14.3.
+
+**Detection is not the constraint.** It works from 384 px to 3000 px at 21–62 ms; an earlier
+apparent failure on large images was an artefact of one synthetic drawing, not a size limit.
+
+**Replacing a face must not cost the user their naming.** Re-measuring a photo produces new
+face ids (the boxes differ), so old faces are matched to new ones by box overlap and every
+group reference is rewritten before the old rows are retired.
+
+---
+
+## 14. Index size
 
 Measured on real photos, then projected:
 
