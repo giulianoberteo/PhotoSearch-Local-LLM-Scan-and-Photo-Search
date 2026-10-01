@@ -451,7 +451,8 @@ window.addEventListener("resize", () => {
 });
 
 /* ---- viewer ---- */
-const VW = { open:false, i:-1, tok:0, url:null, info:false, angle:0 };
+const VW = { open:false, i:-1, tok:0, url:null, info:false, angle:0, z:1, px:0, py:0 };
+const VW_MAXZ = 8;
 
 function vwRectFor(img){
   const availW = window.innerWidth - (VW.info ? 320 : 0), top = 56, availH = window.innerHeight - top - 16;
@@ -470,6 +471,35 @@ function vwSet(img, rc){
   img.style.left = (rc.left + (rc.width - w) / 2) + "px";
   img.style.top = (rc.top + (rc.height - h) / 2) + "px";
   img.style.rotate = VW.angle + "deg";
+  /* Zoom is a scale about the photo's centre plus a pan, kept so the photo
+     never leaves the window. Both compose with the quarter turn above. */
+  if (VW.z > 1){
+    const mx = Math.max(0, (rc.width * VW.z - (window.innerWidth - (VW.info ? 320 : 0))) / 2),
+          my = Math.max(0, (rc.height * VW.z - window.innerHeight) / 2);
+    VW.px = Math.max(-mx, Math.min(mx, VW.px)); VW.py = Math.max(-my, Math.min(my, VW.py));
+  } else { VW.px = 0; VW.py = 0; }
+  img.style.scale = String(VW.z);
+  img.style.translate = VW.px + "px " + VW.py + "px";
+  img.classList.toggle("zoomed", VW.z > 1);
+}
+function vwZoomUI(){
+  $("#vwZr").value = String(Math.round(VW.z * 100));
+  $("#vwZv").textContent = VW.z <= 1 ? "Fit" : Math.round(VW.z * 100) + "%";
+}
+function vwZoomReset(){ VW.z = 1; VW.px = 0; VW.py = 0; vwZoomUI(); }
+/* Zooms to `z`, keeping the point under (cx, cy) where it is, so the wheel
+   zooms into whatever the pointer is over. */
+function vwZoomTo(z, cx, cy){
+  if (!VW.open) return;
+  z = Math.max(1, Math.min(VW_MAXZ, z));
+  const rc = vwRectFor($("#vwImg")), Cx = rc.left + rc.width / 2, Cy = rc.top + rc.height / 2;
+  if (cx == null){ cx = Cx; cy = Cy; }
+  const k = z / VW.z;
+  VW.px = (cx - Cx) - k * (cx - Cx - VW.px);
+  VW.py = (cy - Cy) - k * (cy - Cy - VW.py);
+  VW.z = z;
+  vwPlace(false);
+  vwZoomUI();
 }
 /* Fits the photo to the free space. Animated when the layout changes under it
    (opening the info panel), instant while the window itself is being resized. */
@@ -534,6 +564,7 @@ async function vwShow(i){
   const tok = ++VW.tok, r = GAL.list[i].r, img = $("#vwImg");
   VW.i = i;
   VW.angle = r.rotation || 0;
+  vwZoomReset();
   vwFill(r);
   const u = await thumbUrl(r.id);
   if (tok !== VW.tok) return;
@@ -549,6 +580,7 @@ async function openViewer(i){
   const tile = GAL.shown.get(i), v = $("#viewer"), img = $("#vwImg");
   const from = tile ? tile.getBoundingClientRect() : null;
   VW.info = false; v.classList.remove("info");
+  vwZoomReset();
   v.hidden = false;
   const tok = ++VW.tok;
   VW.i = i;
@@ -576,6 +608,7 @@ function closeViewer(){
   if (!VW.open) return;
   VW.open = false;
   const tok = ++VW.tok, v = $("#viewer"), img = $("#vwImg");
+  vwZoomReset();
   const tile = GAL.shown.get(VW.i);
   const rc = tile ? tile.getBoundingClientRect() : null;
   const onScreen = rc && rc.bottom > 0 && rc.top < window.innerHeight;
@@ -666,14 +699,42 @@ $("#viewer").addEventListener("click", e => {
 /* Keep the page behind the viewer from scrolling without locking it (a lock
    would change the scrollbar width and re-flow the grid underneath). */
 $("#viewer").addEventListener("wheel", e => {
-  if (!e.target.closest("#vwInfo")) e.preventDefault();
+  if (e.target.closest("#vwInfo")) return;
+  e.preventDefault();
+  if (e.target.closest(".vwBar, #vwZoom")) return;
+  // Wheel and trackpad pinch (which arrives as ctrl+wheel) zoom into the pointer.
+  vwZoomTo(VW.z * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), e.clientX, e.clientY);
 }, { passive:false });
+$("#vwZr").oninput = () => vwZoomTo(+$("#vwZr").value / 100);
+$("#vwZm").onclick = () => vwZoomTo(VW.z / 1.5);
+$("#vwZp").onclick = () => vwZoomTo(VW.z * 1.5);
+$("#vwZv").onclick = () => vwZoomTo(1);
+$("#vwImg").addEventListener("dblclick", e => vwZoomTo(VW.z > 1 ? 1 : 2.5, e.clientX, e.clientY));
+{
+  let drag = null;
+  const img = $("#vwImg");
+  img.addEventListener("pointerdown", e => {
+    if (VW.z <= 1 || e.button) return;
+    drag = { x:e.clientX, y:e.clientY, px:VW.px, py:VW.py };
+    img.setPointerCapture(e.pointerId); img.classList.add("drag");
+  });
+  img.addEventListener("pointermove", e => {
+    if (!drag) return;
+    VW.px = drag.px + e.clientX - drag.x; VW.py = drag.py + e.clientY - drag.y;
+    vwPlace(false);
+  });
+  const end = () => { drag = null; img.classList.remove("drag"); };
+  img.addEventListener("pointerup", end); img.addEventListener("pointercancel", end);
+}
 document.addEventListener("keydown", e => {
   if (!VW.open) return;
   if (e.key === "Escape") closeViewer();
   else if (e.key === "ArrowLeft") vwStep(-1);
   else if (e.key === "ArrowRight") vwStep(1);
   else if (e.key === "i" || e.key === "I") $("#vwInfoBtn").click();
+  else if ((e.key === "+" || e.key === "=") && !e.metaKey && !e.ctrlKey) vwZoomTo(VW.z * 1.5);
+  else if ((e.key === "-" || e.key === "_") && !e.metaKey && !e.ctrlKey) vwZoomTo(VW.z / 1.5);
+  else if (e.key === "0" && !e.metaKey && !e.ctrlKey) vwZoomTo(1);
   else if (e.key === "Delete" || e.key === "Backspace") vwRemove();
   else if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey)
     vwRotate(e.shiftKey ? -1 : 1);
