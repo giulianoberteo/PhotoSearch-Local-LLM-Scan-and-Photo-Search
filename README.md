@@ -14,15 +14,63 @@ It works with **any local server that speaks the OpenAI API**: [LM Studio](https
 [Ollama](https://ollama.com), llama.cpp's server, vLLM and LocalAI. You point it at a URL and
 pick your models; nothing is specific to one product.
 
+```mermaid
+%%{init: {"theme": "base", "flowchart": {"curve": "basis", "nodeSpacing": 26, "rankSpacing": 60, "htmlLabels": true}, "themeVariables": {"lineColor": "#595959", "clusterBkg": "#fafafa", "clusterBorder": "#bfbfbf", "edgeLabelBackground": "#ffffff"}}}%%
+flowchart LR
+    user(["<b>You</b><br/>pick a folder · browse<br/>ask questions"])
+
+    subgraph browser["Desktop Chrome or Edge · PhotoSearch.html (one file, nothing to install)"]
+        subgraph ui["Interface"]
+            lib["<b>Library</b><br/>zoom viewer<br/>remove / restore"]
+            chat["<b>Chat</b>"]
+            tl["<b>Timeline</b>"]
+            ppl["<b>People</b>"]
+            scan["<b>Scan and Settings</b>"]
+        end
+        subgraph engine["Engine · runs entirely in the browser"]
+            planner["<b>Planner</b><br/>walk · identity<br/>new / changed / missing"] --> runner["<b>Scan runner</b><br/>queue · retries<br/>checkpoint · backup"] --> worker["<b>Decode worker</b><br/>resize · EXIF<br/>HEIC / TIFF"]
+            search["<b>Search</b><br/>BM25 + cosine<br/>rank fusion"] --> agent["<b>Chat agent</b><br/>9 local tools"]
+            faces["<b>Faces</b><br/>detect · embed<br/>group, never identify"]
+        end
+    end
+
+    ui --> engine
+
+    photos[("<b>Photo folder</b><br/>your originals<br/>read only, never modified")]
+    index[("<b>.photoindex/</b><br/>records · vectors<br/>thumbnails · face data")]
+
+    subgraph server["Local model server · any OpenAI-compatible API"]
+        vision["<b>Vision model</b><br/>describes each photo"]
+        embed["<b>Embedding model</b><br/>meaning-based search"]
+        llm["<b>Chat model</b><br/>answers questions"]
+    end
+
+    cdn["<b>Public CDNs</b><br/>decoders · face models<br/>downloaded once, cached"]
+
+    user --> browser
+    browser -->|"reads pixels"| photos
+    browser <-->|"reads and appends<br/>metadata"| index
+    browser -->|"HTTP /v1: images,<br/>text, tool calls"| server
+    browser -.->|"first use only"| cdn
+
+    classDef actor fill:#fff7e6,stroke:#d48806,color:#262626
+    classDef comp fill:#e6f4ff,stroke:#1677ff,color:#0b1f33
+    classDef store fill:#f6ffed,stroke:#389e0d,color:#10260a
+    classDef model fill:#f9f0ff,stroke:#722ed1,color:#22075e
+    classDef ext fill:#f5f5f5,stroke:#8c8c8c,color:#262626
+    class user actor
+    class lib,chat,tl,ppl,scan,planner,runner,worker,search,agent,faces comp
+    class photos,index store
+    class vision,embed,llm model
+    class cdn ext
 ```
-┌── you ──────────┐      ┌── PhotoSearch.html ──────┐      ┌── your model server ─┐
-│  pick a folder  │─────▶│  walk · decode · index   │─────▶│  vision model        │
-│  ask a question │◀─────│  BM25 + vectors + tools  │◀─────│  chat · embeddings   │
-└─────────────────┘      └──────────┬───────────────┘      └──────────────────────┘
-                                    ▼                       LM Studio · Ollama ·
-                         .photoindex/                       llama.cpp · vLLM · …
-                         (plain JSONL + a float32 blob)
-```
+
+**Reading the diagram.** Everything inside the grey box runs in your browser tab. The
+interface drives the engine; the engine reads your photos (read only), reads and appends to the
+index, and is the only part that talks to the model server (images and text while scanning,
+tool calls while chatting). The CDN is touched once, the first time a decoder or face model is
+needed. Where each piece of data lives is spelled out in
+[Where your photos and data live](#where-your-photos-and-data-live).
 
 The current version is shown in the app's footer; the [ChangeLog](ChangeLog.md) says what changed and when.
 
