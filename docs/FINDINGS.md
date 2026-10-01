@@ -416,7 +416,34 @@ group reference is rewritten before the old rows are retired.
 
 ---
 
-## 14. Index size
+## 14. Changing what a setting MEANS needs a migration, like changing its name
+
+`faces.threshold` meant the faceres threshold, around 0.75. When ArcFace arrived it came to
+mean the ArcFace threshold, which lives near 0.42 — a different space, not a different
+default. Nothing migrated, so `{...defaults, ...saved}` quietly applied the saved 0.75 to
+ArcFace, where almost nothing merges. The setting sabotaged the model it existed to tune,
+and the UI displayed 0.75 beside the word "ArcFace" as though that were intended.
+
+A saved value with no sibling key beside it can only have come from the old scheme, which
+is enough to migrate on:
+
+```js
+if (old.threshold != null && old.faceresThreshold == null){
+  old.faceresThreshold = old.threshold;
+  delete old.threshold;              // let the new default stand
+}
+```
+
+**And a control has to be able to express the value.** The slider's floor was `0.50`, so
+`0.42` clamped up to `0.50` — silently, to a number the user never chose. Range and value
+now both follow the active embedder.
+
+The general rule: renaming a key is obviously a breaking change, and redefining its units is
+exactly as breaking while looking like nothing happened.
+
+---
+
+## 15. Index size
 
 Measured on real photos, then projected:
 

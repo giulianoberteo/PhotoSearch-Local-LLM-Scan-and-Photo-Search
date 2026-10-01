@@ -706,6 +706,7 @@ async function planFaceRefine(onPhase, signal){
     { onPhase: say, cost: 4 });
   if (!IDX.loaded){ await say("Loading records…"); await loadRecords(); }
   if (!FACES.loaded){ await say("Loading known faces…"); await loadFaces(); }
+  await say(FACES.faces.size + " faces known; checking which came from thumbnails…");
 
   const wanted = new Set();
   for (const f of FACES.faces.values())

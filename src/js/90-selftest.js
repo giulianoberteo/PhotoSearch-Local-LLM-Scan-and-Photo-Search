@@ -2018,6 +2018,69 @@ async function selfTest(){
              faceSimTransform([[5,5],[5,5],[5,5],[5,5],[5,5]], ARC_TEMPLATE) === null);
         }
 
+        /* ---- a saved threshold must not be applied to the wrong model ----
+           faces.threshold used to mean the faceres threshold (~0.75); it now
+           means the ArcFace one (~0.42), a different space entirely. Carrying
+           the old number across applied 0.75 to ArcFace, where almost nothing
+           merges -- the setting silently sabotaged the model it was tuning. */
+        {
+          const LS_KEY = LS;          // the real settings key
+          const savedRaw = localStorage.getItem(LS_KEY);
+          const keepFaces = JSON.parse(JSON.stringify(S.faces));
+          try {
+            /* settings written by the OLD scheme: a threshold, no faceres one */
+            localStorage.setItem(LS_KEY, JSON.stringify({
+              faces: { threshold: 0.75, embedder: "arcface" } }));
+            S.faces.threshold = 0.42; S.faces.faceresThreshold = 0.75;
+            loadSettings();
+            ok("an old threshold is not applied to ArcFace",
+               S.faces.threshold < 0.6, String(S.faces.threshold));
+            eq("it is carried over as the faceres threshold",
+               S.faces.faceresThreshold, 0.75);
+
+            /* settings written by the NEW scheme are left alone */
+            localStorage.setItem(LS_KEY, JSON.stringify({
+              faces: { threshold: 0.38, faceresThreshold: 0.8, embedder: "arcface" } }));
+            loadSettings();
+            eq("a current threshold is respected", S.faces.threshold, 0.38);
+            eq("and so is the faceres one", S.faces.faceresThreshold, 0.8);
+          } finally {
+            if (savedRaw != null) localStorage.setItem(LS_KEY, savedRaw);
+            else localStorage.removeItem(LS_KEY);
+            Object.assign(S.faces, keepFaces);
+          }
+        }
+
+        /* ---- the strictness slider must be able to express the range ---- */
+        {
+          const keepE = S.faces.embedder;
+          const keepT = S.faces.threshold, keepF = S.faces.faceresThreshold;
+          /* Pin both values rather than inheriting whatever earlier tests left,
+             so the assertion is about the slider and nothing else. */
+          S.faces.threshold = 0.42; S.faces.faceresThreshold = 0.78;
+
+          S.faces.embedder = "arcface"; faceThRange();
+          ok("ArcFace's working range is reachable",
+             +$("#sFaceTh").min <= 0.3 && +$("#sFaceTh").max >= 0.7,
+             $("#sFaceTh").min + "–" + $("#sFaceTh").max);
+          eq("and the slider shows ArcFace's value", +$("#sFaceTh").value, 0.42);
+
+          S.faces.embedder = "faceres"; faceThRange();
+          ok("faceres' higher range is reachable too", +$("#sFaceTh").max >= 0.9,
+             $("#sFaceTh").max);
+          eq("and it shows that embedder's own value", +$("#sFaceTh").value, 0.78);
+
+          /* The old slider floor was 0.50, which could not express 0.42 at all:
+             it clamped, silently, to a value the user never chose. */
+          S.faces.embedder = "arcface"; faceThRange();
+          eq("switching back restores ArcFace's value, unclamped",
+             +$("#sFaceTh").value, 0.42);
+
+          S.faces.embedder = keepE;
+          S.faces.threshold = keepT; S.faces.faceresThreshold = keepF;
+          faceThRange();
+        }
+
         /* ---- re-measuring a photo at full size must not lose a name ----
            A face read from a 384px thumbnail is usually below the model's
            112px input, so it was enlarged and the detail was never there.

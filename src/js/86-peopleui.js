@@ -210,8 +210,7 @@ function renderFaceStale(){
 $("#sFaceEmb").onchange = async () => {
   S.faces.embedder = $("#sFaceEmb").value;
   saveSettings();
-  $("#sFaceTh").value = String(faceThreshold());
-  $("#sFaceThVal").textContent = faceThreshold().toFixed(2);
+  faceThRange();
   renderFaceStale();
   toast(S.faces.embedder === "arcface"
     ? "ArcFace: a purpose-built recognition model. Press \u201cRe-measure\u201d to apply it "
@@ -232,7 +231,15 @@ $("#btnRefine").onclick = async () => {
     p = await planFaceRefine(async m => { await st.note(m); });
   } catch (e){ st.err(errText(e)); return; }
 
-  if (!p.candidates){ st.ok("Every face already came from a full-size original."); return; }
+  if (!FACES.faces.size){
+    st.warn("There are no faces yet — press “Find faces” first. This pass improves "
+      + "faces that have already been found, it does not find them.");
+    return;
+  }
+  if (!p.candidates){
+    st.ok("All " + FACES.faces.size + " faces already came from full-size originals.");
+    return;
+  }
   if (!p.files.length){
     st.warn(p.candidates + " photos have faces taken from thumbnails, but none of those "
       + "photos are in the folder you have open. Connect the folder they live in "
@@ -340,6 +347,17 @@ $("#sFaceSrc").onchange = () => {
 function faceThSet(v){
   if (S.faces.embedder === "faceres") S.faces.faceresThreshold = v;
   else S.faces.threshold = v;
+}
+/* The two embedders occupy different ranges, so one fixed slider cannot serve
+   both: the old 0.50 floor could not even express ArcFace's working range, and
+   setting 0.42 clamped silently up to 0.50. */
+function faceThRange(){
+  const sl = $("#sFaceTh");
+  if (S.faces.embedder === "faceres"){ sl.min = "0.50"; sl.max = "0.95"; }
+  else { sl.min = "0.20"; sl.max = "0.80"; }
+  sl.step = "0.01";
+  sl.value = String(faceThreshold());
+  $("#sFaceThVal").textContent = faceThreshold().toFixed(2);
 }
 $("#sFaceTh").oninput = () => {
   faceThSet(+$("#sFaceTh").value);
@@ -474,8 +492,7 @@ async function onPeopleShown(){
       clusterFaces();
     $("#sFaceSrc").value = S.faces.source;
     $("#sFaceEmb").value = S.faces.embedder;
-    $("#sFaceTh").value = String(faceThreshold());
-    $("#sFaceThVal").textContent = faceThreshold().toFixed(2);
+    faceThRange();
     renderFaceStale();
     renderPeople();
   } catch (e){

@@ -112,7 +112,20 @@ function loadSettings(){
     if (d.events) S.events = { ...S.events, ...d.events };
     if (d.search) S.search = { ...S.search, ...d.search };
     if (d.chat) S.chat = { ...S.chat, ...d.chat };
-    if (d.faces) S.faces = { ...S.faces, ...d.faces };
+    if (d.faces){
+      /* MIGRATION. `faces.threshold` used to mean the faceres threshold, around
+         0.75. It now means the ArcFace one, which lives near 0.42 -- a totally
+         different space. Carrying the old number straight across applied 0.75 to
+         ArcFace, which is far too strict, and the setting silently sabotaged the
+         model it was supposed to tune. A saved threshold with no
+         faceresThreshold beside it can only have come from the old scheme. */
+      const old = { ...d.faces };
+      if (old.threshold != null && old.faceresThreshold == null){
+        old.faceresThreshold = old.threshold;
+        delete old.threshold;                  // keep the new default
+      }
+      S.faces = { ...S.faces, ...old };
+    }
     if (d.ocr) S.ocr = { ...S.ocr, ...d.ocr };
     if (d.indexMode) S.indexMode = d.indexMode;
     if (d.indexChosen) S.indexChosen = d.indexChosen;

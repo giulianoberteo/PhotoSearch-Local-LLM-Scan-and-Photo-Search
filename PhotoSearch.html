@@ -287,7 +287,7 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
         </label>
         <label class="hint" style="display:flex;align-items:center;gap:7px;margin-left:6px">
           Grouping strictness
-          <input type="range" id="sFaceTh" min="0.50" max="0.95" step="0.01" value="0.75"
+          <input type="range" id="sFaceTh" min="0.20" max="0.80" step="0.01" value="0.42"
                  style="width:150px">
           <span class="mono" id="sFaceThVal">0.75</span>
         </label>
@@ -590,7 +590,20 @@ function loadSettings(){
     if (d.events) S.events = { ...S.events, ...d.events };
     if (d.search) S.search = { ...S.search, ...d.search };
     if (d.chat) S.chat = { ...S.chat, ...d.chat };
-    if (d.faces) S.faces = { ...S.faces, ...d.faces };
+    if (d.faces){
+      /* MIGRATION. `faces.threshold` used to mean the faceres threshold, around
+         0.75. It now means the ArcFace one, which lives near 0.42 -- a totally
+         different space. Carrying the old number straight across applied 0.75 to
+         ArcFace, which is far too strict, and the setting silently sabotaged the
+         model it was supposed to tune. A saved threshold with no
+         faceresThreshold beside it can only have come from the old scheme. */
+      const old = { ...d.faces };
+      if (old.threshold != null && old.faceresThreshold == null){
+        old.faceresThreshold = old.threshold;
+        delete old.threshold;                  // keep the new default
+      }
+      S.faces = { ...S.faces, ...old };
+    }
     if (d.ocr) S.ocr = { ...S.ocr, ...d.ocr };
     if (d.indexMode) S.indexMode = d.indexMode;
     if (d.indexChosen) S.indexChosen = d.indexChosen;
@@ -4230,6 +4243,7 @@ async function planFaceRefine(onPhase, signal){
     { onPhase: say, cost: 4 });
   if (!IDX.loaded){ await say("Loading records…"); await loadRecords(); }
   if (!FACES.loaded){ await say("Loading known faces…"); await loadFaces(); }
+  await say(FACES.faces.size + " faces known; checking which came from thumbnails…");
 
   const wanted = new Set();
   for (const f of FACES.faces.values())
@@ -7031,8 +7045,7 @@ function renderFaceStale(){
 $("#sFaceEmb").onchange = async () => {
   S.faces.embedder = $("#sFaceEmb").value;
   saveSettings();
-  $("#sFaceTh").value = String(faceThreshold());
-  $("#sFaceThVal").textContent = faceThreshold().toFixed(2);
+  faceThRange();
   renderFaceStale();
   toast(S.faces.embedder === "arcface"
     ? "ArcFace: a purpose-built recognition model. Press \u201cRe-measure\u201d to apply it "
@@ -7053,7 +7066,15 @@ $("#btnRefine").onclick = async () => {
     p = await planFaceRefine(async m => { await st.note(m); });
   } catch (e){ st.err(errText(e)); return; }
 
-  if (!p.candidates){ st.ok("Every face already came from a full-size original."); return; }
+  if (!FACES.faces.size){
+    st.warn("There are no faces yet — press “Find faces” first. This pass improves "
+      + "faces that have already been found, it does not find them.");
+    return;
+  }
+  if (!p.candidates){
+    st.ok("All " + FACES.faces.size + " faces already came from full-size originals.");
+    return;
+  }
   if (!p.files.length){
     st.warn(p.candidates + " photos have faces taken from thumbnails, but none of those "
       + "photos are in the folder you have open. Connect the folder they live in "
@@ -7161,6 +7182,17 @@ $("#sFaceSrc").onchange = () => {
 function faceThSet(v){
   if (S.faces.embedder === "faceres") S.faces.faceresThreshold = v;
   else S.faces.threshold = v;
+}
+/* The two embedders occupy different ranges, so one fixed slider cannot serve
+   both: the old 0.50 floor could not even express ArcFace's working range, and
+   setting 0.42 clamped silently up to 0.50. */
+function faceThRange(){
+  const sl = $("#sFaceTh");
+  if (S.faces.embedder === "faceres"){ sl.min = "0.50"; sl.max = "0.95"; }
+  else { sl.min = "0.20"; sl.max = "0.80"; }
+  sl.step = "0.01";
+  sl.value = String(faceThreshold());
+  $("#sFaceThVal").textContent = faceThreshold().toFixed(2);
 }
 $("#sFaceTh").oninput = () => {
   faceThSet(+$("#sFaceTh").value);
@@ -7295,8 +7327,7 @@ async function onPeopleShown(){
       clusterFaces();
     $("#sFaceSrc").value = S.faces.source;
     $("#sFaceEmb").value = S.faces.embedder;
-    $("#sFaceTh").value = String(faceThreshold());
-    $("#sFaceThVal").textContent = faceThreshold().toFixed(2);
+    faceThRange();
     renderFaceStale();
     renderPeople();
   } catch (e){
@@ -9623,6 +9654,69 @@ async function selfTest(){
              "worst error " + worst2.toFixed(2) + "px");
           ok("degenerate points do not produce a transform",
              faceSimTransform([[5,5],[5,5],[5,5],[5,5],[5,5]], ARC_TEMPLATE) === null);
+        }
+
+        /* ---- a saved threshold must not be applied to the wrong model ----
+           faces.threshold used to mean the faceres threshold (~0.75); it now
+           means the ArcFace one (~0.42), a different space entirely. Carrying
+           the old number across applied 0.75 to ArcFace, where almost nothing
+           merges -- the setting silently sabotaged the model it was tuning. */
+        {
+          const LS_KEY = LS;          // the real settings key
+          const savedRaw = localStorage.getItem(LS_KEY);
+          const keepFaces = JSON.parse(JSON.stringify(S.faces));
+          try {
+            /* settings written by the OLD scheme: a threshold, no faceres one */
+            localStorage.setItem(LS_KEY, JSON.stringify({
+              faces: { threshold: 0.75, embedder: "arcface" } }));
+            S.faces.threshold = 0.42; S.faces.faceresThreshold = 0.75;
+            loadSettings();
+            ok("an old threshold is not applied to ArcFace",
+               S.faces.threshold < 0.6, String(S.faces.threshold));
+            eq("it is carried over as the faceres threshold",
+               S.faces.faceresThreshold, 0.75);
+
+            /* settings written by the NEW scheme are left alone */
+            localStorage.setItem(LS_KEY, JSON.stringify({
+              faces: { threshold: 0.38, faceresThreshold: 0.8, embedder: "arcface" } }));
+            loadSettings();
+            eq("a current threshold is respected", S.faces.threshold, 0.38);
+            eq("and so is the faceres one", S.faces.faceresThreshold, 0.8);
+          } finally {
+            if (savedRaw != null) localStorage.setItem(LS_KEY, savedRaw);
+            else localStorage.removeItem(LS_KEY);
+            Object.assign(S.faces, keepFaces);
+          }
+        }
+
+        /* ---- the strictness slider must be able to express the range ---- */
+        {
+          const keepE = S.faces.embedder;
+          const keepT = S.faces.threshold, keepF = S.faces.faceresThreshold;
+          /* Pin both values rather than inheriting whatever earlier tests left,
+             so the assertion is about the slider and nothing else. */
+          S.faces.threshold = 0.42; S.faces.faceresThreshold = 0.78;
+
+          S.faces.embedder = "arcface"; faceThRange();
+          ok("ArcFace's working range is reachable",
+             +$("#sFaceTh").min <= 0.3 && +$("#sFaceTh").max >= 0.7,
+             $("#sFaceTh").min + "–" + $("#sFaceTh").max);
+          eq("and the slider shows ArcFace's value", +$("#sFaceTh").value, 0.42);
+
+          S.faces.embedder = "faceres"; faceThRange();
+          ok("faceres' higher range is reachable too", +$("#sFaceTh").max >= 0.9,
+             $("#sFaceTh").max);
+          eq("and it shows that embedder's own value", +$("#sFaceTh").value, 0.78);
+
+          /* The old slider floor was 0.50, which could not express 0.42 at all:
+             it clamped, silently, to a value the user never chose. */
+          S.faces.embedder = "arcface"; faceThRange();
+          eq("switching back restores ArcFace's value, unclamped",
+             +$("#sFaceTh").value, 0.42);
+
+          S.faces.embedder = keepE;
+          S.faces.threshold = keepT; S.faces.faceresThreshold = keepF;
+          faceThRange();
         }
 
         /* ---- re-measuring a photo at full size must not lose a name ----
