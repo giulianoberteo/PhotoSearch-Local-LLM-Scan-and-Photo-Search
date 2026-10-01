@@ -317,6 +317,14 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 .tlbar button.danger:not(:disabled):hover{background:color-mix(in srgb,var(--err) 12%,transparent)}
 .tlbar button:disabled{opacity:.4;cursor:default}
 .gtile.sel img{transform:scale(.86);border-radius:8px}
+.gheart{position:absolute;left:5px;bottom:4px;border:0;background:none;color:#fff;font-size:20px;line-height:1;
+  padding:2px 4px;cursor:pointer;opacity:0;text-shadow:0 1px 4px rgba(0,0,0,.65);transition:opacity .15s,transform .1s}
+.gtile:hover .gheart{opacity:.9}
+.gheart.on{opacity:1}
+.gheart:hover{transform:scale(1.15)}
+#galGrid.selecting .gheart{display:none}
+.vwBtn.fav{font-size:18px}
+.vwBtn.fav.on{color:#ff3b30}
 #galGrid.selecting .gtile::after{content:"";position:absolute;top:7px;left:7px;width:20px;height:20px;
   border-radius:50%;border:2px solid #fff;background:rgba(0,0,0,.18);box-shadow:0 0 3px rgba(0,0,0,.5)}
 #galGrid.selecting .gtile.sel::after{content:"\2713";background:var(--accent);border-color:var(--accent);
@@ -372,6 +380,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   <h1>PhotoSearch</h1>
   <nav role="tablist">
     <button role="tab" data-tab="library" aria-selected="false">Library</button>
+    <button role="tab" data-tab="favourites" aria-selected="false">Favourites</button>
     <button role="tab" data-tab="chat" aria-selected="false">Chat</button>
     <button role="tab" data-tab="timeline" aria-selected="false">Timeline</button>
     <button role="tab" data-tab="people" aria-selected="false">People</button>
@@ -466,6 +475,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
       <span class="hint" id="galCount" style="margin:0"></span>
       <span class="spacer"></span>
       <span class="hint" id="galSelCount" style="margin:0" hidden></span>
+      <button id="galFav" title="Add the selection to Favourites (F)" hidden>&#9825; Favourite</button>
       <button id="galRotL" title="Rotate left (Shift+R)" aria-label="Rotate left" hidden>&#8634;</button>
       <button id="galRotR" title="Rotate right (R)" aria-label="Rotate right" hidden>&#8635;</button>
       <button id="galAct" class="danger" hidden>Remove</button>
@@ -697,6 +707,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
     <button class="vwBtn" id="vwClose" title="Close (Esc)" aria-label="Close">&#10005;</button>
     <div class="vwTitle"><b id="vwName"></b><span id="vwWhen"></span></div>
     <span class="spacer"></span>
+    <button class="vwBtn fav" id="vwFav" title="Favourite (F)" aria-label="Favourite">&#9825;</button>
     <button class="vwBtn" id="vwRotL" title="Rotate left (Shift+R)" aria-label="Rotate left">&#8634;</button>
     <button class="vwBtn" id="vwRotR" title="Rotate right (R)" aria-label="Rotate right">&#8635;</button>
     <button class="vwBtn txt" id="vwRemove" title="Remove from library (Delete)">Remove</button>

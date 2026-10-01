@@ -57,6 +57,7 @@ function galBuild(){
        index the same file again on the next scan. */
     if (r.hidden) removed++;
     if (!!r.hidden !== (GAL.view === "removed")) continue;
+    if (GAL.view === "favourites" && !r.favourite) continue;
     const t = galSortKey(r);
     (t == null ? undated : dated).push({ r, t });
   }
@@ -117,6 +118,11 @@ function galTile(i){
   applyRotation(im, r);
   thumbUrl(r.id).then(u => { if (u) im.src = u; });
   f.append(im);
+  const heart = el("button", "gheart");
+  heart.title = "Favourite"; heart.setAttribute("aria-label", "Favourite");
+  heart.onclick = e => { e.stopPropagation(); galFavourite([r.id], !(IDX.records.get(r.id) || {}).favourite); };
+  f.append(heart);
+  galHeart(heart, r);
   if (GAL.sel.has(r.id)) f.classList.add("sel");
   f.onclick = e => galClick(i, e);
   f.onkeydown = e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); galClick(i, e); } };
@@ -146,12 +152,14 @@ function galRender(){
 /* The active search is shown as tokens inside the search field (88-search.js). */
 function galChips(){ if (typeof sgRenderChips === "function") sgRenderChips(); }
 function galBar(){
-  const removedView = GAL.view === "removed", searchView = GAL.view === "search";
+  const removedView = GAL.view === "removed", searchView = GAL.view === "search",
+        favView = GAL.view === "favourites";
   galChips();
   $("#galClearSearch").hidden = !searchView;
   $("#galSort").hidden = searchView;
   $("#galCount").textContent = searchView
     ? GAL.list.length.toLocaleString() + (GAL.list.length === 1 ? " result" : " results")
+    : favView ? GAL.list.length.toLocaleString() + (GAL.list.length === 1 ? " favourite" : " favourites")
     : removedView
     ? GAL.list.length.toLocaleString() + " removed — hidden from search, never deleted"
     : GAL.list.length.toLocaleString() + " photos"
@@ -167,6 +175,9 @@ function galBar(){
   $("#galSelCount").textContent = n ? n.toLocaleString() + " selected" : "Click photos to select";
   $("#galRotL").hidden = $("#galRotR").hidden = !GAL.selMode;
   $("#galRotL").disabled = $("#galRotR").disabled = !n;
+  $("#galFav").hidden = !GAL.selMode;
+  $("#galFav").disabled = !n;
+  $("#galFav").textContent = galAllFav() ? "\u2665 Unfavourite" : "\u2661 Favourite";
   $("#galAct").hidden = !GAL.selMode;
   $("#galAct").disabled = !n;
   $("#galAct").textContent = removedView ? "Restore" : "Remove";
@@ -265,6 +276,65 @@ async function galRotate(ids, delta, quiet){
   return ids.length;
 }
 
+/* ---- favourites ----
+   A heart, kept on the record like rotation: a mark the user made, not
+   something the scan produced, so it survives a rescan and never touches the
+   file. */
+function galHeart(btn, rec){
+  const on = !!(rec && rec.favourite);
+  btn.textContent = on ? "\u2665" : "\u2661";
+  btn.classList.toggle("on", on);
+}
+function galPaintHearts(){
+  for (const f of GAL.shown.values()) galHeart(f.querySelector(".gheart"), IDX.records.get(f.dataset.id));
+}
+function galAllFav(){
+  return GAL.sel.size > 0 && [...GAL.sel].every(id => (IDX.records.get(id) || {}).favourite);
+}
+async function galFavourite(ids, on, quiet){
+  ids = [...ids].filter(id => IDX.records.has(id));
+  if (!ids.length) return 0;
+  try {
+    await galPersist(ids, base => ({ ...base, favourite:on }));
+  } catch (e){
+    toast("Could not " + (on ? "favourite" : "unfavourite") + " \u2014 " + humanError(e));
+    return 0;
+  }
+  const set = new Set(ids);
+  for (const x of GAL.list) if (set.has(x.r.id)) x.r = IDX.records.get(x.r.id);
+  TL.built = 0;
+  if (GAL.view === "favourites"){        // an unfavourited photo leaves this view
+    galBuild(); galBar(); galClear(); galLayout();
+    galMessage(GAL.list.length ? "" : "No favourites yet. Click the heart on a photo to add it.");
+  } else { galPaintHearts(); galBar(); }
+  if (VW.open) vwHeart();
+  if (!quiet){
+    const n = ids.length, noun = n === 1 ? "1 photo" : n + " photos";
+    galSnack((on ? "Added " + noun + " to Favourites." : "Removed " + noun + " from Favourites."),
+             () => galFavourite(ids, !on, true));
+  }
+  return ids.length;
+}
+async function galFavSel(){
+  const ids = [...GAL.sel];
+  if (ids.length) await galFavourite(ids, !galAllFav());
+}
+
+/* Switches the grid between the whole library, favourites, and so on. */
+async function galSetView(view){
+  await onLibraryShown();
+  if (!IDX.records.size) return;
+  if (view === "favourites" && (GAL.chips.length || GAL.texts.length)){   // leave any search behind
+    GAL.chips = []; GAL.texts = []; GAL.results = [];
+    if (typeof sgRenderChips === "function") sgRenderChips();
+  }
+  GAL.view = view; GAL.sel.clear(); GAL.last = -1;
+  galBuild(); galBar(); galClear(); GAL.cell = 0; galLayout();
+  galMessage(GAL.list.length ? "" : (view === "favourites"
+    ? "No favourites yet. Click the heart on a photo, or select photos and press Favourite." : ""));
+  window.scrollTo(0, 0);
+}
+
 function galSnack(msg, undo){
   const u = $("#undo");
   $("#undoMsg").textContent = msg;
@@ -346,6 +416,7 @@ $("#galSize").oninput = e => {
 };
 $("#galSelect").onclick = () => galSelectMode(!GAL.selMode);
 $("#galAct").onclick = galAct;
+$("#galFav").onclick = galFavSel;
 $("#galRotL").onclick = () => galRotSel(-90);
 $("#galRotR").onclick = () => galRotSel(90);
 $("#galRemoved").onclick = () => {
@@ -361,6 +432,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "Delete" || e.key === "Backspace") galAct();
   else if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey)
     galRotSel(e.shiftKey ? -90 : 90);
+  else if ((e.key === "f" || e.key === "F") && !e.metaKey && !e.ctrlKey && !e.altKey) galFavSel();
   else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a"){
     for (const x of GAL.list) GAL.sel.add(x.r.id);
     galPaint();
@@ -407,6 +479,13 @@ function vwPlace(animate){
   vwSet(img, vwRectFor(img));
 }
 
+function vwHeart(){
+  const rec = GAL.list[VW.i] && IDX.records.get(GAL.list[VW.i].r.id);
+  const on = !!(rec && rec.favourite), b = $("#vwFav");
+  b.textContent = on ? "\u2665" : "\u2661";
+  b.classList.toggle("on", on);
+  b.title = on ? "Remove from Favourites (F)" : "Add to Favourites (F)";
+}
 function vwFill(r){
   $("#vwName").textContent = r.name || r.path;
   $("#vwWhen").textContent = [r.when_phrase, r.place].filter(Boolean).join(" · ");
@@ -414,6 +493,7 @@ function vwFill(r){
   meta.append(metaList(r));
   $("#vwNote").textContent = "";
   $("#vwRemove").textContent = GAL.view === "removed" ? "Restore" : "Remove";
+  vwHeart();
   $("#vwPrev").disabled = VW.i <= 0;
   $("#vwNext").disabled = VW.i >= GAL.list.length - 1;
 }
@@ -547,6 +627,25 @@ async function vwRotate(dir){
     vwPlace(true);
   }
 }
+/* Toggles the heart on the open photo. In the Favourites view an unfavourited
+   photo leaves the list, so carry on with its neighbour, as Remove does. */
+async function vwFavourite(){
+  if (!VW.open || !GAL.list[VW.i]) return;
+  const id = GAL.list[VW.i].r.id, i = VW.i;
+  const on = !(IDX.records.get(id) || {}).favourite;
+  if (!await galFavourite([id], on, true)) return;
+  if (GAL.view === "favourites" && !on){
+    if (!GAL.list.length){ closeViewer(); return; }
+    const ni = Math.min(i, GAL.list.length - 1);
+    galReveal(ni);
+    const img = $("#vwImg");
+    img.classList.add("still");
+    img.classList.remove("swap"); void img.offsetWidth; img.classList.add("swap");
+    await vwShow(ni);
+    vwPlace(false);
+  }
+}
+$("#vwFav").onclick = vwFavourite;
 $("#vwRotL").onclick = () => vwRotate(-1);
 $("#vwRotR").onclick = () => vwRotate(1);
 $("#vwClose").onclick = closeViewer;
@@ -574,6 +673,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "Delete" || e.key === "Backspace") vwRemove();
   else if ((e.key === "r" || e.key === "R") && !e.metaKey && !e.ctrlKey && !e.altKey)
     vwRotate(e.shiftKey ? -1 : 1);
+  else if ((e.key === "f" || e.key === "F") && !e.metaKey && !e.ctrlKey && !e.altKey) vwFavourite();
   else return;
   e.preventDefault();
 });

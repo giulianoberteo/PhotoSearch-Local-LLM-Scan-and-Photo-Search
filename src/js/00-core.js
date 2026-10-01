@@ -1,6 +1,6 @@
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.3";
+const APP_VERSION = "0.6.4";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -170,7 +170,9 @@ async function idbGet(k){ const db = await idb(); return new Promise((res, rej) 
    work, and a tab can be bookmarked or shared), and opening or changing an
    address chooses the tab. Hashes that are not a tab, such as #selftest, are
    left alone. */
-const TABS = ["library","chat","timeline","people","scan","settings"];
+const TABS = ["library","favourites","chat","timeline","people","scan","settings"];
+/* Favourites is the Library's grid showing only favourites, so it has no section of its own. */
+const TAB_SECTION = { favourites:"library" };
 let curTab = "settings";
 function tabFromHash(hash){
   let h = hash == null ? location.hash : hash;
@@ -181,7 +183,11 @@ function tabFromHash(hash){
 /* Some tabs read the whole index, so they are built when first shown rather
    than at boot: opening the app must not wait for them. */
 function tabShownHook(name){
-  if (name === "library" && typeof onLibraryShown === "function") onLibraryShown();
+  if (name === "library" && typeof onLibraryShown === "function"){
+    onLibraryShown();
+    if (GAL.view === "favourites") galSetView("all");
+  }
+  if (name === "favourites" && typeof galSetView === "function") galSetView("favourites");
   if (name === "timeline" && typeof onTimelineShown === "function") onTimelineShown();
   if (name === "people" && typeof onPeopleShown === "function") onPeopleShown();
 }
@@ -189,7 +195,8 @@ function showTab(name){
   curTab = name;
   document.querySelectorAll('nav button').forEach(x =>
     x.setAttribute("aria-selected", String(x.dataset.tab === name)));
-  TABS.forEach(t => $("#tab-" + t).hidden = (t !== name));
+  const sec = TAB_SECTION[name] || name;
+  TABS.forEach(t => { const s = $("#tab-" + t); if (s) s.hidden = (t !== sec); });
   tabShownHook(name);
 }
 /* A folder connecting after the page loaded (Chrome drops access on reload, so

@@ -51,6 +51,7 @@ The gap was mostly **browsing** and **two whole media types**, not intelligence.
 | Library (all photos in one grid, zoom viewer) | **built**, 1 October 2026 |
 | Remove from library (hide, undo, restore) | **built**, 1 October 2026 |
 | Rotate photos from the Library (view-only, undoable) | **built**, 1 October 2026 |
+| Favourites (hearts, a Favourites tab, a search chip) | **built**, 2 October 2026 |
 | Any OpenAI-compatible server, not only LM Studio | **built**, 1 October 2026 |
 | Video | not started |
 | Perceptual hash, near-duplicates and bursts | not started |
@@ -267,7 +268,7 @@ search better or worse.
 
 | item | note |
 |---|---|
-| **Albums and favourites** | User-curated collections in `.photoindex/`. Simple, and expected. The Library's Select mode is the natural way to build them. |
+| **Albums** | User-curated collections in `.photoindex/`. Favourites (a single built-in collection) is already built; named albums are the same idea with a name. Select mode is the natural way to build them. |
 | **Saved searches** | A query kept as a live "smart album". |
 | **On this day** | Trivial now that the Timeline exists. |
 | **Export** | Copy a selection or search result to a folder of your choice, or a contact-sheet HTML. Exporting to your own disk is not sharing. |

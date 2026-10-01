@@ -25,6 +25,7 @@ anything non-trivial. For *measurements* behind these decisions, see
 - [Browsing: Library and Timeline](#browsing-library-and-timeline)
   - [Library](#library)
   - [The search field](#the-search-field)
+  - [Favourites](#favourites)
   - [Rotating photos](#rotating-photos)
   - [Removing photos](#removing-photos)
   - [Timeline](#timeline)
@@ -413,6 +414,24 @@ view instead of building a second grid.
 - **Waiting for the index.** A search started from another tab opens the Library, waits for the
   one shared load of the index (`onLibraryShown()` returns the same promise to every caller),
   then loads face names, vectors and the keyword index if they are missing, as chat does.
+
+### Favourites
+
+A heart is a mark the user made, kept on the photo's record as `favourite: true` the same way
+rotation is: appended through the Library's single write queue, carried across a rescan, never
+set by the model, and never touching the file.
+
+- **The tab is a view, not a second grid.** Favourites is a nav entry whose section is the
+  Library (`TAB_SECTION`), with the grid switched to `view: "favourites"`, which `galBuild()`
+  fills with the hearted, visible photos in the usual order. `#favourites` links to it, and
+  choosing Library switches the grid back to the whole library.
+- **Where to heart.** A heart on every tile (revealed on hover, always shown once set), a heart
+  in the viewer (`F`), and the **Favourite** button for a Select-mode selection, which hearts
+  all of them or, if they all are already, removes the hearts. An Undo follows.
+- **Leaving the view.** Unhearting in the Favourites view removes the photo from the list; the
+  viewer then carries on with its neighbour, as Remove does.
+- **Search.** "Favourites" is a suggestion and a chip; as a chip it is the set of hearted
+  photos, so it combines with the rest (*Favourites* + *Anna* + *2022*).
 
 ### Rotating photos
 
