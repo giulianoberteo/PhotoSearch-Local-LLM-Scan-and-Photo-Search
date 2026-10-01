@@ -265,7 +265,17 @@ code{font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-rad
       <div class="row" style="margin-bottom:10px">
         <button class="btn" id="btnFaceScan">Find faces</button>
         <button class="btn sec" id="btnRecluster">Re-group</button>
+        <button class="btn sec" id="btnReembed">Re-measure</button>
+        <button class="btn sec" id="btnCompare">Compare models</button>
         <button class="btn sec" id="btnFaceWipe">Delete all face data</button>
+        <label class="hint" style="display:flex;align-items:center;gap:7px;margin-left:6px">
+          Model
+          <select id="sFaceEmb" style="background:var(--panel2);border:1px solid var(--line);
+            color:var(--text);border-radius:6px;padding:3px 7px;font-size:12px;font-family:inherit">
+            <option value="arcface">ArcFace — recognition</option>
+            <option value="faceres">faceres — comparison only</option>
+          </select>
+        </label>
         <label class="hint" style="display:flex;align-items:center;gap:7px;margin-left:6px">
           Read from
           <select id="sFaceSrc" style="background:var(--panel2);border:1px solid var(--line);

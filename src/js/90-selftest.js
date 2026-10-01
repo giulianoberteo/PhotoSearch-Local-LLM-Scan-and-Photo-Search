@@ -1830,7 +1830,7 @@ async function selfTest(){
         };
         /* Claim the current engine id: a stub calling itself something else
            would make every face look like it came from an older build. */
-        setFaceEngine(async bmp => planted[bmp.__id] || [], FACE_ENGINE_ID);
+        setFaceEngine(async bmp => planted[bmp.__id] || [], faceEngineId());
 
         IDX.records = new Map(Object.keys(planted).map(id =>
           [id, { id, name:id + ".jpg", status:"ok", caption:"a photo",
@@ -1960,6 +1960,77 @@ async function selfTest(){
         ok("without losing its faces",
            FACES.clusters.some(c => c.face_ids.length === wasCount));
 
+        /* ---- the alignment maths ----
+           Pure functions, and the part that decides whether a recognition
+           model sees a face or a texture. An unaligned crop was the whole
+           reason grouping was useless. */
+        {
+          eq("the ArcFace template has five points", ARC_TEMPLATE.length, 5);
+          /* A mesh is reduced to: image-left eye, image-right eye, nose,
+             image-left mouth corner, image-right mouth corner. */
+          const mesh = [];
+          for (let i = 0; i < 470; i++) mesh.push([0, 0]);
+          mesh[33] = [100, 200]; mesh[133] = [120, 200];     // eye, image-left
+          mesh[362] = [180, 200]; mesh[263] = [200, 200];    // eye, image-right
+          mesh[1] = [150, 240];                              // nose
+          mesh[61] = [120, 280]; mesh[291] = [180, 280];     // mouth corners
+          const five = faceFivePoints(mesh);
+          eq("five points are produced", five.length, 5);
+          eq("the image-left eye comes first", five[0], [110, 200]);
+          eq("then the image-right eye", five[1], [190, 200]);
+          eq("then the nose", five[2], [150, 240]);
+          ok("then the mouth corners, left first", five[3][0] < five[4][0],
+             JSON.stringify([five[3], five[4]]));
+          ok("a mesh that is too short yields nothing",
+             faceFivePoints([[0,0],[1,1]]) === null);
+
+          /* The transform must map the five points ONTO the template. */
+          const m = faceSimTransform(five, ARC_TEMPLATE);
+          const apply = pt => [m.a*pt[0] + m.c*pt[1] + m.e, m.b*pt[0] + m.d*pt[1] + m.f];
+          let worst = 0;
+          for (let i = 0; i < 5; i++){
+            const got = apply(five[i]), want = ARC_TEMPLATE[i];
+            worst = Math.max(worst, Math.hypot(got[0]-want[0], got[1]-want[1]));
+          }
+          ok("the transform lands the points on the template", worst < 6,
+             "worst error " + worst.toFixed(2) + "px");
+          /* Similarity only: uniform scale and rotation, never shear. */
+          ok("it is a similarity transform, not a shear",
+             Math.abs(m.a - m.d) < 1e-9 && Math.abs(m.b + m.c) < 1e-9);
+
+          /* A ROTATED face must land on the template just the same -- that is
+             the entire point of aligning before embedding. */
+          const rot = five.map(([x, y]) => {
+            const a = 0.4, cx = 150, cy = 240;
+            return [cx + (x-cx)*Math.cos(a) - (y-cy)*Math.sin(a),
+                    cy + (x-cx)*Math.sin(a) + (y-cy)*Math.cos(a)];
+          });
+          const m2 = faceSimTransform(rot, ARC_TEMPLATE);
+          const apply2 = pt => [m2.a*pt[0] + m2.c*pt[1] + m2.e, m2.b*pt[0] + m2.d*pt[1] + m2.f];
+          let worst2 = 0;
+          for (let i = 0; i < 5; i++){
+            const got = apply2(rot[i]), want = ARC_TEMPLATE[i];
+            worst2 = Math.max(worst2, Math.hypot(got[0]-want[0], got[1]-want[1]));
+          }
+          ok("a rotated face is aligned to the same template", worst2 < 6,
+             "worst error " + worst2.toFixed(2) + "px");
+          ok("degenerate points do not produce a transform",
+             faceSimTransform([[5,5],[5,5],[5,5],[5,5],[5,5]], ARC_TEMPLATE) === null);
+        }
+
+        /* ---- the two embedders are different spaces ---- */
+        {
+          const keepE = S.faces.embedder;
+          S.faces.embedder = "arcface";
+          const a = faceThreshold(), aId = faceEngineId();
+          S.faces.embedder = "faceres";
+          const f = faceThreshold(), fId = faceEngineId();
+          ok("each embedder carries its own threshold", a !== f, a + " vs " + f);
+          ok("and is recorded under its own engine id", aId !== fId, aId + " / " + fId);
+          ok("so switching makes the existing faces stale", /arcface/.test(aId));
+          S.faces.embedder = keepE;
+        }
+
         /* ---- a group must not drift into a blur of several people ----
            Centroid-only merging cascades: one wrong face moves the centre,
            which admits more wrong faces. A candidate must also be close to an
@@ -2011,7 +2082,7 @@ async function selfTest(){
             await new Promise(r => setTimeout(r, 5));
             inFlight--;
             return planted[bmp.__id] || [];
-          }, FACE_ENGINE_ID);
+          }, faceEngineId());
           await Promise.all(["p1","p2","p3","p5"].map(pid =>
             detectFacesSerial(pid, { __id:pid, width:1000, height:800 })));
           eq("detections never overlap", maxInFlight, 1);

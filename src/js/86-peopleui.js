@@ -199,6 +199,71 @@ function renderFaceStale(){
 }
 
 /* ---- actions ---- */
+$("#sFaceEmb").onchange = async () => {
+  S.faces.embedder = $("#sFaceEmb").value;
+  saveSettings();
+  $("#sFaceTh").value = String(faceThreshold());
+  $("#sFaceThVal").textContent = faceThreshold().toFixed(2);
+  renderFaceStale();
+  toast(S.faces.embedder === "arcface"
+    ? "ArcFace: a purpose-built recognition model. Press \u201cRe-measure\u201d to apply it "
+      + "to the faces already found — it uses the stored crops, so no photo is re-read."
+    : "faceres: kept for comparison only. It is a by-product of age/gender estimation.");
+};
+
+$("#btnReembed").onclick = async () => {
+  if (!FACES.faces.size){ toast("Press Find faces first."); return; }
+  const host = $("#faceOut"); resetChecks(host);
+  const st = step(host, "Re-measure faces");
+  try {
+    const r = await reembedFromCrops(async m => { await st.note(m); });
+    rebuildDerived(); renderFaceStale(); renderPeople();
+    (r.missing ? st.warn : st.ok)(r.measured + " faces re-measured with "
+      + faceEngineId() + (r.missing ? ", " + r.missing + " had no stored crop" : "")
+      + ". No photo was re-read.");
+  } catch (e){ st.err(errText(e)); }
+};
+
+$("#btnCompare").onclick = async () => {
+  const host = $("#faceOut"); resetChecks(host);
+  const st = step(host, "Compare on your named people");
+  try {
+    const r = await compareEmbedders(async m => { await st.note(m); });
+    const box = el("div");
+    box.append(Object.assign(el("div","hint"), { textContent:
+      "Measured on " + r.faces + " faces across " + r.people + " people you named. "
+      + "Higher separability groups better." }));
+    const t = el("table"); t.style.fontSize = "12.5px"; t.style.marginTop = "8px";
+    const row = (cells, head) => {
+      const tr = el("tr");
+      for (const c of cells){
+        const td = el(head ? "th" : "td", null, String(c));
+        td.style.textAlign = "left"; td.style.padding = "3px 12px 3px 0";
+        tr.append(td);
+      }
+      t.append(tr);
+    };
+    row(["model","same person","different people","separability","suggested"], true);
+    for (const [label, sc] of [["ArcFace (buffalo_s)", r.arcface],
+                               ["currently stored", r.current]]){
+      if (!sc) continue;
+      row([label, sc.samePerson, sc.differentPeople, sc.separability,
+           sc.suggestedThreshold]);
+    }
+    box.append(t);
+    if (r.arcface && r.current){
+      const better = r.arcface.separability > r.current.separability;
+      box.append(Object.assign(el("div","hint"), { textContent: better
+        ? "ArcFace separates your people better. Set the model to ArcFace, press "
+          + "Re-measure, then set strictness to " + r.arcface.suggestedThreshold + "."
+        : "On your photos the stored vectors separate at least as well. Keeping them "
+          + "is reasonable; try strictness " + r.current.suggestedThreshold + "." }));
+    }
+    $("#faceOut").append(box);
+    st.ok("Done — see the table.");
+  } catch (e){ st.err(errText(e)); }
+};
+
 $("#btnFacesPause").onclick = () => {
   RUN.paused = !RUN.paused;
   $("#btnFacesPause").textContent = RUN.paused ? "Resume" : "Pause";
@@ -218,9 +283,13 @@ $("#sFaceSrc").onchange = () => {
     ? "Reading thumbnails: much faster, and misses faces that are small in the frame."
     : "Reading originals: finds smaller faces, but re-reads every photo in full.");
 };
+function faceThSet(v){
+  if (S.faces.embedder === "faceres") S.faces.faceresThreshold = v;
+  else S.faces.threshold = v;
+}
 $("#sFaceTh").oninput = () => {
-  S.faces.threshold = +$("#sFaceTh").value;
-  $("#sFaceThVal").textContent = S.faces.threshold.toFixed(2);
+  faceThSet(+$("#sFaceTh").value);
+  $("#sFaceThVal").textContent = faceThreshold().toFixed(2);
 };
 $("#sFaceTh").onchange = async () => {
   saveSettings();
@@ -231,7 +300,7 @@ $("#sFaceTh").onchange = async () => {
   await savePeople();
   rebuildDerived();
   renderPeople();
-  toast("Re-grouped at " + S.faces.threshold.toFixed(2) + " — "
+  toast("Re-grouped at " + faceThreshold().toFixed(2) + " — "
     + FACES.clusters.length + " unnamed groups. Names were kept.");
 };
 $("#btnFaceScan").onclick = async () => {
@@ -247,8 +316,10 @@ $("#btnFaceScan").onclick = async () => {
       + "a network share can take several minutes before any photo is read." }));
   let p;
   try {
-    await st.note("Loading the face model (first run downloads it)…");
+    await st.note("Loading the face models (first run downloads them)…");
     await loadHumanEngine(async m => { await st.note(m); });
+    if (S.faces.embedder !== "faceres")
+      await loadArcFace(async m => { await st.note(m); });
     p = await planFaceScan(async m => { await st.note(m); });
   } catch (e){ st.err(errText(e)); toast(errText(e)); return; }
 
@@ -348,8 +419,9 @@ async function onPeopleShown(){
     if (FACES.faces.size && !FACES.people.length && !FACES.clusters.length)
       clusterFaces();
     $("#sFaceSrc").value = S.faces.source;
-    $("#sFaceTh").value = String(S.faces.threshold);
-    $("#sFaceThVal").textContent = S.faces.threshold.toFixed(2);
+    $("#sFaceEmb").value = S.faces.embedder;
+    $("#sFaceTh").value = String(faceThreshold());
+    $("#sFaceThVal").textContent = faceThreshold().toFixed(2);
     renderFaceStale();
     renderPeople();
   } catch (e){

@@ -7,7 +7,7 @@ in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it 
 responses and an [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
 scratch folder, so your real photos and index are never touched.
 
-**429 assertions** covering:
+**443 assertions** covering:
 
 - pure logic — Easter/occasion dates, singularisation, validation caps, enum checks
 - `image_type` correction from filename, EXIF, dimensions and caption
@@ -107,6 +107,19 @@ deadline, which is the point of asserting against it — so set `S.io.deadlineCa
 (a few hundred ms) for the duration of such a test, and restore it afterwards. Never let a
 hang happen inside `exclusive()`: that lock serialises every index write, and a wedged
 chain would stall the rest of the suite.
+
+### A synthetic benchmark cannot rank recognition models
+
+Drawn faces were good enough to prove that **alignment** works, because alignment is
+geometry: the same face rotated must embed to nearly the same vector, and that showed up
+clearly (0.527 → 0.925 self-similarity). The same benchmark then said ArcFace was *worse*
+than `faceres` — separability 0.176 against 0.339 — because two crude cartoons look like
+the same person to a model trained on real faces, which scored them 0.774 alike.
+
+So: use synthetic faces for geometry, never for identity. The only valid labels for ranking
+embedders are the groups the **user** has named, which is what `compareEmbedders()` uses —
+same-person versus different-person cosine on their own photos, with a suggested threshold
+derived from the gap.
 
 ### The face model needs a live check
 

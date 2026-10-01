@@ -337,7 +337,47 @@ Three corrections follow from this, and they generalise:
 
 ---
 
-## 12. Index size
+## 12. Store the expensive intermediate, not the cheap one
+
+Face recognition has three stages with wildly different costs:
+
+| stage | cost per photo |
+|---|---|
+| getting the pixels off the share | **~350 ms** (2.2 MB at 430 KB/s) |
+| detect + landmarks | ~15 ms |
+| embed an aligned crop | ~47 ms |
+
+Changing embedder therefore costs 9.7 hours if the originals have to be re-read, and about
+a minute if the **aligned 112×112 crop** was kept. The crop is ~5 KB; 15,000 faces is
+75 MB, against the 226 MB of thumbnails already stored.
+
+That inverts an earlier decision in this project. Display tiles deliberately store no crop,
+because a box in 0..1 plus the existing thumbnail renders the same picture for free. The
+*aligned* crop is a different thing: it is the output of work that cannot be cheaply
+redone, and keeping it is what makes trying another model a minute's work rather than a
+day's.
+
+**ArcFace needs that alignment, not a box crop.** It is trained on faces warped onto a
+fixed five-point template; hand it a raw rectangle and a recognition model behaves like a
+texture matcher. The pipeline is: 468-point mesh → five canonical points (eyes, nose,
+mouth corners) → least-squares similarity transform → 112×112 → `(x−127.5)/127.5` NCHW.
+
+**Two embedders are two different spaces.** `faceres` cosines for one person sit around
+0.93; ArcFace's sit far lower. A single threshold cannot serve both, so each carries its
+own — and a face records which model measured it, because mixing them in one cluster is
+meaningless.
+
+**Browser facts worth keeping:** `onnxruntime-web` runs from `file://` with
+`ort.env.wasm.wasmPaths` pointed at the CDN and `numThreads = 1` — threads need
+`SharedArrayBuffer`, which needs COOP/COEP headers a local file cannot send. And despite
+advertising `access-control-allow-origin: https://huggingface.co` on its redirect,
+huggingface.co **does** serve model weights to a `file://` page; jsDelivr's `gh` endpoint
+returns 133-byte Git-LFS pointers for model files, which is not obvious until you read what
+you downloaded.
+
+---
+
+## 13. Index size
 
 Measured on real photos, then projected:
 

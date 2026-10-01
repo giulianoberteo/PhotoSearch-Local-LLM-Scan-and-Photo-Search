@@ -67,7 +67,14 @@ const S = {
      14 GB library on a 430 KB/s share that is 8 minutes against 9.7 HOURS of
      re-reading originals, for the same photos. "originals" is the accurate
      option, and should be pointed at a subset. */
-  faces: { enabled:false, threshold:0.75, minScore:0.4, minFacePx:40,
+  /* embedder: "arcface" is a purpose-built recognition model (13 MB, fetched
+     once); "faceres" is the descriptor human produces as a by-product of
+     estimating age and gender, and is kept only so the two can be compared on
+     the same faces. Threshold depends on the embedder -- they are different
+     spaces -- so each carries its own. */
+  faces: { enabled:false, embedder:"arcface",
+           threshold:0.42, faceresThreshold:0.75,
+           minScore:0.4, minFacePx:40,
            maxPerPhoto:20, source:"thumbs", readConcurrency:5 },
   backup: { enabled:true, keep:3, minNewRecords:1 },
   plan: null

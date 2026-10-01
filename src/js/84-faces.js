@@ -53,7 +53,11 @@ const HUMAN_VERSION = "3.3.6";
 /* Recorded on every face. Vectors from a different configuration are NOT
    comparable -- unaligned ones encode pose -- so a change here has to be
    visible rather than silently mixed into the same clusters. */
-const FACE_ENGINE_ID = "human@3.3.6+aligned";
+function faceEngineId(){
+  return S.faces.embedder === "faceres"
+    ? "human@3.3.6-faceres+aligned"
+    : "arcface-buffalo_s+5pt";
+}
 const HUMAN_BASE = "https://cdn.jsdelivr.net/npm/@vladmandic/human@" + HUMAN_VERSION;
 const HUMAN_URL = HUMAN_BASE + "/dist/human.esm.js";
 const HUMAN_MODELS = HUMAN_BASE + "/models/";
@@ -135,11 +139,17 @@ async function loadHumanEngine(onPhase){
       out.push({
         box: [x / W, y / H, w / W, h / H].map(v => Math.max(0, Math.min(1, v))),
         score: faceScoreOf(f),
-        vec: Float32Array.from(f.embedding)
+        /* faceres' own descriptor, kept so the two embedders can be compared
+           on the same detections without a second pass over the photos. */
+        vec: Float32Array.from(f.embedding),
+        /* Transient, for alignment only. NEVER stored: it is a detailed map of
+           someone's face, and nothing downstream needs it once the 112x112
+           crop exists. */
+        mesh: f.mesh
       });
     }
     return out;
-  }, FACE_ENGINE_ID);
+  }, "human@3.3.6-detect");
   return FACE_ENGINE;
 }
 
@@ -152,6 +162,114 @@ function faceScoreOf(f){
   for (const v of [f.boxScore, f.score, f.faceScore])
     if (typeof v === "number" && v > 0) return v;
   return 0;
+}
+
+/* ---- alignment ----
+   ArcFace is trained on faces warped onto a fixed five-point template, and it
+   is not robust to anything else: handing it a raw box crop is the mistake that
+   makes a recognition model behave like a texture matcher. These are the
+   canonical destination points for a 112x112 crop, as used by InsightFace. */
+const ARC_TEMPLATE = [[38.2946,51.6963],[73.5318,51.5014],[56.0252,71.7366],
+                      [41.5493,92.3655],[70.7299,92.2041]];
+const ARC_SIZE = 112;
+
+/* MediaPipe's 468-point mesh reduced to the five ArcFace needs. Order matters:
+   the template expects the IMAGE-left eye first, so the pairs are sorted by x
+   rather than trusted to arrive in a particular orientation. */
+function faceFivePoints(mesh){
+  if (!mesh || mesh.length < 400) return null;
+  const at = i => mesh[i];
+  const mid = (a, b) => [(at(a)[0] + at(b)[0]) / 2, (at(a)[1] + at(b)[1]) / 2];
+  let eyeA = mid(33, 133), eyeB = mid(362, 263);
+  let mouthA = at(61).slice(0, 2), mouthB = at(291).slice(0, 2);
+  if (eyeA[0] > eyeB[0]){ const t = eyeA; eyeA = eyeB; eyeB = t; }
+  if (mouthA[0] > mouthB[0]){ const t = mouthA; mouthA = mouthB; mouthB = t; }
+  return [eyeA, eyeB, at(1).slice(0, 2), mouthA, mouthB];
+}
+
+/* Least-squares similarity transform (Procrustes): rotation, uniform scale and
+   translation, no shear -- the same family InsightFace uses, so a face arrives
+   at the template upright and at the right size whatever the head was doing. */
+function faceSimTransform(src, dst){
+  const n = src.length;
+  const mean = pts => pts.reduce((a, q) => [a[0] + q[0], a[1] + q[1]], [0, 0])
+                          .map(v => v / n);
+  const [sx0, sy0] = mean(src), [dx0, dy0] = mean(dst);
+  let a = 0, b = 0, d = 0;
+  for (let i = 0; i < n; i++){
+    const sx = src[i][0] - sx0, sy = src[i][1] - sy0;
+    const dx = dst[i][0] - dx0, dy = dst[i][1] - dy0;
+    a += sx * dx + sy * dy;
+    b += sx * dy - sy * dx;
+    d += sx * sx + sy * sy;
+  }
+  if (!d) return null;
+  const sa = a / d, sb = b / d;
+  return { a:sa, b:sb, c:-sb, d:sa,
+           e: dx0 - (sa * sx0 - sb * sy0),
+           f: dy0 - (sb * sx0 + sa * sy0) };
+}
+
+function faceAlignedCrop(bitmap, mesh){
+  const five = faceFivePoints(mesh);
+  if (!five) return null;
+  const m = faceSimTransform(five, ARC_TEMPLATE);
+  if (!m) return null;
+  const c = new OffscreenCanvas(ARC_SIZE, ARC_SIZE);
+  const x = c.getContext("2d");
+  x.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+  x.drawImage(bitmap, 0, 0);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  return c;
+}
+
+/* ---- the ArcFace embedder ----
+   A purpose-built recognition model, where `human`'s faceres produces a
+   descriptor as a by-product of estimating age and gender. buffalo_s is the
+   13 MB MobileFaceNet variant InsightFace ships and Immich uses. */
+const ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
+const ARC_MODEL =
+  "https://huggingface.co/immich-app/buffalo_s/resolve/main/recognition/model.onnx";
+let ARC = null;
+
+async function loadArcFace(onPhase){
+  if (ARC) return ARC;
+  const say = async m => { if (onPhase) await onPhase(m); };
+  await say("Loading the recognition runtime…");
+  const ort = await import(/* @vite-ignore */ ORT_BASE + "ort.min.mjs");
+  ort.env.wasm.wasmPaths = ORT_BASE;
+  /* No SharedArrayBuffer from a file:// page, so threads are not available.
+     Asking for them makes session creation fail outright. */
+  ort.env.wasm.numThreads = 1;
+  ort.env.logLevel = "error";
+  await say("Downloading the recognition model (13 MB, first run only)…");
+  const res = await fetch(ARC_MODEL);
+  if (!res.ok)
+    throw new Error("could not download the recognition model (HTTP " + res.status
+      + "). It is fetched once and then cached by the browser.");
+  const buf = await res.arrayBuffer();
+  await say("Starting the recognition model…");
+  const sess = await ort.InferenceSession.create(buf, { executionProviders:["wasm"] });
+  ARC = { ort, sess, dim: 512,
+          input: sess.inputNames[0], output: sess.outputNames[0] };
+  return ARC;
+}
+
+/* Expects the 112x112 aligned crop, NCHW, scaled to [-1,1]. */
+async function arcEmbedCrop(canvas){
+  const a = ARC;
+  if (!a) throw new Error("the recognition model is not loaded");
+  const px = canvas.getContext("2d").getImageData(0, 0, ARC_SIZE, ARC_SIZE).data;
+  const n = ARC_SIZE * ARC_SIZE;
+  const data = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++){
+    data[i]         = (px[i * 4]     - 127.5) / 127.5;
+    data[n + i]     = (px[i * 4 + 1] - 127.5) / 127.5;
+    data[2 * n + i] = (px[i * 4 + 2] - 127.5) / 127.5;
+  }
+  const out = await a.sess.run({
+    [a.input]: new a.ort.Tensor("float32", data, [1, 3, ARC_SIZE, ARC_SIZE]) });
+  return Float32Array.from(out[a.output].data);
 }
 
 /* ---- vector maths ---- */
@@ -356,9 +474,10 @@ async function ensureFaceNames(){
 /* Faces described by a different engine configuration cannot be compared with
    the current ones, so say so rather than clustering nonsense together. */
 function staleFaceEngines(){
+  const want = faceEngineId();
   const seen = new Set();
   for (const f of FACES.faces.values())
-    if (f.engine && f.engine !== FACE_ENGINE_ID) seen.add(f.engine);
+    if (f.engine && f.engine !== want) seen.add(f.engine);
   return [...seen];
 }
 
@@ -390,8 +509,15 @@ function faceCentroid(faceIds){
   return faceNormalise(c);
 }
 
+/* The two embedders live in different spaces, so a single number cannot serve
+   both: ArcFace cosines for one person sit far lower than faceres'. */
+function faceThreshold(){
+  return S.faces.embedder === "faceres"
+    ? S.faces.faceresThreshold : S.faces.threshold;
+}
+
 function clusterFaces(threshold){
-  const th = threshold != null ? threshold : S.faces.threshold;
+  const th = threshold != null ? threshold : faceThreshold();
   const dim = FACES.vec.dim;
   if (!dim || !FACES.vec.ids.length){ FACES.clusters = []; return FACES; }
 
@@ -548,14 +674,42 @@ function faceIdFor(photoId, box){
   return photoId + "-f" + box.map(v => Math.round(v * 1000)).join("_");
 }
 
+async function cropsDir(){
+  return (await facesDir()).getDirectoryHandle("crops", { create:true });
+}
+/* The aligned 112x112 crop is the costly part of the whole pipeline: getting
+   it required reading a multi-megabyte photo off the share and running a
+   detector. Storing it (about 5 KB) means trying a different embedder later
+   never touches a photo again -- which is the difference between "re-measure
+   the library" being minutes and being hours. */
+async function saveFaceCrop(id, canvas){
+  const blob = await canvas.convertToBlob({ type:"image/jpeg", quality:0.92 });
+  const dir = await cropsDir();
+  await writeBinary(await dir.getFileHandle(id + ".jpg", { create:true }),
+    await blob.arrayBuffer());
+  return blob.size;
+}
+async function faceCropCanvas(id){
+  try {
+    const dir = await cropsDir();
+    const blob = await (await dir.getFileHandle(id + ".jpg")).getFile();
+    if (!blob.size) return null;
+    const bmp = await createImageBitmap(blob);
+    const c = new OffscreenCanvas(ARC_SIZE, ARC_SIZE);
+    c.getContext("2d").drawImage(bmp, 0, 0, ARC_SIZE, ARC_SIZE);
+    bmp.close();
+    return c;
+  } catch { return null; }
+}
+
 /* Reads run in parallel because they are latency-bound on a share; detection
    does NOT, because one Human instance is not re-entrant. Parallel readers
    feeding a serialised detector is the shape that fits both. */
 let faceDetectChain = Promise.resolve();
 function detectFacesSerial(photoId, bitmap){
   const run = faceDetectChain.then(
-    () => detectFacesIn(photoId, bitmap),
-    () => detectFacesIn(photoId, bitmap));
+    () => detectAndEmbed(photoId, bitmap),
+    () => detectAndEmbed(photoId, bitmap));
   faceDetectChain = run.then(() => {}, () => {});
   return run;
 }
@@ -590,4 +744,144 @@ async function detectFacesIn(photoId, bitmap){
   await appendFaceVectors(pairs);      // vectors first: a face row with no vector is useless
   await appendFaces(rows);
   return rows;
+}
+
+/* Detect, align, store the crop, and embed with whichever embedder is chosen.
+   Replaces the old path that embedded a raw box crop. */
+async function detectAndEmbed(photoId, bitmap){
+  if (!FACE_ENGINE) throw new Error("no face detector loaded");
+  const W = bitmap.width || 1, H = bitmap.height || 1;
+  const facePx = f => Math.max(f.box[2] * W, f.box[3] * H);
+  const found = (await FACE_ENGINE(bitmap))
+    .filter(f => (f.score || 0) >= S.faces.minScore)
+    .filter(f => facePx(f) >= S.faces.minFacePx)
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .slice(0, S.faces.maxPerPhoto);
+
+  const engine = faceEngineId();
+  const rows = [], pairs = [];
+  for (const f of found){
+    const id = faceIdFor(photoId, f.box);
+    if (FACES.faces.has(id)) continue;
+    const crop = faceAlignedCrop(bitmap, f.mesh);
+    /* No landmarks means no alignment, and an unaligned crop is exactly the
+       input that made this useless. Skip rather than store a bad vector. */
+    if (!crop) continue;
+    let vec;
+    if (S.faces.embedder === "faceres") vec = f.vec;
+    else vec = await arcEmbedCrop(crop);
+    if (!vec || !vec.length) continue;
+    try { await saveFaceCrop(id, crop); } catch {}
+    rows.push({ id, photo_id: photoId, box: f.box.map(v => +v.toFixed(4)),
+                score: +(f.score || 0).toFixed(4), px: Math.round(facePx(f)),
+                engine, detected_at: new Date().toISOString() });
+    pairs.push({ id, vec });
+  }
+  if (!rows.length) return [];
+  await appendFaceVectors(pairs);
+  await appendFaces(rows);
+  return rows;
+}
+
+
+/* ---- re-embedding without touching a photo ----
+   The aligned crops are on disk, so changing embedder -- or trying a different
+   one to see if it groups better -- costs a pass over a few hundred kilobytes
+   instead of 14 GB. This is the whole reason the crops are stored. */
+async function reembedFromCrops(onProgress){
+  if (S.faces.embedder !== "faceres") await loadArcFace(onProgress);
+  const engine = faceEngineId();
+  const ids = [...FACES.faces.keys()];
+  const pairs = [];
+  let missing = 0, done = 0;
+  for (const id of ids){
+    const crop = await faceCropCanvas(id);
+    if (!crop){ missing++; continue; }
+    try {
+      pairs.push({ id, vec: await arcEmbedCrop(crop) });
+    } catch { missing++; }
+    if (++done % 50 === 0 && onProgress)
+      await onProgress("Re-measuring " + done + " of " + ids.length + " faces…");
+  }
+  if (!pairs.length)
+    throw new Error("no stored face crops to re-measure — run Find faces first");
+  /* Replace rather than append: these are the same faces, measured again. */
+  FACES.vec = { dim:0, ids:[], rows:null, index:new Map() };
+  await appendFaceVectors(pairs);
+  for (const id of FACES.vec.ids){
+    const f = FACES.faces.get(id);
+    if (f) f.engine = engine;
+  }
+  await appendFaces([...FACES.faces.values()]);
+  clusterFaces();
+  await savePeople();
+  return { measured: pairs.length, missing };
+}
+
+/* ---- settling it on real faces ----
+   A synthetic benchmark can prove alignment works, because that is geometry.
+   It CANNOT rank recognition models: two drawn faces look identical to one and
+   it scores them 0.77. The only valid labels available are the groups the user
+   has named, so use those: for each embedder, how alike are two faces of the
+   same person, and how alike are faces of different people. */
+async function compareEmbedders(onProgress){
+  const say = async m => { if (onProgress) await onProgress(m); };
+  const named = FACES.people.filter(p => p.name && p.face_ids.length >= 2);
+  if (named.length < 2)
+    throw new Error("name at least two groups first — with two or more faces each. "
+      + "Those names are the only ground truth available, and without them there is "
+      + "nothing to measure against.");
+
+  await say("Loading the recognition model…");
+  await loadArcFace(async m => await say(m));
+
+  const byPerson = new Map();
+  let crops = 0, gone = 0;
+  for (const person of named){
+    const rows = [];
+    for (const fid of person.face_ids.slice(0, 40)){
+      const crop = await faceCropCanvas(fid);
+      if (!crop){ gone++; continue; }
+      const arc = await arcEmbedCrop(crop);
+      const old = faceVectorOf(fid);
+      rows.push({ arc, old: old ? Float32Array.from(old) : null });
+      if (++crops % 25 === 0) await say("Measured " + crops + " faces…");
+    }
+    if (rows.length >= 2) byPerson.set(person.name, rows);
+  }
+  if (byPerson.size < 2)
+    throw new Error("not enough stored crops to compare (" + gone + " missing). "
+      + "Run Find faces again so the crops are written.");
+
+  const cos = (a, b) => {
+    let d = 0, na = 0, nb = 0;
+    for (let i = 0; i < a.length; i++){ d += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+    return d / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+  };
+  const score = key => {
+    const self = [], cross = [];
+    const names = [...byPerson.keys()];
+    for (const n of names){
+      const rows = byPerson.get(n).filter(r => r[key]);
+      for (let i = 0; i < rows.length; i++)
+        for (let j = i + 1; j < rows.length; j++) self.push(cos(rows[i][key], rows[j][key]));
+    }
+    for (let a = 0; a < names.length; a++)
+      for (let b = a + 1; b < names.length; b++){
+        const A = byPerson.get(names[a]).filter(r => r[key]);
+        const B = byPerson.get(names[b]).filter(r => r[key]);
+        for (const x of A) for (const y of B) cross.push(cos(x[key], y[key]));
+      }
+    if (!self.length || !cross.length) return null;
+    const mean = v => v.reduce((p, q) => p + q, 0) / v.length;
+    const s = mean(self), c = mean(cross);
+    /* A threshold between the two means, biased towards not merging people. */
+    const suggest = c + (s - c) * 0.45;
+    return { samePerson: +s.toFixed(3), differentPeople: +c.toFixed(3),
+             separability: +(s - c).toFixed(3),
+             suggestedThreshold: +suggest.toFixed(2),
+             pairs: self.length + " same, " + cross.length + " different" };
+  };
+  return { people: byPerson.size, faces: crops, missingCrops: gone,
+           arcface: score("arc"), current: score("old") };
 }
