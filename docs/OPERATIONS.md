@@ -22,7 +22,7 @@ network storage misbehaves. Paths below use `/Volumes/Photos` as an example libr
 | `~/PhotoSearch/PhotoSearch.html` | The current app. Double-click to open in Chrome. |
 | `~/PhotoSearch.html` | Symbolic link to the current app; keeps the existing browser URL working. |
 | `~/PhotoSearch/` | Active source, build script, review and roadmap. |
-| GitHub | https://github.com/giuvilas/PhotoSearch-Local-LLM-Scan-and-Photo-Search |
+| GitHub | https://github.com/giuvilas/Local-aiPhotos |
 
 To use it on another machine, copy **`PhotoSearch.html`** only. Nothing else is needed
 except Chrome and LM Studio.
