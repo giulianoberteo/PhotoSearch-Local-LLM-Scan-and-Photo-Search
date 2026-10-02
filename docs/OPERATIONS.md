@@ -2,6 +2,16 @@
 
 Operating notes: where everything lives, how to back up by hand, how a scan behaves when it
 is interrupted, and what to do when network storage misbehaves.
+Current workspace: `~/PhotoSearch`; open its `PhotoSearch.html`.
+The existing `~/PhotoSearch.html` is a symbolic link to that same app, not a separate
+copy. The Desktop workspace was moved here on 2 October 2026. Older duplicate
+copies are recoverable from Trash; see `../WHERE-THINGS-ARE.txt`.
+The older measurements below are historical. See [the current review](CONSUMER-REVIEW.md)
+for the live library audit and the people/search update at the end of this document
+for the new face-backup format.
+
+Operating notes: where everything lives, how to back up by hand, and what to do when
+network storage misbehaves. Paths below use `/Volumes/Photos` as an example library.
 
 The numbers come from the reference library (6,635 photos on an SMB NAS). Where a command
 needs a path, it uses `/Volumes/Photos` as a stand-in for **your own photo folder**; replace
@@ -25,6 +35,7 @@ it with your own, as explained in [Finding your index](#finding-your-index).
   - [Faces](#faces)
   - [Picking a different photo folder](#picking-a-different-photo-folder)
 - [Checklist after any interruption](#checklist-after-any-interruption)
+- [People/search update — 1 October 2026](#peoplesearch-update--1-october-2026)
 <!-- index:end -->
 
 ## Where the files are
@@ -35,6 +46,10 @@ it with your own, as explained in [Finding your index](#finding-your-index).
 |---|---|
 | `PhotoSearch.html` | The app. One file, about 530 KB. Double-click to open in Chrome. |
 | `PhotoSearch-dev/` | Source code and build script (a git clone of the repository). |
+| `~/PhotoSearch/PhotoSearch.html` | The current app. Double-click to open in Chrome. |
+| `~/PhotoSearch.html` | Symbolic link to the current app; keeps the existing browser URL working. |
+| `~/PhotoSearch/` | Active source, build script, review and roadmap. |
+| GitHub | https://github.com/giuvilas/Local-aiPhotos |
 
 To use it on another machine, copy **`PhotoSearch.html`** only. Nothing else is needed except
 Chrome and a model server.
@@ -355,5 +370,30 @@ records belonging to the folder actually walked are considered.
 4. **Retry failed** recovers anything that errored.
 5. Back up with the shell command in [Backing up by hand](#backing-up-by-hand) if the share is
    slow.
+
+5. Back up with the shell command in section 2 if the share is slow.
+
+[↑ Back to Index](#index)
+
+
+## People/search update — 1 October 2026
+
+The updated app and source were initially on the Desktop, then consolidated into
+`~/PhotoSearch/` on 2 October 2026. The index remains `/Volumes/Photos/.photoindex/`.
+
+New backups include the essential `faces/` records, vector files, `people.json`
+(names, corrections and undo), and `people.previous.json`. Face files have checksums.
+The older instructions above describe backups that predate face support. Manual
+backups must also copy those face files to protect naming work. Face crops and
+photo thumbnails are excluded from in-app backups and require originals to regenerate.
+
+Use the current build to restore these backups. Older builds do not understand the
+face manifest or correction fields. Restore retains a safety copy; old-format backups
+without a face manifest preserve the current faces. A separate-device copy is still
+necessary to protect against failure of the NAS itself.
+
+The live library contains historical face vectors. Do not delete them to change
+models. See `CONSUMER-REVIEW.md` and the staged migration in `ROADMAP.md` before a
+whole-library remeasurement. Existing names remain searchable and correctable.
 
 [↑ Back to Index](#index)

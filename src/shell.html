@@ -391,6 +391,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   <nav role="tablist">
     <button role="tab" data-tab="library" aria-selected="false">Library</button>
     <button role="tab" data-tab="favourites" aria-selected="false">Favourites</button>
+    <button role="tab" data-tab="search" aria-selected="false">Search</button>
     <button role="tab" data-tab="chat" aria-selected="false">Chat</button>
     <button role="tab" data-tab="timeline" aria-selected="false">Timeline</button>
     <button role="tab" data-tab="people" aria-selected="false">People</button>
@@ -414,6 +415,39 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 
 <main>
   <div id="browserWarn" class="note" hidden></div>
+
+  <section id="tab-search" hidden>
+    <div class="card">
+      <h2>Find your photos</h2>
+      <form id="photoSearchForm">
+        <label for="photoQuery">Search by person, subject or words in a picture</label>
+        <div class="row">
+          <input id="photoQuery" type="search" placeholder="Anna and Ben at the beach" style="flex:1;min-width:180px">
+          <button class="btn" id="photoSearchSubmit" type="submit">Search</button>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <div><label for="photoPlace">Place</label><input id="photoPlace" placeholder="e.g. Sicily"></div>
+          <div><label for="photoFrom">From</label><input id="photoFrom" type="date"></div>
+          <div><label for="photoTo">To</label><input id="photoTo" type="date"></div>
+        </div>
+        <fieldset style="border:1px solid var(--line);border-radius:8px;margin:12px 0;padding:10px">
+          <legend>People — everyone selected must appear</legend>
+          <div id="photoPeople" class="row"><span class="hint">Connect your index to see named people.</span></div>
+        </fieldset>
+        <div class="row">
+          <label class="switch"><input id="photoInterpret" type="checkbox" checked>Recognise names in my search</label>
+          <label class="switch"><input id="photoSemantic" type="checkbox">Include meaning-based matches</label>
+          <button class="btn sec" id="photoSearchClear" type="button">Clear filters</button>
+        </div>
+      </form>
+      <p class="hint">People, dates and keywords work without a model server. Meaning-based search uses your configured embedding server. Put literal text in double quotes.</p>
+      <div id="photoSearchStatus" role="status" aria-live="polite"></div>
+      <div id="photoSearchApplied" class="row" style="margin:10px 0"></div>
+      <div id="photoSearchResults"></div>
+      <div id="photoSearchPages" class="row" style="margin-top:12px"></div>
+      <details id="photoSearchDetails" hidden><summary>How these results were found</summary><div id="photoSearchHow" class="hint"></div></details>
+    </div>
+  </section>
 
   <section id="tab-scan" hidden>
     <div class="card">
@@ -555,6 +589,12 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
       <div class="hint" id="faceNote">Faces are grouped by how alike they look.
         Nothing is named until you name it.</div>
       <div id="faceOut"></div>
+      <div class="row" style="margin:12px 0">
+        <button class="btn sec" id="peopleUndo" disabled>Undo last people edit</button>
+        <label for="peopleFilter">Find a group</label>
+        <input type="search" id="peopleFilter" placeholder="Type a name…">
+      </div>
+      <div id="peopleReview" aria-live="polite"></div>
       <div id="peopleBox"><span class="dim">Press "Find faces" to begin.</span></div>
     </div>
   </section>

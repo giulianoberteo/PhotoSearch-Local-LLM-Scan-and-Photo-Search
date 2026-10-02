@@ -253,6 +253,7 @@ async function preflightScan(){
 }
 
 async function runScan(files, mode, resuming){
+  if (libraryMaintenance) throw new Error("Wait for the backup or restore before scanning.");
   if (!files.length){ toast("Nothing to do."); return; }
 
   /* Everything between pressing Scan and the first photo can take MINUTES on a
@@ -742,6 +743,9 @@ async function planFaceRefine(onPhase, signal){
 }
 
 async function runFaceRefine(files){
+  if (libraryMaintenance) throw new Error("Wait for the backup or restore before improving faces.");
+  if (FACES.separations.length || FACES.people.some(p => p.confirmed_ids || p.rejected_ids))
+    throw new Error("Your saved corrections need a staged migration before re-detection. Current names and faces are preserved.");
   if (!files.length){ toast("Nothing to improve."); return null; }
   RUN.active = true; RUN.paused = false; RUN.stop = false;
   RUN.abort = new AbortController();
@@ -801,6 +805,7 @@ async function runFaceRefine(files){
 }
 
 async function runFaceScan(files){
+  if (libraryMaintenance) throw new Error("Wait for the backup or restore before scanning faces.");
   if (!files.length){ toast("No photos left to look at."); return null; }
   RUN.active = true; RUN.paused = false; RUN.stop = false;
   RUN.abort = new AbortController();

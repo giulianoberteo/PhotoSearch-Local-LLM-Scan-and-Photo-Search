@@ -6,6 +6,11 @@ const IDX = {
   vec:{ dim:0, ids:[], rows:null, index:new Map() },
   loaded:false, checkpoint:null, lastConfig:null
 };
+let libraryMaintenance = 0;
+async function withLibraryMaintenance(fn){
+  libraryMaintenance++;
+  try { return await fn(); } finally { libraryMaintenance--; }
+}
 /* Heavy fields are stripped before a record enters memory, so a 50k-photo
    library costs kilobytes per record rather than tens of kilobytes. */
 const HEAVY = ["raw_model_json","embedding"];
@@ -47,6 +52,14 @@ async function writeBinary(handle, buf){
   const w = await handle.createWritable();
   await w.write(buf); await w.close();
 }
+async function writeVerifiedText(dir, name, text){
+  const fh = await dir.getFileHandle(name, { create:true });
+  const w = await fh.createWritable();
+  try { await w.write(text); await w.close(); }
+  catch (e){ try { await w.abort(); } catch {} throw e; }
+  if (await (await fh.getFile()).text() !== text)
+    throw new Error(name + " failed read-back verification; the change was not safely saved.");
+}
 async function readTextIfAny(dir, name){
   try { return await (await (await dir.getFileHandle(name)).getFile()).text(); }
   catch { return null; }
@@ -74,7 +87,18 @@ async function ensureIndex(onPhase, opts){
      every deadline in the app is sized from what it costs. Measuring work that
      has to happen anyway keeps the probe free. */
   const tOpen = performance.now();
-  IDX.dir = await parent.getDirectoryHandle(".photoindex", { create:true });
+  const nextDir = await parent.getDirectoryHandle(".photoindex", { create:true });
+  if (IDX.dir){
+    let same;
+    try { same = await IDX.dir.isSameEntry(nextDir); }
+    catch (e){
+      // Decorated handles (including the fault harness) unwrap at their boundary.
+      if (!(e instanceof TypeError)) throw e;
+      same = await nextDir.isSameEntry(IDX.dir);
+    }
+    if (!same) resetFaceState();
+  }
+  IDX.dir = nextDir;
   noteStorageTiming("openMs", performance.now() - tOpen);
   IDX.thumbs = null;
   /* thumbs/ is NOT opened here. It holds one file per photo -- 6,568 of them on

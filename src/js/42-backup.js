@@ -5,6 +5,79 @@
    backed up — they are the bulk of the index and can be rebuilt by re-decoding
    the originals, which costs no model calls at all. */
 const BACKUP_FILES = ["records.jsonl", "vectors.bin", "vectors.json", "config.json"];
+const FACE_BACKUP_FILES = ["faces.jsonl", "facevecs.bin", "facevecs.json", "people.json",
+  "people.previous.json"];
+
+async function optionalFile(dir, name){
+  try { return await (await dir.getFileHandle(name)).getFile(); }
+  catch (e){ if (isNotFound(e)) return null; throw e; }
+}
+async function optionalDir(dir, name){
+  try { return await dir.getDirectoryHandle(name); }
+  catch (e){ if (isNotFound(e)) return null; throw e; }
+}
+async function fileDigest(file){
+  const hash = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return [...new Uint8Array(hash)].map(v => v.toString(16).padStart(2,"0")).join("");
+}
+// Face crops are regenerable. Names, corrections, geometry and vectors are not
+// cheap to reconstruct and belong in every new backup, including safety copies.
+async function copyFaceData(from, to, onProgress){
+  const source = await optionalDir(from, "faces");
+  if (!source) return { present:false, files:[] };
+  const dest = await to.getDirectoryHandle("faces", { create:true });
+  const files = [];
+  for (const name of FACE_BACKUP_FILES){
+    if (onProgress) await onProgress("Copying faces/" + name + "…");
+    const r = await copyInto(source, dest, name);
+    if (r){
+      if (!r.ok) throw new Error("Incomplete face backup: " + name);
+      const a = await optionalFile(source, name), b = await optionalFile(dest, name);
+      const digest = await fileDigest(a);
+      if (digest !== await fileDigest(b)) throw new Error("Face backup checksum mismatch: " + name);
+      files.push({ ...r, sha256:digest });
+    }
+  }
+  const people = await optionalFile(dest, "people.json");
+  if (people) parsePeople(await people.text());
+  const rows = await optionalFile(dest, "faces.jsonl");
+  if (rows){
+    const check = await verifyRecordsFile(await dest.getFileHandle("faces.jsonl"));
+    if (check.bad) throw new Error("Face records contain unreadable lines; the backup is incomplete.");
+  }
+  await verifyFaceVectorFiles(dest);
+  return { present:true, files, crops:"excluded; regenerate from originals" };
+}
+async function verifyFaceVectorFiles(dir){
+  const meta = await optionalFile(dir, "facevecs.json");
+  const bin = await optionalFile(dir, "facevecs.bin");
+  if (!!meta !== !!bin) throw new Error("Face vectors are incomplete; both data and mapping are required.");
+  if (!meta) return;
+  const d = JSON.parse(await meta.text());
+  if (!Number.isInteger(d.dim) || d.dim <= 0 || !Array.isArray(d.ids)
+      || bin.size !== d.ids.length * d.dim * 4)
+    throw new Error("Face vector data does not match its mapping.");
+}
+async function verifyFaceBackup(src, meta){
+  if (!meta) return; // Older backups predate faces; restoring them preserves live faces.
+  if (!meta.present) return;
+  if (!Array.isArray(meta.files)) throw new Error("Face backup manifest is incomplete.");
+  const dir = await src.getDirectoryHandle("faces");
+  const listed = new Set(meta.files.map(f => f.name));
+  if (listed.size !== meta.files.length) throw new Error("Duplicate files in face backup manifest.");
+  for (const name of FACE_BACKUP_FILES)
+    if (await optionalFile(dir, name) && !listed.has(name))
+      throw new Error("Face backup manifest omits " + name);
+  for (const f of meta.files){
+    if (!FACE_BACKUP_FILES.includes(f.name)) throw new Error("Unexpected face backup file.");
+    const file = await optionalFile(dir, f.name);
+    if (!file || file.size !== f.bytes || await fileDigest(file) !== f.sha256)
+      throw new Error("Face backup is damaged: " + f.name + ". Nothing has been restored.");
+  }
+  const people = await optionalFile(dir, "people.json");
+  if (people) parsePeople(await people.text());
+  await verifyFaceVectorFiles(dir);
+}
 
 async function backupsDir(){
   return IDX.dir.getDirectoryHandle("backups", { create:true });
@@ -29,7 +102,7 @@ const COPY_CHUNK = 4 * 1024 * 1024;
 async function copyInto(srcDir, destDir, name, onProgress){
   let src;
   try { src = await (await srcDir.getFileHandle(name)).getFile(); }
-  catch { return null; }                       // absent is fine (no vectors yet)
+  catch (e){ if (isNotFound(e)) return null; throw e; }
   const fh = await destDir.getFileHandle(name, { create:true });
   const w = await fh.createWritable();
   try {
@@ -78,9 +151,8 @@ async function listBackups(){
       try {
         meta = JSON.parse(await (await (await h.getFileHandle("manifest.json")).getFile()).text());
       } catch {}
-      for await (const [, fh] of h.entries()){
-        try { bytes += (await fh.getFile()).size; } catch {}
-      }
+      if (meta) bytes = [...(meta.files || []), ...(meta.faces?.files || [])]
+        .reduce((n, f) => n + (f.bytes || 0), 0);
       out.push({ name, meta, bytes, handle:h });
     }
   } catch {}
@@ -88,7 +160,8 @@ async function listBackups(){
 }
 
 async function pruneBackups(keep){
-  const all = await indexOp("listing backups", () => listBackups(), { cost: 8 });
+  const all = (await indexOp("listing backups", () => listBackups(), { cost: 8 }))
+    .filter(b => b.meta && b.meta.records && !b.meta.records.bad);
   const dir = await backupsDir();
   let removed = 0;
   for (const b of all.slice(Math.max(1, keep))){
@@ -113,7 +186,13 @@ async function verifyRecordsFile(fileHandle){
   return { lines, bad, unique: ids.size };
 }
 
-async function backupIndex(reason, onProgress){
+async function backupIndex(reason, onProgress, options = {}){
+  return withLibraryMaintenance(async () => {
+    await peopleEditChain; await ioChain;
+    return makeIndexBackup(reason, onProgress, options);
+  });
+}
+async function makeIndexBackup(reason, onProgress, options){
   const say = async m => { if (onProgress) await onProgress(m); };
   /* Deadlines are generous because the storage may legitimately be slow: a
      sleeping share needs ~24s just to answer, and copies run at a few hundred
@@ -129,7 +208,7 @@ async function backupIndex(reason, onProgress){
   const dir = await indexOp("opening backups/", () => backupsDir(),
     { onPhase: say, cost: 4 });
   await sweepSwapFiles(dir);
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID().slice(0,8);
   await say("Creating " + stamp + "…");
   const dest = await indexOp("creating the backup folder",
     () => dir.getDirectoryHandle(stamp, { create:true }), { onPhase: say, cost: 4 });
@@ -159,6 +238,8 @@ async function backupIndex(reason, onProgress){
       }), { onPhase: say, timeoutMs: 1800000 });
     if (r){ copied.push(r); doneBytes = before + r.bytes; }
   }
+  const faces = await indexOp("backing up people and faces",
+    () => copyFaceData(IDX.dir, dest, say), { timeoutMs:1800000, onPhase:say });
   await say("Verifying…");
   let check = null;
   try { check = await verifyRecordsFile(await dest.getFileHandle("records.jsonl")); }
@@ -167,6 +248,7 @@ async function backupIndex(reason, onProgress){
     created_at: new Date().toISOString(),
     reason: reason || "manual",
     files: copied,
+    version:2, faces,
     records: check,
     photo_root: (S.dirHandle && S.dirHandle.name) || null,
     schema_hash: SCHEMA_HASH(), prompt_hash: PROMPT_HASH(),
@@ -192,9 +274,9 @@ async function backupIndex(reason, onProgress){
     throw new Error("backup failed verification (" + why + ") and was removed, "
       + "so it cannot displace a good one");
   }
-  const pruned = await pruneBackups(S.backup.keep);
+  const pruned = options.noPrune ? 0 : await pruneBackups(S.backup.keep);
   return { stamp, manifest, pruned,
-    bytes: copied.reduce((a, c) => a + c.bytes, 0) };
+    bytes: [...copied, ...faces.files].reduce((a, c) => a + c.bytes, 0) };
 }
 
 /* ---- relocating the index ----
@@ -223,6 +305,7 @@ async function moveIndexTo(destParent, onProgress){
     const r = await withDeadline("copying " + name, 900000, copyInto(from, to, name));
     if (r) moved.push(r);
   }
+  await copyFaceData(from, to, say);
   // the cached place-name data is small and tedious to re-fetch
   try {
     const gFrom = await from.getDirectoryHandle("geo");
@@ -258,10 +341,17 @@ async function moveIndexTo(destParent, onProgress){
 /* Restoring overwrites the live index, so take a safety copy of the CURRENT
    state first — otherwise a mistaken restore is unrecoverable. */
 async function restoreBackup(name, onProgress){
+  if (RUN.active || libraryMaintenance) throw new Error("Wait for the current library operation before restoring.");
+  return withLibraryMaintenance(() => restoreIndexBackup(name, onProgress));
+}
+async function restoreIndexBackup(name, onProgress){
   const say = async m => { if (onProgress) await onProgress(m); };
   await ensureIndex(null, { write:false });
   const dir = await backupsDir();
   const src = await dir.getDirectoryHandle(name);
+  const manifestFile = await optionalFile(src, "manifest.json");
+  const manifest = manifestFile ? JSON.parse(await manifestFile.text()) : null;
+  await verifyFaceBackup(src, manifest && manifest.faces);
   /* Verify the SOURCE before it overwrites live data. Restoring an unreadable
      backup over a working index is the worst outcome available here. */
   await say("Checking the backup…");
@@ -273,7 +363,8 @@ async function restoreBackup(name, onProgress){
     throw new Error("that backup has " + srcCheck.bad + " unreadable lines of "
       + srcCheck.lines + " — refusing to restore it");
   await say("Saving the current index first…");
-  await backupIndex("pre-restore safety copy", onProgress);
+  // Pruning here could delete the very backup the user selected (keep=1).
+  const safety = await backupIndex("pre-restore safety copy", onProgress, { noPrune:true });
   for (const f of BACKUP_FILES){
     await say("Restoring " + f + "…");
     const r = await withDeadline("restoring " + f, 1800000, copyInto(src, IDX.dir, f,
@@ -281,6 +372,27 @@ async function restoreBackup(name, onProgress){
         + Math.round(got / Math.max(1, size) * 100) + "%")));
     if (r && !r.ok) throw new Error("restore of " + f + " did not complete");
   }
+  if (manifest && manifest.faces){
+    const faceMeta = manifest.faces;
+    if (faceMeta.present){
+      const from = await src.getDirectoryHandle("faces");
+      const to = await IDX.dir.getDirectoryHandle("faces", { create:true });
+      const names = new Set(faceMeta.files.map(f => f.name));
+      for (const f of FACE_BACKUP_FILES){
+        if (names.has(f)){
+          await say("Restoring faces/" + f + "…");
+          const r = await copyInto(from, to, f);
+          if (!r || !r.ok) throw new Error("Face restore failed. Recover from safety copy " + safety.stamp);
+        } else { try { await to.removeEntry(f); } catch (e){ if (!isNotFound(e)) throw e; } }
+      }
+      await verifyFaceBackup(IDX.dir, faceMeta);
+    } else {
+      // A new-format backup explicitly records the absence of face data.
+      try { await IDX.dir.removeEntry("faces", { recursive:true }); }
+      catch (e){ if (!isNotFound(e)) throw e; }
+    }
+  }
+  resetFaceState();
   IDX.lastConfig = null;              // the restored config must be re-read
   IDX.thumbs = null;
   for (const [, u] of thumbCache) { try { URL.revokeObjectURL(u); } catch {} }
@@ -288,6 +400,7 @@ async function restoreBackup(name, onProgress){
   IDX.loaded = false;
   await loadRecords();
   await loadVectors();
+  await ensureFaceNames();
   rebuildDerived();
   return { records: IDX.records.size, vectors: IDX.vec.ids.length };
 }
