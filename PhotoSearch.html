@@ -817,7 +817,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.14";
+const APP_VERSION = "0.6.15";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -13598,6 +13598,7 @@ window.addEventListener("unhandledrejection", e => {
 
 /* ================= boot ================= */
 loadSettings();
+exclSummary();          // the summary was drawn before the saved list was read
 loadOverrideBox();
 $("#baseUrl").onchange = () => { S.baseUrl = $("#baseUrl").value.trim(); saveSettings(); };
 $("#mock").onchange = saveSettings;
