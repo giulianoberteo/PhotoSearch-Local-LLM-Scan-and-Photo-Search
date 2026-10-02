@@ -291,22 +291,40 @@ async function refreshPlan(){
   planAbort = new AbortController();
   const sig = planAbort.signal;
   resetChecks(host);
-  const st = step(host, "Building plan");
+  const where = S.indexMode === "custom" && S.indexDirHandle
+    ? S.indexDirHandle.name + "/.photoindex" : S.dirHandle.name + "/.photoindex";
+  checksBox(host).append(Object.assign(el("div","hint"), { textContent:
+    "Checking '" + S.dirHandle.name + (S.scanScope ? "/" + S.scanScope : "") + "' against the index in "
+    + where + ". This only reads: nothing is scanned, sent to a model or changed until you press a scan button." }));
+  let st = step(host, "Opening the index");
   try {
     if (!S.models.length && !$("#mock").checked){
-      await st.note("Detecting models…");
+      await st.note("Detecting models\u2026");
       await autoConnect();
     }
     await ensureIndex(null, { write:false });
-    await st.note("Waking the drive…");
+    await st.note("Waking the drive\u2026");
     await wakeStorage(m => st.note(m));
+    st.ok(where);
     if (!IDX.loaded){
-      await loadRecords((pct, n) => st.note("Loading index… " + pct + "% (" + n + " records)"));
+      st = step(host, "Loading what is already in the index");
+      await loadRecords((pct, n) => st.note("Reading records\u2026 " + pct + "% (" + n + " so far)"));
       await loadVectors();
       await loadCheckpoint();
       if (GEO.state === "none" && await geoCached()) { /* place names ready */ }
+      st.ok(IDX.records.size + " records, one per photo scanned before");
     }
-    const p = await buildPlan(m => st.note(m), sig);
+    st = step(host, "Listing the photos in the folder");
+    const t0 = performance.now();
+    const p = await buildPlan(m => {
+      if (/^Walking/.test(m)) st.note(m.replace(/^Walking [^:]*: /, "Looking through the folder and its subfolders: ") + " found so far\u2026");
+      else if (/^Reading file details/.test(m)) st.note(m.replace("Reading file details: ", "Reading each file's size and date: "));
+      else st.note(m);
+    }, sig);
+    st.ok(p.total + " photos found in " + fmtDur((performance.now() - t0) / 1000)
+      + (p.counts.skippedDirs ? " (" + p.counts.skippedDirs + " hidden folders skipped)" : ""));
+    st = step(host, "Matching them to the index");
+    await st.paint();
     if (p.moved.length){
       const n = await applyMoves(p.moved);
       st.note(n + " file(s) re-linked without re-scanning…");
@@ -315,7 +333,9 @@ async function refreshPlan(){
     rebuildDerived();
     S.planStale = false;
     await ensureFaceNames();        // so names are searchable without opening People
-    st.ok(p.total + " images · " + IDX.records.size + " records");
+    st.ok(p.new.length + " new, " + p.ok.length + " already known"
+      + (p.moved.length ? ", " + p.moved.length + " moved" : "")
+      + (p.missing.length ? ", " + p.missing.length + " in the index but no longer in the folder" : ""));
     /* This used to say "everything will look new -- use a separate index per
        library", which was true only before photos were matched by content.
        They are now, so adding a second folder to one index is a supported
@@ -343,7 +363,13 @@ function renderPlan(p){
   const host = $("#planBox");
   const box = el("div");
   const stat = el("div","stat");
-  const cell = (n, label) => { const d = el("div");
+  const TIPS = { "new":"Not in the index yet: a scan would read these.",
+    "changed":"The file was edited or replaced since it was scanned.",
+    "stale":"Scanned with an older schema, prompt or model than the current one.",
+    "failed":"A previous scan of these did not work. Retry failed tries them again.",
+    "missing":"In the index but not found in this folder (moved elsewhere, deleted, or another folder is connected).",
+    "up to date":"Already in the index and unchanged: nothing to do." };
+  const cell = (n, label) => { const d = el("div"); if (TIPS[label]) d.title = TIPS[label];
     d.append(el("b", null, String(n))); d.append(el("span", null, label)); return d; };
   stat.append(cell(p.total, p.scope ? "images in scope" : "images"));
   stat.append(cell(p.new.length, "new"));
@@ -353,6 +379,10 @@ function renderPlan(p){
   stat.append(cell(p.missing.length, "missing"));
   stat.append(cell(p.ok.length, "up to date"));
   box.append(stat);
+  box.append(Object.assign(el("div","hint"), { textContent:
+    "Counts: new = not scanned yet · changed = edited since scanned · stale = scanned with an older model or prompt · "
+    + "failed = a scan did not work · missing = in the index, not in this folder · up to date = nothing to do. "
+    + "Hover a number for details." }));
   const c = p.counts;
   const bits = [];
   if (c.rawPaired) bits.push(c.rawPaired + " RAW beside a JPEG, not scanned twice");
