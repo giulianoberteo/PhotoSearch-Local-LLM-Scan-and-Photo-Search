@@ -172,6 +172,7 @@ function renderSelfTestReport(host){
 }
 
 async function selfTest(){
+  window.__selftestActive = true;     // the refresh-restore saver must not store the test's fake state
   T.pass = 0; T.fail = 0; T.lines = []; T.last = ""; T.stop = null; T.env = null; T.tick = null;
   T.t0 = performance.now();
   const host = $("#selfOut"); resetChecks(host);
@@ -1991,6 +1992,22 @@ async function selfTest(){
         vwZoomTo(2.5); vwStep(1);
         eq("stepping to another photo returns to fit", VW.z, 1);
         vwStep(-1);
+        /* ---- what survives a refresh ---- */
+        {
+          const snap0 = restoreSnapshot();
+          ok("the snapshot records the open photo", snap0.open === GAL.list[VW.i].r.id, String(snap0.open));
+          const keep = { turns:CHAT.turns, messages:CHAT.messages, html:$("#chatLog").innerHTML, grids:RESTORE.grids };
+          try {
+            $("#chatLog").innerHTML = ""; RESTORE.grids = [];
+            const id0 = GAL.list[0].r.id;
+            chatRestoreTurns([{ q:"dogs on a beach", answer:"Found some.", ids:[id0], at:"2026-01-01T00:00:00Z" }]);
+            eq("restored chat shows the question and the answer", $("#chatLog").querySelectorAll(".msg").length, 2);
+            ok("its photo grid is drawn from the index", $("#chatLog").querySelectorAll(".gtile, .thumb, img").length > 0 || RESTORE.grids.length === 0);
+            eq("the model gets the earlier turns back", CHAT.messages.map(m => m.role), ["system", "user", "assistant"]);
+          } finally {
+            CHAT.turns = keep.turns; CHAT.messages = keep.messages; $("#chatLog").innerHTML = keep.html; RESTORE.grids = keep.grids;
+          }
+        }
         closeViewer();
         ok("closing releases the viewer", !VW.open);
 
@@ -2914,6 +2931,7 @@ async function selfTest(){
     IDX.loaded = false;
   }
   T.tick = null;
+  window.__selftestActive = false;
   renderSelfTestReport($("#selfOut"));
   window.__selftest = { pass:T.pass, fail:T.fail, lines:T.lines };
   return T;

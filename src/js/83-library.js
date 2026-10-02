@@ -404,6 +404,7 @@ async function libLoad(force){
     GAL.cell = 0;                       // a fresh list has no scroll anchor
     galClear();
     galLayout();
+    if (RESTORE.pending && IDX.records.size) restoreView();
   } catch (e){
     galMessage(humanError(e));
   }

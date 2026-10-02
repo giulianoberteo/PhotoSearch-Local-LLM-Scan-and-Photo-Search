@@ -1,6 +1,6 @@
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.10";
+const APP_VERSION = "0.6.11";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -194,6 +194,7 @@ function tabShownHook(name){
   }
   if (name === "favourites" && typeof galSetView === "function") galSetView("favourites");
   if (name === "search" && typeof onSearchShown === "function") onSearchShown();
+  if (name === "chat" && typeof chatFillGrids === "function") chatFillGrids();
   if (name === "timeline" && typeof onTimelineShown === "function") onTimelineShown();
   if (name === "people" && typeof onPeopleShown === "function") onPeopleShown();
 }

@@ -279,11 +279,13 @@ function sgArgs(){
   return a;
 }
 
-async function runSearch(){
+async function runSearch(quiet){
   const tok = ++SG.run;
   if (!GAL.chips.length && !GAL.texts.length){ clearSearch(); return; }
-  if (tabFromHash() !== "library") location.hash = "library";
-  showTab("library");
+  if (!quiet){                       // quiet: restoring after a refresh must not change the tab
+    if (tabFromHash() !== "library") location.hash = "library";
+    showTab("library");
+  }
   await onLibraryShown();
   if (!IDX.records.size){ toast("Connect a folder in Settings first."); return; }
   try {
