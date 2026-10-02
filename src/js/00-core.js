@@ -1,6 +1,6 @@
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.17";
+const APP_VERSION = "0.6.18";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);

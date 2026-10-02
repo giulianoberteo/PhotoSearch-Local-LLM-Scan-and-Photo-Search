@@ -287,7 +287,8 @@ async function makeIndexBackup(reason, onProgress, options){
 const CORE_FILES = ["records.jsonl", "vectors.bin", "vectors.json", "config.json",
                     "runs.jsonl", "state.json"];
 
-async function moveIndexTo(destParent, onProgress){
+async function moveIndexTo(destParent, onProgress, opts){
+  opts = opts || {};
   const say = async m => { if (onProgress) await onProgress(m); };
   await say("Opening the current index…");
   await ensureIndex(null, { write:false });
@@ -315,6 +316,25 @@ async function moveIndexTo(destParent, onProgress){
       await copyInto(gFrom, gTo, n);
     }
   } catch {}
+  /* Thumbnails are optional: they can be rebuilt, so a failure here never blocks the move. */
+  if (opts.thumbs){
+    try {
+      const tFrom = await from.getDirectoryHandle("thumbs");
+      const tTo = await to.getDirectoryHandle("thumbs", { create:true });
+      const names = [];
+      for await (const [n, h] of tFrom.entries()) if (h.kind === "file") names.push(n);
+      let done = 0, i = 0;
+      const worker = async () => {
+        for (;;){
+          const n = names[i++];
+          if (n === undefined) return;
+          try { await copyInto(tFrom, tTo, n); } catch {}
+          if (++done % 50 === 0) await say("Copying thumbnails\u2026 " + done + " / " + names.length);
+        }
+      };
+      await Promise.all(Array.from({ length: 6 }, worker));
+    } catch {}
+  }
   /* Never switch to a destination that did not copy cleanly. */
   const bad2 = moved.filter(m => !m.ok).map(m => m.name);
   if (bad2.length)
@@ -323,9 +343,12 @@ async function moveIndexTo(destParent, onProgress){
   await say("Switching over…");
   for (const [, u] of thumbCache) { try { URL.revokeObjectURL(u); } catch {} }
   thumbCache.clear();
-  S.indexMode = "custom";
-  S.indexDirHandle = destParent;
-  try { await idbSet("lastIndexDir", destParent); } catch {}
+  /* Moving it next to the photos is the default arrangement, not a custom one. */
+  let besidePhotos = false;
+  try { besidePhotos = !!S.dirHandle && await S.dirHandle.isSameEntry(destParent); } catch {}
+  S.indexMode = besidePhotos ? "folder" : "custom";
+  S.indexDirHandle = besidePhotos ? null : destParent;
+  if (!besidePhotos) { try { await idbSet("lastIndexDir", destParent); } catch {} }
   saveSettings();
   IDX.lastConfig = null;
   IDX.loaded = false;

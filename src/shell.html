@@ -361,6 +361,8 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 .exclRow .tw:disabled{visibility:hidden}
 .exclRow.off label{color:var(--dim);text-decoration:line-through}
 .exclKids{margin-left:20px}
+.idxNow{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);font-size:13px}
+.idxNow b{font-weight:650}
 #vwImg.zoomed{cursor:grab;touch-action:none} #vwImg.drag{cursor:grabbing}
 .vwZoom{position:absolute;bottom:18px;left:50%;translate:-50% 0;z-index:2;display:flex;align-items:center;
   gap:8px;padding:6px 12px;border-radius:99px;background:color-mix(in srgb,var(--panel) 85%,transparent);
@@ -657,7 +659,9 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
           </select></div>
         <button class="btn" id="btnIndexDir">Choose where to save the DB…</button>
         <button class="btn sec" id="btnIndexReveal">What's in it?</button>
+        <button class="btn sec" id="btnIndexMove">Move the index&hellip;</button>
       </div>
+      <div id="idxNow" class="idxNow"></div>
       <div class="row" style="margin-top:10px">
         <div style="flex:1 1 240px"><label for="sScope">Scan scope (optional)</label>
           <select id="sScope"><option value="">Whole library</option></select></div>

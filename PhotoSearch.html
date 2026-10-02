@@ -361,6 +361,8 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 .exclRow .tw:disabled{visibility:hidden}
 .exclRow.off label{color:var(--dim);text-decoration:line-through}
 .exclKids{margin-left:20px}
+.idxNow{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);font-size:13px}
+.idxNow b{font-weight:650}
 #vwImg.zoomed{cursor:grab;touch-action:none} #vwImg.drag{cursor:grabbing}
 .vwZoom{position:absolute;bottom:18px;left:50%;translate:-50% 0;z-index:2;display:flex;align-items:center;
   gap:8px;padding:6px 12px;border-radius:99px;background:color-mix(in srgb,var(--panel) 85%,transparent);
@@ -657,7 +659,9 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
           </select></div>
         <button class="btn" id="btnIndexDir">Choose where to save the DB…</button>
         <button class="btn sec" id="btnIndexReveal">What's in it?</button>
+        <button class="btn sec" id="btnIndexMove">Move the index&hellip;</button>
       </div>
+      <div id="idxNow" class="idxNow"></div>
       <div class="row" style="margin-top:10px">
         <div style="flex:1 1 240px"><label for="sScope">Scan scope (optional)</label>
           <select id="sScope"><option value="">Whole library</option></select></div>
@@ -818,7 +822,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.17";
+const APP_VERSION = "0.6.18";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -3126,7 +3130,8 @@ async function makeIndexBackup(reason, onProgress, options){
 const CORE_FILES = ["records.jsonl", "vectors.bin", "vectors.json", "config.json",
                     "runs.jsonl", "state.json"];
 
-async function moveIndexTo(destParent, onProgress){
+async function moveIndexTo(destParent, onProgress, opts){
+  opts = opts || {};
   const say = async m => { if (onProgress) await onProgress(m); };
   await say("Opening the current index…");
   await ensureIndex(null, { write:false });
@@ -3154,6 +3159,25 @@ async function moveIndexTo(destParent, onProgress){
       await copyInto(gFrom, gTo, n);
     }
   } catch {}
+  /* Thumbnails are optional: they can be rebuilt, so a failure here never blocks the move. */
+  if (opts.thumbs){
+    try {
+      const tFrom = await from.getDirectoryHandle("thumbs");
+      const tTo = await to.getDirectoryHandle("thumbs", { create:true });
+      const names = [];
+      for await (const [n, h] of tFrom.entries()) if (h.kind === "file") names.push(n);
+      let done = 0, i = 0;
+      const worker = async () => {
+        for (;;){
+          const n = names[i++];
+          if (n === undefined) return;
+          try { await copyInto(tFrom, tTo, n); } catch {}
+          if (++done % 50 === 0) await say("Copying thumbnails\u2026 " + done + " / " + names.length);
+        }
+      };
+      await Promise.all(Array.from({ length: 6 }, worker));
+    } catch {}
+  }
   /* Never switch to a destination that did not copy cleanly. */
   const bad2 = moved.filter(m => !m.ok).map(m => m.name);
   if (bad2.length)
@@ -3162,9 +3186,12 @@ async function moveIndexTo(destParent, onProgress){
   await say("Switching over…");
   for (const [, u] of thumbCache) { try { URL.revokeObjectURL(u); } catch {} }
   thumbCache.clear();
-  S.indexMode = "custom";
-  S.indexDirHandle = destParent;
-  try { await idbSet("lastIndexDir", destParent); } catch {}
+  /* Moving it next to the photos is the default arrangement, not a custom one. */
+  let besidePhotos = false;
+  try { besidePhotos = !!S.dirHandle && await S.dirHandle.isSameEntry(destParent); } catch {}
+  S.indexMode = besidePhotos ? "folder" : "custom";
+  S.indexDirHandle = besidePhotos ? null : destParent;
+  if (!besidePhotos) { try { await idbSet("lastIndexDir", destParent); } catch {} }
   saveSettings();
   IDX.lastConfig = null;
   IDX.loaded = false;
@@ -5430,7 +5457,30 @@ async function useDirectory(handle){
   await refreshPlan();
   refreshActiveTab();
 }
+/* Says, in one place, where the index is RIGHT NOW. The browser only hands over folder
+   names, never full paths, so this is the name of the folder that holds .photoindex. */
+async function renderIndexNow(){
+  const box = $("#idxNow");
+  if (!box) return;
+  box.textContent = "";
+  let parent = null;
+  try { parent = await indexParent(); } catch {}
+  if (!parent){
+    box.append(el("b", null, "No index location yet. "),
+      document.createTextNode(S.indexMode === "custom"
+        ? "Choose where to save the DB, or reconnect the index folder."
+        : "Choose a photo folder; the index will sit inside it."));
+    return;
+  }
+  const custom = S.indexMode === "custom";
+  box.append(el("b", null, "Index right now: "), document.createTextNode(parent.name + "/.photoindex"));
+  box.append(el("div", "hint", (custom ? "A folder you chose for the index" : "Beside the photos, inside the connected photo folder '"
+    + (S.dirHandle ? S.dirHandle.name : "?") + "'")
+    + (IDX.records.size ? " \u00b7 " + IDX.records.size + " photos recorded" : "")
+    + ". Chrome shares folder names, not full paths: to find it in Finder, search for the name above, then press Cmd+Shift+. to show hidden folders."));
+}
 function renderIndexWhere(){
+  renderIndexNow();
   const n = $("#indexWhere");
   const where = S.indexMode === "custom"
     ? (S.indexDirHandle ? S.indexDirHandle.name : null)
@@ -6083,6 +6133,43 @@ $("#btnStop").onclick = () => {
   toast("Stopping… progress is saved and resumable.");
 };
 
+/* ---- move the index ---- */
+$("#btnIndexMove").onclick = async () => {
+  if (RUN.active){ toast("Wait for the scan to finish before moving the index."); return; }
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the move"))) return;
+  let dest;
+  try { await ensureIndex(null, { write:false }); dest = await pickDirectory(); }
+  catch (e){
+    if (e.name === "AbortError") return;
+    if (isPickerStuck(e)){ offerPickerReset(); return; }
+    toast(humanError(e)); return;
+  }
+  const host = $("#fsOut"); resetChecks(host);
+  let cur = null;
+  try { cur = await indexParent(); } catch {}
+  try { if (cur && await cur.isSameEntry(dest)){ toast("The index is already in " + dest.name + "."); return; } } catch {}
+  const rec = IDX.records.size;
+  if (!confirm("Move the index to '" + dest.name + "/.photoindex'?\n\n"
+      + "From: " + (cur ? cur.name : "?") + "/.photoindex  (" + rec + " photos recorded)\n"
+      + "To:   " + dest.name + "/.photoindex\n\n"
+      + "The index is copied, checked, and only then switched over. The old copy is left where it is, "
+      + "so nothing is lost; delete it yourself once you are happy. Your photos are not touched.\n\n"
+      + "If '" + dest.name + "' is not the folder you meant (the macOS picker returns a highlighted "
+      + "subfolder), press Cancel and choose again.")) return;
+  const btn = $("#btnIndexMove"); btn.disabled = true;
+  const st = step(host, "Moving the index to " + dest.name);
+  try {
+    const r = await withLibraryMaintenance(() => moveIndexTo(dest, m => st.note(m), { thumbs:true }));
+    st.ok(r.records + " photos recorded, " + (r.bytes / 1048576).toFixed(1) + " MB of index files copied. "
+      + "The old copy in " + (cur ? cur.name : "the old folder") + " is untouched.");
+    renderIndexWhere();
+    toast("Index moved to " + dest.name + "/.photoindex");
+    await refreshPlan();
+  } catch (e){
+    st.err(humanError(e) + " Nothing was switched: the index is still where it was.");
+  }
+  btn.disabled = false;
+};
 $("#btnIndexReveal").onclick = async () => {
   if (!(await ensureIndexConnected()) || !(await ensureConnected("the index listing"))) return;
   const host = $("#fsOut"); resetChecks(host);
