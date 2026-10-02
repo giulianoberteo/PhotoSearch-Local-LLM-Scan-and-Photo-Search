@@ -678,7 +678,8 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
           in the index from a folder you leave out stay searchable; they are just no longer checked or rescanned.
           Click &#9656; to look inside a folder.</div>
         <div id="exclTree" class="exclTree"></div>
-        <div class="row" style="margin-top:8px"><button class="btn sec" id="exclAll">Include everything</button></div>
+        <div class="row" style="margin-top:8px"><button class="btn sec" id="exclAll">Select all</button>
+          <button class="btn sec" id="exclNone">Deselect all</button></div>
       </div>
       <div class="hint" id="indexWhere"></div>
       <div class="hint">Photos are identified by the file itself, not by where you point the
@@ -817,7 +818,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.15";
+const APP_VERSION = "0.6.16";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -5559,6 +5560,13 @@ $("#btnExcl").onclick = async () => {
   if (!p.hidden) await exclRender();
 };
 $("#exclAll").onclick = () => { S.scanExclude = []; exclChanged(); exclRender(); };
+/* Deselect all leaves out every folder, so a few can then be ticked back in. Photos sitting
+   directly in the library root belong to no folder and are still scanned. */
+$("#exclNone").onclick = async () => {
+  if (!S.dirHandle){ toast("Choose or reconnect a folder first."); return; }
+  try { S.scanExclude = (await exclChildren("")).map(n => n + "/"); } catch (e){ toast(humanError(e)); return; }
+  exclChanged(); exclRender();
+};
 exclSummary();
 
 $("#sScope").onchange = async () => {
