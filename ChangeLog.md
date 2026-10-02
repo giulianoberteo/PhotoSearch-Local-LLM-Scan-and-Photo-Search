@@ -17,62 +17,82 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.6.11 (2026-10-02)](#0611-2026-10-02)
+- [0.6.12 (2026-10-02)](#0612-2026-10-02)
   - [Added](#added)
+- [0.6.11 (2026-10-02)](#0611-2026-10-02)
+  - [Added](#added-1)
 - [0.6.10 (2026-10-02)](#0610-2026-10-02)
   - [Changed](#changed)
 - [0.6.9 (2026-10-02)](#069-2026-10-02)
   - [Changed](#changed-1)
 - [0.6.8 (2026-10-02)](#068-2026-10-02)
-  - [Added](#added-1)
+  - [Added](#added-2)
 - [0.6.7 (2026-10-02)](#067-2026-10-02)
   - [Fixed](#fixed)
 - [0.6.6 (2026-10-02)](#066-2026-10-02)
   - [Fixed](#fixed-1)
 - [0.6.5 (2026-10-02)](#065-2026-10-02)
-  - [Added](#added-2)
-- [0.6.4 (2026-10-02)](#064-2026-10-02)
   - [Added](#added-3)
-- [0.6.3 (2026-10-01)](#063-2026-10-01)
+- [0.6.4 (2026-10-02)](#064-2026-10-02)
   - [Added](#added-4)
+- [0.6.3 (2026-10-01)](#063-2026-10-01)
+  - [Added](#added-5)
   - [Changed](#changed-2)
 - [0.6.2 (2026-10-01)](#062-2026-10-01)
-  - [Added](#added-5)
+  - [Added](#added-6)
   - [Changed](#changed-3)
 - [0.6.1 (2026-10-01)](#061-2026-10-01)
-  - [Added](#added-6)
+  - [Added](#added-7)
   - [Changed](#changed-4)
 - [0.6.0 (2026-10-01)](#060-2026-10-01)
-  - [Added](#added-7)
+  - [Added](#added-8)
   - [Changed](#changed-5)
 - [0.5.4 (2026-10-01)](#054-2026-10-01)
   - [Changed](#changed-6)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed-2)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
-  - [Added](#added-8)
+  - [Added](#added-9)
   - [Changed](#changed-7)
 - [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-8)
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
-  - [Added](#added-9)
+  - [Added](#added-10)
   - [Changed](#changed-9)
   - [Fixed](#fixed-3)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
-  - [Added](#added-10)
+  - [Added](#added-11)
   - [Changed](#changed-10)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
-  - [Added](#added-11)
+  - [Added](#added-12)
   - [Changed](#changed-11)
   - [Fixed](#fixed-4)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
-  - [Added](#added-12)
+  - [Added](#added-13)
   - [Changed](#changed-12)
   - [Fixed](#fixed-5)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
-  - [Added](#added-13)
+  - [Added](#added-14)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.12 (2026-10-02)
+
+**Summary:** leave chosen folders out of scans.
+
+### Added
+
+- **Settings > Choose folders to leave out…** shows the library as a tree you can open
+  (▸) and untick. An unticked folder, and everything inside it, is skipped by every scan and
+  by the Plan. Unticking a folder whose parent is already left out is not offered; ticking a
+  parent again brings back everything under it. "Include everything" clears the list.
+- Photos already in the index from a folder you later leave out are not touched: they stay
+  searchable, and are not reported missing or rescanned.
+- The Plan reports "N folders left out by you". The list is a setting
+  (`scanExclude`), relative to the library root, so it still applies when you scan a subfolder.
+
+[↑ Back to Index](#index)
+
 
 ## 0.6.11 (2026-10-02)
 

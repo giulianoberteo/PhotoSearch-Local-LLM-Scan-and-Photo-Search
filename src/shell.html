@@ -351,6 +351,12 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   top .3s cubic-bezier(.2,.8,.2,1),width .3s cubic-bezier(.2,.8,.2,1),
   height .3s cubic-bezier(.2,.8,.2,1),rotate .3s cubic-bezier(.2,.8,.2,1),opacity .2s}
 #vwImg.still{transition:none}
+.exclTree{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 8px;margin-top:8px;background:var(--panel2)}
+.exclRow{display:flex;align-items:center;gap:6px;padding:2px 0;font-size:13px}
+.exclRow .tw{width:18px;border:0;background:none;color:var(--dim);cursor:pointer;padding:0;font-size:12px}
+.exclRow .tw:disabled{visibility:hidden}
+.exclRow.off label{color:var(--dim);text-decoration:line-through}
+.exclKids{margin-left:20px}
 #vwImg.zoomed{cursor:grab;touch-action:none} #vwImg.drag{cursor:grabbing}
 .vwZoom{position:absolute;bottom:18px;left:50%;translate:-50% 0;z-index:2;display:flex;align-items:center;
   gap:8px;padding:6px 12px;border-radius:99px;background:color-mix(in srgb,var(--panel) 85%,transparent);
@@ -658,6 +664,17 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
             <option value="path">Folder order (A–Z)</option>
             <option value="smallest">Smallest files first</option>
           </select></div>
+      </div>
+      <div class="row" style="margin-top:10px;align-items:center">
+        <button class="btn sec" id="btnExcl">Choose folders to leave out&hellip;</button>
+        <span class="hint" id="exclSummary" style="margin:0"></span>
+      </div>
+      <div id="exclPanel" hidden>
+        <div class="hint">Untick a folder to leave it, and everything inside it, out of every scan. Photos already
+          in the index from a folder you leave out stay searchable; they are just no longer checked or rescanned.
+          Click &#9656; to look inside a folder.</div>
+        <div id="exclTree" class="exclTree"></div>
+        <div class="row" style="margin-top:8px"><button class="btn sec" id="exclAll">Include everything</button></div>
       </div>
       <div class="hint" id="indexWhere"></div>
       <div class="hint">Photos are identified by the file itself, not by where you point the
