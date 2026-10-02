@@ -20,6 +20,7 @@ edges, and the edges are best found by people using it on libraries that are not
 ```bash
 python3 build.py            # writes PhotoSearch.html (shipped) and PhotoSearch.test.html (with the self-test suite)
 python3 build.py --check    # verifies the committed file is current
+python3 build.py --split    # multi-file PhotoSearch-split/ (index.html + js/ + css/), nothing inlined
 python3 build.py --min      # optional PhotoSearch.min.html (pip install rjsmin rcssmin in a venv)
 ```
 

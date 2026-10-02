@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 PhotoSearch.test.html
 PhotoSearch.min.html
+PhotoSearch-split/

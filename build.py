@@ -11,9 +11,10 @@ src/js/*.js and this script concatenates it into src/shell.html.
 
   python3 build.py            # writes PhotoSearch.html
   python3 build.py --check    # verifies the committed file is up to date
+  python3 build.py --split    # multi-file PhotoSearch-split/ (index.html, test.html, js/, css/)
   python3 build.py --min      # also-optional PhotoSearch.min.html (needs rjsmin, rcssmin)
 """
-import json, re, subprocess, sys, pathlib
+import json, re, shutil, subprocess, sys, pathlib
 
 ROOT = pathlib.Path(__file__).parent
 SRC = ROOT / "src"
@@ -111,6 +112,39 @@ def module_text(name: str) -> str:
     return f"\n/* ==================== {name} ==================== */\n" + body
 
 
+def build_split() -> None:
+    """--split: write PhotoSearch-split/ as a normal multi-file web page.
+
+    index.html is the app (no tests) and test.html adds the self-test suite; both load the same
+    js/*.js and css/*.css with plain <script src> and <link> tags, which work from file://.
+    Every module gets its own "use strict" (in the single file one directive covers them all),
+    and the lazy modules are loaded up front, so loadModule() finds nothing and does nothing.
+    """
+    out = ROOT / "PhotoSearch-split"
+    shutil.rmtree(out, ignore_errors=True)
+    (out / "js").mkdir(parents=True)
+    (out / "css").mkdir()
+    for n in ORDER:
+        text = (gen_template() if n == "20-tpl.js" else (SRC / "js" / n).read_text())
+        # One file serves both pages, so keep the TEST-ONLY regions (99-boot.js guards its hook).
+        (out / "js" / n).write_text('"use strict";\n' + strip_markers(text, True))
+    for n in CSS_ORDER:
+        (out / "css" / n).write_text((SRC / "css" / n).read_text())
+    shell = (SRC / "shell.html").read_text()
+    for test, name in ((False, "index.html"), (True, "test.html")):
+        links = "".join(f'<link rel="stylesheet" href="css/{n}">\n'
+                        for n in CSS_ORDER if test or n not in CSS_TEST_ONLY)
+        scripts = "".join(f'<script src="js/{n}"></script>\n'
+                          for n in ORDER if test or n not in TEST_ONLY)
+        page = strip_markers(shell, test)
+        page = re.sub(r"<style>\s*__CSS__\s*</style>", lambda m: links.rstrip("\n"), page)
+        page = re.sub(r"<script>\s*__JS__\s*</script>\s*__LAZY__", lambda m: scripts.rstrip("\n"), page)
+        if "__JS__" in page or "__CSS__" in page or "__LAZY__" in page:
+            sys.exit("split build left a placeholder in " + name)
+        (out / name).write_text(page)
+    print(f"wrote {out.name}/  (index.html, test.html, {len(ORDER)} js files, {len(CSS_ORDER)} css files; not committed)")
+
+
 def minify(html: str) -> str:
     """Optional --min: shrink the CSS and every script block with rjsmin/rcssmin.
 
@@ -167,6 +201,9 @@ def check_syntax(html: str) -> None:
 
 
 if __name__ == "__main__":
+    if "--split" in sys.argv:
+        build_split()
+        sys.exit(0)
     if "--min" in sys.argv:
         out = ROOT / "PhotoSearch.min.html"
         min_html = minify(build())

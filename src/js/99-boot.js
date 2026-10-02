@@ -65,5 +65,5 @@ if (checkBrowser()){
 $("#sVersion").textContent = "PhotoSearch v" + APP_VERSION;
 /*TEST-ONLY*/
 /* Headless hook: open with #selftest to run the suite automatically. */
-if (location.hash === "#selftest") setTimeout(() => selfTest(), 50);
+if (location.hash === "#selftest" && typeof selfTest === "function") setTimeout(() => selfTest(), 50);
 /*/TEST-ONLY*/

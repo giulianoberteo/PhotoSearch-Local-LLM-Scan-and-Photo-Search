@@ -187,6 +187,12 @@ may use names defined earlier, never the reverse.
   Diagnostics card or the `#selftest` hook.
 - `PhotoSearch.test.html` (not committed): the same plus the test suite.
 
+`python3 build.py --split` writes `PhotoSearch-split/` (not committed): `index.html` is just the
+page markup, loading `css/*.css` and `js/*.js` (one file per module, each with its own
+`"use strict"`) through plain `<link>` and `<script src>` tags, which work from `file://`.
+`test.html` in the same folder adds the test suite. Lazy modules are loaded up front there.
+Copy the whole folder to move it; unlike `PhotoSearch.html` it is not a single file.
+
 Regions marked `<!--TEST-ONLY-->…<!--/TEST-ONLY-->` (HTML) or `/*TEST-ONLY*/…/*/TEST-ONLY*/`
 (JS) appear only in the test build.
 

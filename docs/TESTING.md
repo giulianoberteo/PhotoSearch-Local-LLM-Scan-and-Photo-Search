@@ -28,6 +28,8 @@ library.
 
 Build with `python3 build.py`, then open `PhotoSearch.test.html#selftest`. (The shipped `PhotoSearch.html` does not contain the test suite.)
 
+The multi-file build has its own: `PhotoSearch-split/test.html#selftest`.
+
 Open `PhotoSearch.test.html#selftest` and the suite runs automatically, or press **Run
 self-test** in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it uses
 mock responses and an

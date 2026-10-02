@@ -111,6 +111,10 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
   `00-core` (3). The stylesheet moved out of `src/shell.html` into `src/css/*.css`.
 - `python3 build.py --min` writes an optional `PhotoSearch.min.html` (about 30% smaller; needs
   `rjsmin` and `rcssmin` in a virtualenv). The readable build stays the committed default.
+- `python3 build.py --split` writes a multi-file build, `PhotoSearch-split/` (not committed):
+  `index.html` holds only the page markup and loads `css/*.css` and `js/*.js` (39 files) with
+  plain tags, so nothing is inlined. `test.html` in the same folder includes the test suite.
+  The `#selftest` hook in `99-boot.js` now checks that `selfTest` exists.
 - `docs/ARCHITECTURE.md`, `docs/TESTING.md` and `CONTRIBUTING.md` describe the new layout.
 
 [↑ Back to Index](#index)
