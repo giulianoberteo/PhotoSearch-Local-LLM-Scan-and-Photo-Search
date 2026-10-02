@@ -352,6 +352,10 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   height .3s cubic-bezier(.2,.8,.2,1),rotate .3s cubic-bezier(.2,.8,.2,1),opacity .2s}
 #vwImg.still{transition:none}
 .exclTree{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 8px;margin-top:8px;background:var(--panel2)}
+.exclTree{display:grid;grid-template-columns:1fr 1fr;column-gap:18px;align-items:start;align-content:start}
+@media(max-width:640px){.exclTree{grid-template-columns:1fr}}
+.exclTree>div{min-width:0}
+.exclTree>.hint{grid-column:1/-1}
 .exclRow{display:flex;align-items:center;gap:6px;padding:2px 0;font-size:13px}
 .exclRow .tw{width:18px;border:0;background:none;color:var(--dim);cursor:pointer;padding:0;font-size:12px}
 .exclRow .tw:disabled{visibility:hidden}
@@ -813,7 +817,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.13";
+const APP_VERSION = "0.6.14";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
