@@ -28,11 +28,174 @@ user labelling. Owners are roles to assign.
 
 | Milestone | Owner | Estimate | Dependency | Exit gate |
 |---|---|---|---|---|
+| **MU: the Photos-style interface** | **Product/frontend engineer** | **9.5–11.5 days** | **PR #1 merged** | **Visual parity with the fork, no contrast or keyboard regressions** |
 | M0: recoverable library | Storage engineer | 5–8 days | Delivered recovery changes | Crash matrix and independent-device restore pass |
 | M1: trustworthy people | ML/application engineer | 8–12 days | M0, labelled pilot | Held-out recognition targets; corrections survive migration |
 | M2: search intent and quality | Search engineer | 6–10 days | Stable person IDs, query benchmark | Retrieval and interpretation targets met |
 | M3: everyday experience | Product/frontend engineer | 5–8 days | M0; overlap M1/M2 | Five-person usability study passes core tasks |
 | M4: scale and coverage | Application engineer | 8–15 days | M0–M3 | 100k benchmark, media and offline-restart gates |
+
+## MU — the Photos-style interface
+
+**This is the first milestone.** It is ordered ahead of M0 on the owner's instruction.
+Stated once and then accepted: M0 carries data-integrity work rated P0, and running a
+visual programme first means those defects stay open for longer. The mitigation is that
+every MU step below is presentation-only except where it says otherwise, so none of them
+makes the P0s worse.
+
+The design to adopt is in the fork at `giulianoberteo/aiPhotos`, which became PR #1. Phase
+costs come from a file-level review of that branch; the reasoning is in
+`scratchpad/review/01-ui.md`.
+
+### What makes their interface theirs
+
+Five ideas carry the look. Adopting the first two gets most of the visual change:
+
+1. **A context-switching canvas.** `body:has(#tab-library:not([hidden])){--bg:var(--lib)}`
+   with `main{max-width:none}`, so photo screens go full-bleed while settings and scan stay
+   as cards.
+2. **Borders out, shadow and glass in.** `backdrop-filter:saturate(180%) blur(22px)`, pill
+   buttons, radius 10 to 16px, circular 72px face tiles, accent-tinted secondary buttons.
+3. **`--hdr:52px` as a layout contract.** A fixed-height glass header with a centred
+   segmented tab rail. `.tlbar` and the timeline day headings both position against it, so
+   the token comes with the header.
+4. **Search as chip tokens in the toolbar**, not on a tab, with the person's cropped face as
+   the suggestion icon, and results rendered into the Library grid so Select, rotate, remove
+   and the viewer work on them unchanged.
+5. **Arithmetic virtualisation.** The grid computes its own window with 700px of over-scan
+   in one `requestAnimationFrame`, rather than using an IntersectionObserver.
+
+### MU-01: tokens and re-skin (1.5–2 days)
+
+Port the custom properties, the glass and shadow treatment, the pill buttons, the radius
+scale and the heading typography. Re-skin the existing Chat, Timeline, People, Scan and
+Settings screens against the new tokens. No behaviour changes.
+
+Fix two measured regressions rather than inheriting them. Their `.btn` label contrast is
+4.02:1 in light and **3.65:1 in dark**, against 4.55 and 6.12 in the current build, and
+their search glyph is 2.92:1 with `#8e8e93` hard-coded inside a data URI, so it ignores the
+theme. Keep the current palette's contrast and take their shapes.
+
+Acceptance: every existing screen renders with the new tokens; no text or control falls
+below 4.5:1 in either theme; the self-test's hidden-element invariant still passes.
+
+### MU-02: header, tab rail and hash routing (0.5 days)
+
+Adopt the 52px glass header, the centred segmented rail, and per-tab links
+(`#library`, `#chat`, `#timeline`, `#people`, `#scan`, `#settings`). Keep `#selftest`
+working, and fix a defect in their version while porting: clicking a tab discards a
+`#selftest&heic=…` hash, which breaks the documented decode fixture.
+
+Acceptance: every tab is linkable and reloads to the same place; `#selftest` and its
+fixture parameters survive navigation.
+
+### MU-03: the Library grid and viewer (4–5 days)
+
+Take `83-library.js` and its markup: the flat gallery, Select mode, rotate, remove, the
+full-window viewer with slider, wheel, pinch, drag and double-click zoom, and opening
+RAW, HEIC and TIFF at full size.
+
+Three things must be fixed on the way in, all verified in the merged branch:
+
+- **The viewer's keydown handler has no input guard.** Its sibling at `83-library.js:430`
+  guards with `e.target.closest("input,textarea,select")`; the viewer's at line 729 does
+  not, and line 738 maps Backspace to `vwRemove()`. The viewer contains its own
+  `<input type="range" id="vwZr">`, and `openViewer` neither hides the header nor traps
+  focus. So arrow keys on the zoom slider navigate photos instead of zooming, and Backspace
+  there removes the photo from the library. Copy the guard from line 430.
+- **No focus trap and no `aria-modal`** on a `role="dialog"`.
+- **`.gheart` is tab-focusable at `opacity:0` with no `:focus-visible`**, so keyboard users
+  reach an invisible control.
+
+The `hidden`, `rotation` and `favourite` fields this depends on cross six modules
+(`50-validate` reserved fields, `60-derived`, `65-search`, `82-timeline`, `86-peopleui`,
+`70-runner` rescan preservation). Land them together or removed photos reappear on some
+surfaces. Their `galPersist` also has to respect the `libraryMaintenance` interlock, which
+has nine call sites here.
+
+Acceptance: a removed photo is absent from the grid, search, timeline, events and stats;
+rotation survives a rescan; no keystroke in a form control mutates the library.
+
+### MU-04: toolbar search with chips (2.5–3 days)
+
+Take `88-search.js`: grouped local suggestions, chip tokens, results in the Library grid.
+
+**This is a product fork, not a merge.** Two search designs now coexist in the build, and
+both ship their own self-tests:
+
+| | `88-search.js` (theirs) | `88-searchui.js` (ours) |
+|---|---|---|
+| Entry point | header field, chips | Search tab, explicit controls |
+| Results | Library grid, paged | own list, paged |
+| People | chips resolved to photo sets | required-person filter, exclusions |
+
+Decide one of: keep the header field and retire the Search tab; keep both with the tab as
+the advanced surface; or merge the tab's filters into the chip grammar. Until that is
+decided, rename one module out of slot 88, which currently holds two files.
+
+Two defects to fix while porting: `photo_sets` is unguarded, so a hallucinated tool
+argument throws a `TypeError` from `runTool`; and `args.max` removes the 60-result cap that
+protects the chat context. Their `month` filter also slices the UTC month while the local
+`r.when.month` sits unused.
+
+Acceptance: a person chip returns exactly the photos the Search tab returns for the same
+person; no tool argument can throw; the chat cap still holds for chat.
+
+### Out of scope for MU
+
+Nothing in MU changes the index format, the face pipeline or recovery. If a step appears to
+need that, it belongs in M0 or M1 instead.
+
+[↑ Back to Index](#index)
+
+---
+
+## MN — merging the non-UI changes from PR #1
+
+Reviewed file by file against the merge base; the evidence is in
+`scratchpad/review/03-nonui.md`. The reviewer ported their RAW reader to Node and ran it on
+three real 85MB Sony ARW files rather than reasoning about it.
+
+| Change | Verdict |
+|---|---|
+| `50-validate.js` reserving `hidden`, `hidden_at`, `rotation`, `favourite` | take as is |
+| `60-derived.js` and `65-search.js` excluding hidden photos | take as is |
+| `70-runner.js` preserving user flags across a rescan | take as is |
+| `00-core.js` `ERR_HELP` and `humanError` | take as is |
+| `30-worker.js` RAW previews | take with changes, see below |
+| `90-selftest.js` calling `saveSettings()` in `finally` | **leave** |
+| `00-core.js` mock-role sanitiser | leave, dead code |
+| `65-search.js` `photo_sets` and `args.max` | take with changes, see MU-04 |
+
+**RAW previews: a real capability, with one serious flaw.** The byte-scan fallback runs
+only when the tag walk found nothing usable. For a TIFF-container RAW whose IFD0 holds just
+a small thumbnail, the walk "succeeds" with roughly 160 by 120 pixels, so the vision model
+captions a thumbnail and the stored `width` and `height` silently become the preview's. On
+the evidence of the file layout that describes **Nikon NEF, the format the commit is named
+after**, because its large preview lives in MakerNote and is never reached. Fix: run the
+byte scan unconditionally, union it with the tagged spans, and trim each span at the next
+`FF D9`, which also avoids copying an 85MB Blob per photo.
+
+**Their self-test must not persist settings.** The suite mutates `S.baseUrl`,
+`S.structuredMode` and `S.indexChosen` in blocks restored outside a `finally`, so a throw
+now writes `structuredMode:"none"` or a localhost base URL into saved settings. That is the
+bug class it set out to fix. Keep the `localStorage` snapshot already used here.
+
+**One test gap to close.** Renaming the fixture `raw.CR2` to `one.CR2` means no RAW file
+reaches `plan.new` or `runScan`, so the headline behaviour is untested end to end, and the
+deleted `plan.counts.raw` assertion was not replaced, leaving `counts.raw` permanently 0,
+which the plan summary reads. Add a `raw=` fixture hook beside the documented `heic=` one
+and assert `decoder === "raw-preview"` with a long edge of at least 640.
+
+**Unverified, and why.** Only ARW samples exist on this machine, so NEF, CR2, CR3, DNG, ORF,
+RW2 and RAF previews are unconfirmed; whether `createImageBitmap` tolerates tens of
+megabytes of sensor data after the end-of-image marker is unconfirmed, and it is the only
+path for CR3 and RAF; and orientation was verified as arithmetic, not as pixels. The `raw=`
+hook above settles all three.
+
+[↑ Back to Index](#index)
+
+---
 
 ## M0 — recoverable library first
 
