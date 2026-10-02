@@ -12,6 +12,7 @@ server, allowing the page to talk to it, the first run, and what to do when some
   - [Memory](#memory)
 - [Ollama](#ollama)
 - [The browser](#the-browser)
+  - [Serving it to other machines](#serving-it-to-other-machines)
 - [First run](#first-run)
 - [What gets written](#what-gets-written)
 - [Troubleshooting](#troubleshooting)
@@ -124,6 +125,27 @@ a time, like most local servers.
 Safari do not implement. The app detects this on load and says so.
 
 Open `PhotoSearch.html` by double-clicking it. No web server is needed.
+
+### Serving it to other machines
+
+Chrome and Edge offer the File System Access API only on a *secure context*: `https://`,
+`http://localhost`, or a `file://` page. Open the page from another machine as
+`http://192.168.x.x:8000/…` and the browser hides the folder picker, so the app reports
+that it cannot run even though the browser is supported. The app now says so in that case.
+
+- **Quick, one machine:** forward a port so the page is on `localhost`:
+  `ssh -N -L 8000:localhost:8000 user@server`, then open `http://localhost:8000/PhotoSearch.html`.
+- **Properly:** put HTTPS in front of the server with a certificate the browsers trust.
+  Tailscale Serve (`tailscale serve --bg 8000`) gives a real certificate with no client setup.
+  Caddy (`caddy reverse-proxy --from photos.home.arpa --to localhost:8000`) works on a LAN but
+  each client must trust its root certificate once. Bind the file server to `127.0.0.1` and
+  expose only the HTTPS front, and run it as a service so it survives a reboot.
+- **LM Studio:** an HTTPS page cannot call a plain `http://` server on another host (mixed
+  content). `http://localhost:1234` is allowed; for a remote one, put it behind the same HTTPS
+  proxy and enable CORS.
+- **Folders:** the picker browses the disk of the machine running the browser, so the photos
+  and `.photoindex` must be mounted there (for example over SMB). Let only one machine write
+  to the index at a time.
 
 [↑ Back to Index](#index)
 

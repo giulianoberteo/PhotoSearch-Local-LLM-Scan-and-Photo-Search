@@ -831,7 +831,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.19";
+const APP_VERSION = "0.6.20";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -1060,9 +1060,20 @@ function checkBrowser(){
   if (!window.OffscreenCanvas) miss.push("OffscreenCanvas");
   if (!miss.length) return true;
   const w = $("#browserWarn"); w.hidden = false; w.innerHTML = "";
-  w.append(el("b", null, "This browser is not supported. "));
-  w.append(document.createTextNode(
-    "PhotoSearch needs desktop Chrome or Edge. Missing: " + miss.join(", ") + "."));
+  /* Chrome and Edge hide the File System Access API on an insecure page, so a
+     supported browser opened over plain http:// from another machine looks
+     unsupported. Say what to change instead of blaming the browser. */
+  if (!window.isSecureContext && miss.includes("File System Access API")){
+    w.append(el("b", null, "This page is not on a secure address. "));
+    w.append(document.createTextNode(
+      "Chrome and Edge only allow choosing folders on https:// or localhost, and this page was "
+      + "opened from " + location.origin + ". Open it over HTTPS, or from localhost (for example "
+      + "through an SSH tunnel). See docs/SETUP.md, \u201CServing it to other machines\u201D."));
+  } else {
+    w.append(el("b", null, "This browser is not supported. "));
+    w.append(document.createTextNode(
+      "PhotoSearch needs desktop Chrome or Edge. Missing: " + miss.join(", ") + "."));
+  }
   ["btnPick","btnWriteTest","btnReconnect"].forEach(id => { const n = $("#" + id); if (n) n.disabled = true; });
   return false;
 }

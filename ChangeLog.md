@@ -15,8 +15,10 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.6.19 (2026-10-02)](#0619-2026-10-02)
+- [0.6.20 (2026-10-02)](#0620-2026-10-02)
   - [Changed](#changed)
+- [0.6.19 (2026-10-02)](#0619-2026-10-02)
+  - [Changed](#changed-1)
 - [0.6.18 (2026-10-02)](#0618-2026-10-02)
   - [Added](#added)
 - [0.6.17 (2026-10-02)](#0617-2026-10-02)
@@ -26,17 +28,17 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 - [0.6.15 (2026-10-02)](#0615-2026-10-02)
   - [Fixed](#fixed-1)
 - [0.6.14 (2026-10-02)](#0614-2026-10-02)
-  - [Changed](#changed-1)
-- [0.6.13 (2026-10-02)](#0613-2026-10-02)
   - [Changed](#changed-2)
+- [0.6.13 (2026-10-02)](#0613-2026-10-02)
+  - [Changed](#changed-3)
 - [0.6.12 (2026-10-02)](#0612-2026-10-02)
   - [Added](#added-2)
 - [0.6.11 (2026-10-02)](#0611-2026-10-02)
   - [Added](#added-3)
 - [0.6.10 (2026-10-02)](#0610-2026-10-02)
-  - [Changed](#changed-3)
-- [0.6.9 (2026-10-02)](#069-2026-10-02)
   - [Changed](#changed-4)
+- [0.6.9 (2026-10-02)](#069-2026-10-02)
+  - [Changed](#changed-5)
 - [0.6.8 (2026-10-02)](#068-2026-10-02)
   - [Added](#added-4)
 - [0.6.7 (2026-10-02)](#067-2026-10-02)
@@ -49,44 +51,61 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
   - [Added](#added-6)
 - [0.6.3 (2026-10-01)](#063-2026-10-01)
   - [Added](#added-7)
-  - [Changed](#changed-5)
+  - [Changed](#changed-6)
 - [0.6.2 (2026-10-01)](#062-2026-10-01)
   - [Added](#added-8)
-  - [Changed](#changed-6)
+  - [Changed](#changed-7)
 - [0.6.1 (2026-10-01)](#061-2026-10-01)
   - [Added](#added-9)
-  - [Changed](#changed-7)
+  - [Changed](#changed-8)
 - [0.6.0 (2026-10-01)](#060-2026-10-01)
   - [Added](#added-10)
-  - [Changed](#changed-8)
-- [0.5.4 (2026-10-01)](#054-2026-10-01)
   - [Changed](#changed-9)
+- [0.5.4 (2026-10-01)](#054-2026-10-01)
+  - [Changed](#changed-10)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed-4)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
   - [Added](#added-11)
-  - [Changed](#changed-10)
-- [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-11)
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
+  - [Changed](#changed-12)
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-12)
-  - [Changed](#changed-12)
+  - [Changed](#changed-13)
   - [Fixed](#fixed-5)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-13)
-  - [Changed](#changed-13)
+  - [Changed](#changed-14)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-14)
-  - [Changed](#changed-14)
+  - [Changed](#changed-15)
   - [Fixed](#fixed-6)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
   - [Added](#added-15)
-  - [Changed](#changed-15)
+  - [Changed](#changed-16)
   - [Fixed](#fixed-7)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
   - [Added](#added-16)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.20 (2026-10-02)
+
+**Summary:** opening the page over plain http:// no longer blames the browser.
+
+### Changed
+
+- When the folder picker is missing because the page is not on a secure address (plain
+  `http://` from another machine), the warning now says to open it over HTTPS or from
+  localhost, and names the address it was opened from, instead of "This browser is not
+  supported". A genuinely unsupported browser still gets the old message.
+- SETUP.md has a new section, "Serving it to other machines": the SSH tunnel for one machine,
+  HTTPS with Tailscale Serve or Caddy for a proper setup, and the LM Studio and folder caveats.
+  The README requirements mention the secure-address rule.
+
+[↑ Back to Index](#index)
+
 
 ## 0.6.19 (2026-10-02)
 
