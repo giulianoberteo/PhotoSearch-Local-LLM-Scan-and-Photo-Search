@@ -1,0 +1,23 @@
+/* Self-test report */
+.stReport{margin-top:14px}
+.stHead{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:14px}
+.stHead.good{background:color-mix(in srgb,var(--ok) 13%,transparent)}
+.stHead.bad{background:color-mix(in srgb,var(--err) 12%,transparent)}
+.stIcon{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:700;color:#fff;flex:0 0 34px}
+.stHead.good .stIcon{background:var(--ok)} .stHead.bad .stIcon{background:var(--err)}
+.stVerdict{font-size:17px;font-weight:650;letter-spacing:-.01em}
+.stSub{font-size:12px;color:var(--dim);margin-top:2px;word-break:break-word}
+.stCard{margin-top:10px;padding:12px 16px;border-radius:14px;background:var(--panel2)}
+.stCard p{margin:4px 0}
+.stCard ol{margin:6px 0 4px;padding-left:22px}
+.stCard li{margin:5px 0}
+.stH{font-size:11px;font-weight:650;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);margin:8px 0 2px}
+.stH:first-child{margin-top:0}
+.stMuted{color:var(--dim);font-size:12.5px}
+.stFail{padding:8px 0;border-bottom:1px solid var(--line)}
+.stFail:last-child{border-bottom:0}
+.stName{font-weight:600}
+.stDetail{font-family:var(--mono);font-size:12px;color:var(--dim);word-break:break-all;margin-top:2px}
+details.stCard summary,.stCard details summary{cursor:pointer;color:var(--accent);font-weight:600}
+.stCard pre{max-height:320px}
+

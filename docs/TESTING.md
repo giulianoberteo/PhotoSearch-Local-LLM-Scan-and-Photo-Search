@@ -26,7 +26,11 @@ library.
 
 ## The self-test
 
-Open `PhotoSearch.html#selftest` and the suite runs automatically, or press **Run
+Build with `python3 build.py`, then open `PhotoSearch.test.html#selftest`. (The shipped `PhotoSearch.html` does not contain the test suite.)
+
+The multi-file build has its own: `PhotoSearch-split/test.html#selftest`.
+
+Open `PhotoSearch.test.html#selftest` and the suite runs automatically, or press **Run
 self-test** in *Settings → Diagnostics*. It takes about 60 seconds and needs no model: it uses
 mock responses and an
 [OPFS](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
@@ -97,7 +101,7 @@ claimed as validated. See CONSUMER-REVIEW.md and ROADMAP.md for the remaining ga
 A real HEIC decode is skipped unless you supply a sample:
 
 ```
-PhotoSearch.html#selftest&heic=file:///path/to/sample.heic
+PhotoSearch.test.html#selftest&heic=file:///path/to/sample.heic
 ```
 
 [↑ Back to Index](#index)
@@ -120,12 +124,12 @@ Pick one:
    ```bash
    open -a "Google Chrome" --args --allow-file-access-from-files
    ```
-   and open `PhotoSearch.html#selftest`.
+   and open `PhotoSearch.test.html#selftest`.
 2. **Serve the file.** In the folder containing `PhotoSearch.html`:
    ```bash
    python3 -m http.server 8000
    ```
-   and open `http://localhost:8000/PhotoSearch.html#selftest`.
+   and open `http://localhost:8000/PhotoSearch.test.html#selftest`.
 
 ### Reading the report
 
@@ -151,7 +155,7 @@ rm -rf /tmp/chrome-selftest
   --allow-file-access-from-files about:blank &
 
 node tools/selftest-runner.mjs \
-  "file://$PWD/PhotoSearch.html#selftest" "window.__selftest" 300000
+  "file://$PWD/PhotoSearch.test.html#selftest" "window.__selftest" 300000
 ```
 
 `--allow-file-access-from-files` is required. Without it OPFS is unavailable from `file://`

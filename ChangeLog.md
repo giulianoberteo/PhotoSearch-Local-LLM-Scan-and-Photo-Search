@@ -15,14 +15,16 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
-- [0.6.22 (2026-10-02)](#0622-2026-10-02)
+- [0.6.23 (2026-10-02)](#0623-2026-10-02)
   - [Changed](#changed)
+- [0.6.22 (2026-10-02)](#0622-2026-10-02)
+  - [Changed](#changed-1)
 - [0.6.21 (2026-10-02)](#0621-2026-10-02)
   - [Fixed](#fixed)
 - [0.6.20 (2026-10-02)](#0620-2026-10-02)
-  - [Changed](#changed-1)
-- [0.6.19 (2026-10-02)](#0619-2026-10-02)
   - [Changed](#changed-2)
+- [0.6.19 (2026-10-02)](#0619-2026-10-02)
+  - [Changed](#changed-3)
 - [0.6.18 (2026-10-02)](#0618-2026-10-02)
   - [Added](#added)
 - [0.6.17 (2026-10-02)](#0617-2026-10-02)
@@ -32,17 +34,17 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 - [0.6.15 (2026-10-02)](#0615-2026-10-02)
   - [Fixed](#fixed-2)
 - [0.6.14 (2026-10-02)](#0614-2026-10-02)
-  - [Changed](#changed-3)
-- [0.6.13 (2026-10-02)](#0613-2026-10-02)
   - [Changed](#changed-4)
+- [0.6.13 (2026-10-02)](#0613-2026-10-02)
+  - [Changed](#changed-5)
 - [0.6.12 (2026-10-02)](#0612-2026-10-02)
   - [Added](#added-2)
 - [0.6.11 (2026-10-02)](#0611-2026-10-02)
   - [Added](#added-3)
 - [0.6.10 (2026-10-02)](#0610-2026-10-02)
-  - [Changed](#changed-5)
-- [0.6.9 (2026-10-02)](#069-2026-10-02)
   - [Changed](#changed-6)
+- [0.6.9 (2026-10-02)](#069-2026-10-02)
+  - [Changed](#changed-7)
 - [0.6.8 (2026-10-02)](#068-2026-10-02)
   - [Added](#added-4)
 - [0.6.7 (2026-10-02)](#067-2026-10-02)
@@ -55,44 +57,68 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
   - [Added](#added-6)
 - [0.6.3 (2026-10-01)](#063-2026-10-01)
   - [Added](#added-7)
-  - [Changed](#changed-7)
+  - [Changed](#changed-8)
 - [0.6.2 (2026-10-01)](#062-2026-10-01)
   - [Added](#added-8)
-  - [Changed](#changed-8)
+  - [Changed](#changed-9)
 - [0.6.1 (2026-10-01)](#061-2026-10-01)
   - [Added](#added-9)
-  - [Changed](#changed-9)
+  - [Changed](#changed-10)
 - [0.6.0 (2026-10-01)](#060-2026-10-01)
   - [Added](#added-10)
-  - [Changed](#changed-10)
-- [0.5.4 (2026-10-01)](#054-2026-10-01)
   - [Changed](#changed-11)
+- [0.5.4 (2026-10-01)](#054-2026-10-01)
+  - [Changed](#changed-12)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed-5)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
   - [Added](#added-11)
-  - [Changed](#changed-12)
-- [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-13)
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
+  - [Changed](#changed-14)
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-12)
-  - [Changed](#changed-14)
+  - [Changed](#changed-15)
   - [Fixed](#fixed-6)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-13)
-  - [Changed](#changed-15)
+  - [Changed](#changed-16)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-14)
-  - [Changed](#changed-16)
+  - [Changed](#changed-17)
   - [Fixed](#fixed-7)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
   - [Added](#added-15)
-  - [Changed](#changed-17)
+  - [Changed](#changed-18)
   - [Fixed](#fixed-8)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
   - [Added](#added-16)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.23 (2026-10-02)
+
+**Summary:** a leaner shipped file and a source tree split into smaller modules; no behaviour change.
+
+### Changed
+
+- `PhotoSearch.html` no longer contains the in-browser test suite or the Diagnostics card
+  (about 180 KB, 27% of the file). `python3 build.py` now also writes `PhotoSearch.test.html`
+  (not committed), which includes them; open that one with `#selftest`.
+- The thumbnail rebuild and face backfill code is embedded as inert text and runs on first use
+  (`loadModule()` in `00-core.js`; `LAZY` in `build.py`).
+- The largest modules are split by area: `80-ui` (5 files), `84-faces` (4), `70-runner` (3),
+  `00-core` (3). The stylesheet moved out of `src/shell.html` into `src/css/*.css`.
+- `python3 build.py --min` writes an optional `PhotoSearch.min.html` (about 30% smaller; needs
+  `rjsmin` and `rcssmin` in a virtualenv). The readable build stays the committed default.
+- `python3 build.py --split` writes a multi-file build, `PhotoSearch-split/` (not committed):
+  `index.html` holds only the page markup and loads `css/*.css` and `js/*.js` (39 files) with
+  plain tags, so nothing is inlined. `test.html` in the same folder includes the test suite.
+  The `#selftest` hook in `99-boot.js` now checks that `selfTest` exists.
+- `docs/ARCHITECTURE.md`, `docs/TESTING.md` and `CONTRIBUTING.md` describe the new layout.
+
+[↑ Back to Index](#index)
+
 
 ## 0.6.22 (2026-10-02)
 
