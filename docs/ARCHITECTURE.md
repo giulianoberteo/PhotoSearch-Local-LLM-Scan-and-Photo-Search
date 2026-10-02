@@ -177,30 +177,43 @@ mistaken for a tab.
 
 ## Source layout
 
-`PhotoSearch.html` is **generated**. The source lives in `src/js/` and `build.py`
-concatenates it, in a fixed order, into `src/shell.html`. Later files may use names defined
-earlier, never the reverse.
+`PhotoSearch.html` is **generated**. The source lives in `src/js/`, `src/css/` and
+`src/shell.html`, and `build.py` concatenates it, in a fixed order, into the page. Later files
+may use names defined earlier, never the reverse.
+
+`build.py` writes two files:
+
+- `PhotoSearch.html`: the shipped app, without the test suite (`90-`, `91-`, `95-`), the
+  Diagnostics card or the `#selftest` hook.
+- `PhotoSearch.test.html` (not committed): the same plus the test suite.
+
+Regions marked `<!--TEST-ONLY-->…<!--/TEST-ONLY-->` (HTML) or `/*TEST-ONLY*/…/*/TEST-ONLY*/`
+(JS) appear only in the test build.
+
+**Lazy modules.** Files listed in `LAZY` in `build.py` (currently `70-runner-thumbs.js` and
+`70-runner-faces.js`) are embedded as inert `<script type="text/plain" data-lazy>` text and run
+on first use by `loadModule(name)` in `00-core.js`. A lazy module must have no top-level
+statements the rest of the app depends on at start-up, and every caller must
+`loadModule(name)` first. The test build includes them eagerly.
 
 | file | responsibility |
 |---|---|
-| `00-core.js` | helpers, settings, the model-server client, tab switching and tab links |
+| `00-core.js` · `00-core-ui.js` · `00-core-io.js` | helpers, state and settings; tabs, check rows, index operations; directory picker and model-server client |
 | `25-datetime.js` · `26-geo.js` · `35-exif.js` | dates and occasions, offline place names, EXIF and date confidence |
 | `30-worker.js` | the decode and resize worker |
 | `40-store.js` · `42-backup.js` | the `.photoindex/` reader and writer; backup and restore |
 | `45-plan.js` | folder walk, identity matching, the plan |
 | `50-validate.js` · `55-extract.js` | normalising model output; the vision call, OCR pass, embeddings |
 | `60-derived.js` · `65-search.js` | entities, events and the inverted index; ranking |
-| `70-runner.js` | the scan runner |
-| `80-ui.js` | Settings and Scan tabs |
+| `70-runner.js` · `70-runner-thumbs.js` · `70-runner-faces.js` | the scan runner; thumbnail rebuild and face backfill (lazy) |
+| `80-ui-connect.js` · `-exclude` · `-plan` · `-scan` · `-settings` | Settings and Scan tabs, split by area |
 | `85-chat.js` · `87-chatui.js` | the tool-calling agent; chat rendering and the lightbox |
 | `82-timeline.js` · `83-library.js` | the Timeline tab; the Library tab and its viewer |
-| `88-search.js` | the header search field: suggestions, chips, and results shown in the Library |
-| `84-faces.js` · `86-peopleui.js` | face detection, grouping, naming; the People tab |
-| `90-selftest.js` · `95-faultfs.js` | the in-browser test suite; the fault-injecting filesystem |
+| `88-search.js` · `88-searchui.js` | the header search field; the Search tab |
+| `84-faces-engine.js` · `-store` · `-group` · `-detect` · `86-peopleui.js` | face engine, storage, grouping, detection; the People tab |
+| `90-selftest.js` · `91-consumer-selftest.js` · `95-faultfs.js` | test build only: the in-browser test suite; the fault-injecting filesystem |
 | `99-boot.js` | error surfacing and start-up |
-
-`src/template.py` is the single source of truth for the extraction schema and prompt; the
-build generates the JavaScript constant from it. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+| `src/css/*.css` | the stylesheet, split by area, in cascade order |
 
 [↑ Back to Index](#index)
 

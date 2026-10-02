@@ -1,0 +1,44 @@
+/* Viewer: dimmed, blurred backdrop and a large rounded sheet with a black photo stage. */
+#lightbox{position:fixed;inset:0;background:rgba(0,0,0,.55);-webkit-backdrop-filter:blur(14px);
+  backdrop-filter:blur(14px);z-index:40;display:flex;align-items:center;justify-content:center;
+  padding:28px;animation:fade .18s ease}
+.lbBox{background:var(--panel);border-radius:20px;box-shadow:0 20px 70px rgba(0,0,0,.45);
+  max-width:1100px;width:100%;max-height:92vh;display:flex;flex-direction:column;overflow:hidden;
+  animation:rise .22s ease}
+.lbHead{display:flex;align-items:center;gap:10px;padding:12px 18px}
+.lbBody{display:flex;gap:20px;padding:0 18px 18px;overflow:auto;flex-wrap:wrap}
+#lbImg{max-width:100%;max-height:68vh;border-radius:12px;background:#000;
+  flex:1 1 360px;object-fit:contain}
+#lbMeta{flex:1 1 300px;min-width:0}
+@keyframes fade{from{opacity:0}}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.98)}}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important;transition:none !important}
+}
+
+footer{position:fixed;bottom:0;left:0;right:0;display:flex;gap:18px;align-items:center;
+  padding:7px 20px;background:var(--bar);-webkit-backdrop-filter:saturate(180%) blur(22px);
+  backdrop-filter:saturate(180%) blur(22px);border-top:1px solid var(--line);
+  font-size:12px;color:var(--dim);z-index:20;overflow-x:auto;white-space:nowrap}
+#toast{background:var(--bar) !important;-webkit-backdrop-filter:blur(22px);
+  backdrop-filter:blur(22px);border:0 !important;border-radius:99px !important;
+  padding:9px 20px !important}
+dialog.dlg{border:0;border-radius:16px;background:var(--panel);color:var(--text);
+  box-shadow:0 12px 48px rgba(0,0,0,.32);padding:24px 26px 20px;width:min(460px,92vw);
+  animation:rise .2s ease}
+dialog.dlg::backdrop{background:rgba(0,0,0,.4);-webkit-backdrop-filter:blur(6px);
+  backdrop-filter:blur(6px)}
+dialog.dlg h3{margin:0 0 10px;font-size:17px}
+dialog.dlg p{margin:0 0 10px;font-size:14px;line-height:1.45}
+dialog.dlg .dlgNote{color:var(--dim);font-size:13px}
+.dlgActs{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block;
+  margin-right:6px;vertical-align:middle;flex:0 0 auto}
+.dot.on{background:var(--ok)} .dot.off{background:var(--err)} .dot.busy{background:var(--warn)}
+.switch{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--text);
+  margin:0}
+.spacer{flex:1}
+.hint{font-size:12px;color:var(--dim);margin-top:6px}
+code{font-family:var(--mono);background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12.5px}
+
+

@@ -18,8 +18,9 @@ edges, and the edges are best found by people using it on libraries that are not
 `PhotoSearch.html` is **generated**. Edit `src/`, never the built file.
 
 ```bash
-python3 build.py            # writes PhotoSearch.html
+python3 build.py            # writes PhotoSearch.html (shipped) and PhotoSearch.test.html (with the self-test suite)
 python3 build.py --check    # verifies the committed file is current
+python3 build.py --min      # optional PhotoSearch.min.html (pip install rjsmin rcssmin in a venv)
 ```
 
 `build.py` concatenates `src/js/*.js` into `src/shell.html` in a fixed order (later files
@@ -41,7 +42,7 @@ download that file directly. For a map of which source file does what, see
 ## Test
 
 ```bash
-python3 build.py && open PhotoSearch.html#selftest
+python3 build.py && open PhotoSearch.test.html#selftest
 ```
 
 Or run it headlessly; see [docs/TESTING.md](docs/TESTING.md). Run it twice if you touched

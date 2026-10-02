@@ -273,6 +273,7 @@ $("#btnRefine").onclick = async () => {
     await st.note("Loading the models…");
     await loadHumanEngine(async m => { await st.note(m); });
     if (S.faces.embedder !== "faceres") await loadArcFace(async m => { await st.note(m); });
+    loadModule("maintenance");
     p = await planFaceRefine(async m => { await st.note(m); });
   } catch (e){ st.err(humanError(e)); return; }
 
@@ -439,6 +440,7 @@ $("#btnFaceScan").onclick = async () => {
     await loadHumanEngine(async m => { await st.note(m); });
     if (S.faces.embedder !== "faceres")
       await loadArcFace(async m => { await st.note(m); });
+    loadModule("maintenance");
     p = await planFaceScan(async m => { await st.note(m); });
   } catch (e){ st.err(humanError(e)); toast(humanError(e)); return; }
 

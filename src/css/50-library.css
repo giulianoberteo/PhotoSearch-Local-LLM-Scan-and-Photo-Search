@@ -1,0 +1,90 @@
+/* Library: one flat, virtualised grid of every photo. */
+body:has(#tab-library:not([hidden])){--bg:var(--lib)}
+body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;padding-right:6px}
+#galGrid{position:relative;margin-top:2px}
+.tlbar button.danger:not(:disabled){color:var(--err)}
+.tlbar button.danger:not(:disabled):hover{background:color-mix(in srgb,var(--err) 12%,transparent)}
+.tlbar button:disabled{opacity:.4;cursor:default}
+.gtile.sel img{transform:scale(.86);border-radius:8px}
+.gheart{position:absolute;left:5px;bottom:4px;border:0;background:none;color:#fff;font-size:20px;line-height:1;
+  padding:2px 4px;cursor:pointer;opacity:0;text-shadow:0 1px 4px rgba(0,0,0,.65);transition:opacity .15s,transform .1s}
+.gtile:hover .gheart{opacity:.9}
+.gheart.on{opacity:1}
+.gheart:hover{transform:scale(1.15)}
+#galGrid.selecting .gheart{display:none}
+.vwBtn.fav{font-size:18px}
+.vwBtn.fav.on{color:#ff3b30}
+#galGrid.selecting .gtile::after{content:"";position:absolute;top:7px;left:7px;width:20px;height:20px;
+  border-radius:50%;border:2px solid #fff;background:rgba(0,0,0,.18);box-shadow:0 0 3px rgba(0,0,0,.5)}
+#galGrid.selecting .gtile.sel::after{content:"\2713";background:var(--accent);border-color:var(--accent);
+  color:#fff;font-size:13px;font-weight:700;line-height:16px;text-align:center}
+.vwBtn.txt{width:auto;padding:0 14px;border-radius:99px;font-size:13px;font-weight:600;color:var(--err)}
+#undo{position:fixed;bottom:48px;left:50%;transform:translateX(-50%);z-index:60;display:flex;
+  align-items:center;gap:14px;padding:8px 10px 8px 18px;border-radius:99px;font-size:13px;
+  background:var(--panel);box-shadow:0 6px 28px rgba(0,0,0,.28);max-width:92vw}
+#undo button{border:0;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);
+  font:inherit;font-weight:600;padding:4px 14px;border-radius:99px;cursor:pointer}
+.gtile{position:absolute;margin:0;overflow:hidden;cursor:pointer;background:var(--panel2);
+  border-radius:2px}
+.gtile img{width:100%;height:100%;object-fit:cover;display:block;-webkit-user-drag:none;
+  transition:rotate .25s ease}
+.gtile:hover img{filter:brightness(1.07)}
+.gtile:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+
+/* Viewer: the photo grows out of its tile to fill the window, as in Photos. */
+#viewer{position:fixed;inset:0;z-index:50}
+.vwBack{position:absolute;inset:0;background:var(--lib);opacity:0;transition:opacity .28s ease}
+#viewer.on .vwBack{opacity:1}
+#vwImg{position:fixed;object-fit:cover;border-radius:2px;background:var(--panel2);
+  box-shadow:0 8px 40px rgba(0,0,0,.25);transition:left .3s cubic-bezier(.2,.8,.2,1),
+  top .3s cubic-bezier(.2,.8,.2,1),width .3s cubic-bezier(.2,.8,.2,1),
+  height .3s cubic-bezier(.2,.8,.2,1),rotate .3s cubic-bezier(.2,.8,.2,1),opacity .2s}
+#vwImg.still{transition:none}
+.exclTree{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 8px;margin-top:8px;background:var(--panel2)}
+.exclTree{display:grid;grid-template-columns:1fr 1fr;column-gap:18px;align-items:start;align-content:start}
+@media(max-width:640px){.exclTree{grid-template-columns:1fr}}
+.exclTree>div{min-width:0}
+.exclTree>.hint{grid-column:1/-1}
+.exclRow{display:flex;align-items:center;gap:6px;padding:2px 0;font-size:13px}
+.exclRow .tw{width:18px;border:0;background:none;color:var(--dim);cursor:pointer;padding:0;font-size:12px}
+.exclRow .tw:disabled{visibility:hidden}
+.exclRow.off label{color:var(--dim);text-decoration:line-through}
+.exclKids{margin-left:20px}
+.idxNow{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);font-size:13px}
+.idxNow b{font-weight:650}
+#vwImg.zoomed{cursor:grab;touch-action:none} #vwImg.drag{cursor:grabbing}
+.vwZoom{position:absolute;bottom:18px;left:50%;translate:-50% 0;z-index:2;display:flex;align-items:center;
+  gap:8px;padding:6px 12px;border-radius:99px;background:color-mix(in srgb,var(--panel) 85%,transparent);
+  border:1px solid var(--line);backdrop-filter:blur(12px);opacity:0;transition:opacity .25s}
+#viewer.on .vwZoom{opacity:1}
+.vwStatus{position:absolute;bottom:62px;left:50%;translate:-50% 0;z-index:2;max-width:min(560px,90%);padding:6px 12px;
+  border-radius:12px;font-size:12px;background:color-mix(in srgb,var(--panel) 85%,transparent);border:1px solid var(--line);
+  backdrop-filter:blur(12px)}
+#viewer.info .vwStatus{left:calc((100% - 320px)/2)}
+#viewer.info .vwZoom{left:calc((100% - 320px)/2)}
+.vwZoom button{border:0;background:none;color:var(--text);font:inherit;cursor:pointer;min-width:26px;height:26px;border-radius:50%}
+.vwZoom button:hover{background:color-mix(in srgb,var(--text) 14%,transparent)}
+.vwZoom #vwZv{min-width:48px;border-radius:99px;font-size:12px;font-weight:600}
+.vwZoom input{width:160px}
+.vwBar{position:absolute;top:0;left:0;right:0;height:52px;display:flex;align-items:center;
+  gap:12px;padding:0 14px;z-index:2;opacity:0;transition:opacity .25s}
+#viewer.on .vwBar,#viewer.on .vwNav{opacity:1}
+.vwTitle{min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.vwTitle b{font-size:13px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vwTitle span{font-size:11.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vwBtn,.vwNav{border:0;cursor:pointer;color:var(--text);font:inherit;
+  background:color-mix(in srgb,var(--text) 9%,transparent);transition:background .15s}
+.vwBtn:hover,.vwNav:hover{background:color-mix(in srgb,var(--text) 18%,transparent)}
+.vwBtn{width:34px;height:34px;border-radius:50%;font-size:16px;line-height:1}
+.vwNav{position:absolute;top:50%;margin-top:-22px;width:44px;height:44px;border-radius:50%;
+  font-size:30px;line-height:1;padding-bottom:4px;z-index:2;opacity:0;transition:opacity .25s}
+#vwPrev{left:14px} #vwNext{right:14px}
+#viewer.info #vwNext{right:334px}
+.vwNav:disabled{display:none}
+#vwInfo{position:absolute;top:52px;right:0;bottom:0;width:320px;overflow-y:auto;padding:6px 18px 24px;
+  background:var(--panel);border-left:1px solid var(--line);z-index:2;
+  transform:translateX(100%);transition:transform .3s cubic-bezier(.2,.8,.2,1)}
+#viewer.info #vwInfo{transform:none}
+#vwInfo .kv{grid-template-columns:96px 1fr}
+@keyframes vwIn{from{opacity:0}}
+#vwImg.swap{animation:vwIn .18s ease}
