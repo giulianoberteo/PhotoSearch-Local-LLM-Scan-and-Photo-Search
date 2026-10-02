@@ -342,6 +342,12 @@ async function runScan(files, mode, resuming){
       if (!f) return;
       try {
         const rec = await scanOne(f, RUN.abort.signal);
+        /* A rescan builds the record afresh; a photo the user removed from the
+           library must stay removed. */
+        const was = IDX.records.get(rec.id);
+        if (was && was.hidden){ rec.hidden = true; rec.hidden_at = was.hidden_at; }
+        if (was && was.favourite) rec.favourite = true;
+        if (was && was.rotation) rec.rotation = was.rotation;    // a view setting the user chose
         RUN.streak = 0;                       // a success breaks the failure streak
         RUN.times.push(rec.secs);
         if (rec.out_tokens) RUN.tokens.push(rec.out_tokens);

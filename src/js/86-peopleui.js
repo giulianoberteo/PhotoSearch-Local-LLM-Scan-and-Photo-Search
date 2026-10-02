@@ -122,7 +122,7 @@ function renderPeople(){
         rebuildDerived();                 // names are searchable text
         renderPeople();
         toast(inp.value ? "Named " + inp.value + "." : "Name cleared.");
-      } catch (e){ renderPeople(); toast(errText(e)); }
+      } catch (e){ renderPeople(); toast(humanError(e)); }
     };
     right.append(inp);
     const photoCount = new Set(g.face_ids.map(id => FACES.faces.get(id)?.photo_id).filter(Boolean)).size;
@@ -149,7 +149,7 @@ function renderPeople(){
           await mergeGroups(g.id, PUI.mergeFrom);
           PUI.mergeFrom = null; rebuildDerived(); renderPeople();
           toast("Merged.");
-        } catch (e){ toast(errText(e)); }
+        } catch (e){ toast(humanError(e)); }
       };
       acts.append(m);
     } else {
@@ -192,7 +192,7 @@ function renderPeople(){
           PUI.picked.clear(); rebuildDerived(); renderPeople();
           toast("Moved " + picked.length + " face"
             + (picked.length === 1 ? "" : "s") + " out.");
-        } catch (e){ toast(errText(e)); }
+        } catch (e){ toast(humanError(e)); }
       };
       sp.append(b);
       card.append(sp);
@@ -221,7 +221,7 @@ function showPersonPhotos(g, label){
     for (const input of $("#photoPeople").querySelectorAll("input")) input.checked = input.value === g.id;
     submitPhotoSearch(); return;
   }
-  const recs = [...ids].map(id => IDX.records.get(id)).filter(r => r && !r.deleted && r.status !== "error" && !r.probe)
+  const recs = [...ids].map(id => IDX.records.get(id)).filter(r => r && !r.deleted && !r.hidden && r.status !== "error" && !r.probe)
     .sort((a, b) => (b.date_taken || "").localeCompare(a.date_taken || ""));
   const host = $("#faceOut");
   host.textContent = "";
@@ -274,7 +274,7 @@ $("#btnRefine").onclick = async () => {
     await loadHumanEngine(async m => { await st.note(m); });
     if (S.faces.embedder !== "faceres") await loadArcFace(async m => { await st.note(m); });
     p = await planFaceRefine(async m => { await st.note(m); });
-  } catch (e){ st.err(errText(e)); return; }
+  } catch (e){ st.err(humanError(e)); return; }
 
   if (!FACES.faces.size){
     st.warn("There are no faces yet — press “Find faces” first. This pass improves "
@@ -314,7 +314,7 @@ $("#btnRefine").onclick = async () => {
     if (r.failed) bits.push(r.failed + " could not be read");
     if (r.stopped) bits.push("stopped early — press again to carry on");
     (r.failed || r.stopped ? st.warn : st.ok)(bits.join(", ") + ".");
-  } catch (e){ st.err(errText(e)); }
+  } catch (e){ st.err(humanError(e)); }
 };
 
 $("#btnReembed").onclick = async () => {
@@ -328,7 +328,7 @@ $("#btnReembed").onclick = async () => {
     (r.missing ? st.warn : st.ok)(r.measured + " faces re-measured with "
       + faceEngineId() + (r.missing ? ", " + r.missing + " had no stored crop" : "")
       + ". No photo was re-read.");
-  } catch (e){ st.err(errText(e)); }
+  } catch (e){ st.err(humanError(e)); }
 };
 
 $("#btnCompare").onclick = async () => {
@@ -368,7 +368,7 @@ $("#btnCompare").onclick = async () => {
     }
     $("#faceOut").append(box);
     st.ok("Done — see the table.");
-  } catch (e){ st.err(errText(e)); }
+  } catch (e){ st.err(humanError(e)); }
 };
 
 $("#btnFacesPause").onclick = () => {
@@ -440,7 +440,7 @@ $("#btnFaceScan").onclick = async () => {
     if (S.faces.embedder !== "faceres")
       await loadArcFace(async m => { await st.note(m); });
     p = await planFaceScan(async m => { await st.note(m); });
-  } catch (e){ st.err(errText(e)); toast(errText(e)); return; }
+  } catch (e){ st.err(humanError(e)); toast(humanError(e)); return; }
 
   if (!p.files.length){
     st.ok("All " + p.already.toLocaleString() + " of " + p.total.toLocaleString()
@@ -490,7 +490,7 @@ $("#btnFaceScan").onclick = async () => {
     if (r.failed) bits.push(r.failed + " could not be read");
     if (r.stopped) bits.push("stopped early — press Find faces again to carry on");
     (r.failed || r.stopped ? st.warn : st.ok)(bits.join(", ") + ".");
-  } catch (e){ st.err(errText(e)); toast(errText(e)); }
+  } catch (e){ st.err(humanError(e)); toast(humanError(e)); }
 };
 
 $("#btnRecluster").onclick = async () => {
@@ -505,7 +505,7 @@ $("#btnRecluster").onclick = async () => {
     renderPeople();
     st.ok(FACES.people.length + " named, " + FACES.clusters.length
       + " unnamed. Names you gave were kept.");
-  } catch (e){ st.err(errText(e)); }
+  } catch (e){ st.err(humanError(e)); }
 };
 
 $("#btnFaceWipe").onclick = async () => {
@@ -519,7 +519,7 @@ $("#btnFaceWipe").onclick = async () => {
     $("#faceNote").textContent = "All face data deleted.";
     renderPeople();
     toast("Face data deleted.");
-  } catch (e){ toast(errText(e)); }
+  } catch (e){ toast(humanError(e)); }
 };
 
 let peopleLoading = false;
@@ -545,6 +545,6 @@ async function onPeopleShown(){
     renderPeople();
   } catch (e){
     $("#peopleBox").textContent = "";
-    $("#peopleBox").append(Object.assign(el("div", "note"), { textContent: errText(e) }));
+    $("#peopleBox").append(Object.assign(el("div", "note"), { textContent: humanError(e) }));
   } finally { peopleLoading = false; }
 }

@@ -74,6 +74,8 @@ function candidateSet(f){
   const ents  = f.entities ? [].concat(f.entities).map(s => singular(String(s).toLowerCase())) : null;
   const occ   = f.occasion ? [].concat(f.occasion).map(s => String(s).toLowerCase()) : null;
   const who   = f.person ? [].concat(f.person).map(s => String(s).toLowerCase()) : null;
+  const month = f.month ? String(f.month).padStart(2, "0") : null;
+  const sets  = f.photo_sets && f.photo_sets.length ? f.photo_sets : null;   // every set must contain the photo
   if (who) for (const name of who){
     if (FACES.people.filter(p => personKey(p.name) === personKey(name)).length > 1)
       throw new Error("More than one person is named “" + name + "”. Choose a person in the People filter.");
@@ -83,9 +85,11 @@ function candidateSet(f){
     return [id, new Set((p?.face_ids || []).map(fid => FACES.faces.get(fid)?.photo_id).filter(Boolean))];
   }));
   for (const r of IDX.records.values()){
-    if (r.deleted || r.status === "error" || r.probe) continue;
+    if (r.deleted || r.hidden || r.status === "error" || r.probe) continue;
     if (from && (!r.date_taken || r.date_taken.slice(0,10) < from)) continue;
     if (to   && (!r.date_taken || r.date_taken.slice(0,10) > to)) continue;
+    if (month && !(r.date_taken && r.date_taken.slice(5, 7) === month)) continue;
+    if (sets && !sets.every(s => s.has(r.id))) continue;
     if (place && !(r.place || "").toLowerCase().includes(place)) continue;
     if (types && !types.includes(String(r.image_type || "").toLowerCase())) continue;
     if (occ && !((r.when && r.when.occasions) || []).some(o => occ.includes(o))) continue;
@@ -188,7 +192,7 @@ async function searchPhotos(args){
   if (IDX.dir) await ensureFaceNames();
   const parsed = peopleSearchArgs(args);
   args = parsed.args;
-  const limit = Math.min(60, Math.max(1, args.limit || 12));
+  const limit = Math.min(args.max || 60, Math.max(1, args.limit || 12));   // `max` lifts the chat cap for the Library's search results
   const offset = Math.max(0, Math.trunc(Number(args.offset) || 0));
   const page = results => ({ used, applied:parsed.applied, total:results.length,
     results:results.slice(offset, offset + limit) });
@@ -287,7 +291,7 @@ async function searchPhotos(args){
 function findSimilar(id, limit){
   const v = vectorOf(id);
   const allowed = new Set([...IDX.records.values()]
-    .filter(r => !r.deleted && r.status !== "error" && !r.probe && r.id !== id).map(r => r.id));
+    .filter(r => !r.deleted && !r.hidden && r.status !== "error" && !r.probe && r.id !== id).map(r => r.id));
   if (v){
     const m = cosineScores(v, allowed);
     return [...m.entries()].sort((a,b) => b[1]-a[1]).slice(0, limit)

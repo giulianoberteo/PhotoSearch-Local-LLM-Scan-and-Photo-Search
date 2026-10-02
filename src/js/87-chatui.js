@@ -61,6 +61,7 @@ function renderGrid(host, recs, title){
   for (const r of recs){
     const fig = el("figure");
     const im = el("img"); im.alt = r.caption || r.name || ""; im.loading = "lazy";
+    applyRotation(im, r);
     thumbUrl(r.id).then(u => { if (u) im.src = u; });
     fig.append(im);
     const cap = el("figcaption", null,
@@ -107,14 +108,8 @@ async function fileByPath(path){
   for (let i = 0; i < parts.length - 1; i++) dir = await dir.getDirectoryHandle(parts[i]);
   return (await dir.getFileHandle(parts[parts.length - 1])).getFile();
 }
-let lbUrl = null;
-async function openLightbox(r){
-  const lb = $("#lightbox");
-  lb.hidden = false;
-  const img = $("#lbImg");
-  img.removeAttribute("src");
-  $("#lbTitle").textContent = r.name || r.path;
-  const meta = $("#lbMeta"); meta.innerHTML = "";
+/* The key/value block describing one photo; shared by the lightbox and the Library viewer. */
+function metaList(r){
   const dl = el("dl","kv");
   const add = (k, v) => { if (v == null || v === "") return;
     dl.append(el("dt", null, k)); dl.append(el("dd", null, String(v))); };
@@ -135,8 +130,19 @@ async function openLightbox(r){
     ? r.people.count_bucket + (r.people.description ? " — " + r.people.description : "") : null);
   add("text in image", r.visible_text && r.visible_text.has_text ? r.visible_text.text : null);
   add("colours", (r.dominant_colors || []).join(", "));
+  add("rotation", r.rotation ? r.rotation + "° clockwise (view only; the file is unchanged)" : null);
   add("file", r.path + (r.width && r.height ? "  ·  " + r.width + "x" + r.height : ""));
-  meta.append(dl);
+  return dl;
+}
+let lbUrl = null;
+async function openLightbox(r){
+  const lb = $("#lightbox");
+  lb.hidden = false;
+  const img = $("#lbImg");
+  img.removeAttribute("src");
+  $("#lbTitle").textContent = r.name || r.path;
+  const meta = $("#lbMeta"); meta.innerHTML = "";
+  meta.append(metaList(r));
 
   const more = $("#lbMore");
   more.onclick = () => {
@@ -154,6 +160,11 @@ async function openLightbox(r){
     const f = await fileByPath(r.path);
     if (f && /\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(r.path)){
       lbUrl = URL.createObjectURL(f); img.src = lbUrl;
+    } else if (f && isScannable(r.path)){
+      const u = await thumbUrl(r.id);
+      if (u) img.src = u;
+      const big = await processImage(f, classifyFile(r.path), { bigPx:6000 });
+      lbUrl = URL.createObjectURL(big.big); img.src = lbUrl;
     } else {
       // HEIC/TIFF cannot be shown directly by the browser: use the stored thumbnail.
       const u = await thumbUrl(r.id);
@@ -229,7 +240,7 @@ async function sendChat(){
         await ensureIndex(null, { write:false });
         await loadRecords(); await loadVectors(); rebuildDerived();
       }
-    } catch (e){ renderMarkdown("**Could not open the index:** " + errText(e), u0.body); return; }
+    } catch (e){ renderMarkdown("**Could not open the index:** " + humanError(e), u0.body); return; }
     u0.box.remove();
     if (!IDX.records.size){
       const u1 = bubble("assistant");
@@ -267,7 +278,7 @@ async function sendChat(){
     if (e.name === "AbortError") renderMarkdown(acc + "\n\n_(stopped)_", textHost);
     /* Keep whatever streamed: discarding a partial answer on a late failure
        loses the only useful part. errText because DOMException.message is empty. */
-    else renderMarkdown((acc ? deIdify(acc) + "\n\n" : "") + "**Error:** " + errText(e), textHost);
+    else renderMarkdown((acc ? deIdify(acc) + "\n\n" : "") + "**Error:** " + humanError(e), textHost);
   } finally {
     CHAT.busy = false;
     $("#chatSend").disabled = false; $("#chatStop").hidden = true;
@@ -293,5 +304,5 @@ $("#chatSave").onclick = async () => {
     await writeFile(await dir.getFileHandle(name, { create:true }),
       JSON.stringify({ saved_at:new Date().toISOString(), turns:CHAT.turns }, null, 1));
     toast("Saved to .photoindex/chats/" + name);
-  } catch (e){ toast("Could not save: " + errText(e)); }
+  } catch (e){ toast("Could not save: " + humanError(e)); }
 };

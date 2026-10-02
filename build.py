@@ -33,10 +33,13 @@ ORDER = [
     "80-ui.js",       # settings and scan UI
     "85-chat.js",     # tool-calling agent
     "82-timeline.js", # browse by day
+    "83-library.js",  # flat gallery of every photo + full-window viewer
     "84-faces.js",    # face detection, grouping, naming
     "86-peopleui.js", # the People tab
     "87-chatui.js",   # chat rendering, lightbox
+    "88-search.js",   # the header search field: suggestions, chips, results in the Library
     "88-searchui.js", # direct search, people/date/place filters and pagination
+    "89-restore.js",  # keeps the chat and Library view across a page refresh
     "90-selftest.js", # in-browser test suite
     "91-consumer-selftest.js", # people corrections, direct retrieval, face recovery
     "95-faultfs.js",  # test-only: slow/hanging/failing filesystem proxy
@@ -84,7 +87,8 @@ def check_syntax(html: str) -> None:
         if r.returncode:
             sys.exit("JS syntax error:\n" + r.stderr)
     except FileNotFoundError:
-        print("node not found — skipping the syntax check", file=sys.stderr)
+        print("node not found — the syntax check was skipped. Install it with: brew install node",
+              file=sys.stderr)
     finally:
         tmp.unlink(missing_ok=True)
 

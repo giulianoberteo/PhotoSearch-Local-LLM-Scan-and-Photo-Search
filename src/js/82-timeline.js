@@ -39,7 +39,7 @@ function buildTimeline(){
   const byDay = new Map();
   let undated = 0, total = 0;
   for (const r of IDX.records.values()){
-    if (r.deleted || r.status === "error") continue;
+    if (r.deleted || r.hidden || r.status === "error") continue;
     total++;
     const key = tlDayKey(r);
     if (!key){ undated++; continue; }
@@ -91,6 +91,7 @@ function tlFill(section){
     const im = el("img");
     im.alt = r.caption || r.name || "";
     im.loading = "lazy";
+    applyRotation(im, r);
     thumbUrl(r.id).then(u => { if (u) im.src = u; });
     fig.append(im);
     const bits = [];
@@ -230,6 +231,6 @@ async function onTimelineShown(force){
     renderTimeline();
   } catch (e){
     body.textContent = "";
-    body.append(Object.assign(el("div", "note"), { textContent: errText(e) }));
+    body.append(Object.assign(el("div", "note"), { textContent: humanError(e) }));
   } finally { tlLoading = false; }
 }

@@ -4,6 +4,15 @@ Reviewed 1 October 2026 against base commit `d9a4237` in `~/Desktop/PhotoSearch`
 Source review covers extraction, search, chat, people, storage, backups, planning,
 UI and tests. The NAS inspection was read-only: no photos or index data changed.
 
+## Index
+<!-- index:start -->
+- [Assessment](#assessment)
+- [Actual library evidence](#actual-library-evidence)
+- [Three changes implemented](#three-changes-implemented)
+- [Remaining release blockers](#remaining-release-blockers)
+- [External checks](#external-checks)
+<!-- index:end -->
+
 ## Assessment
 
 PhotoSearch has a useful retrieval foundation: resumable extraction, EXIF
@@ -15,6 +24,9 @@ recovery reinforce one another. A model replacement alone cannot fix that.
 The local vision language model should describe scenes, objects and visible
 text. A separate face pipeline should produce similarity evidence. Names must
 come from the user; a requested person must be a search requirement.
+
+[↑ Back to Index](#index)
+
 
 ## Actual library evidence
 
@@ -44,6 +56,9 @@ Existing named groups are not clean ground truth for model evaluation.
 
 NAS directory reads stalled for several minutes; later small-file reads worked.
 End-to-end throughput must include storage, not just inference time.
+
+[↑ Back to Index](#index)
+
 
 ## Three changes implemented
 
@@ -87,6 +102,9 @@ is not a multi-file transaction: storage failure during restore can leave partia
 live data, with a safety copy for recovery. Use this build for new-format restores;
 old builds ignore the new face manifest and correction fields.
 
+[↑ Back to Index](#index)
+
+
 ## Remaining release blockers
 
 | Priority | Source finding | Next action |
@@ -109,6 +127,9 @@ tests prove correction/retrieval contracts, not real-world identity accuracy.
 Baseline: 479 passing assertions; the expanded suite has 534. Validation details
 and limitations are in TESTING.md.
 
+[↑ Back to Index](#index)
+
+
 ## External checks
 
 InsightFace distinguishes its MIT code from its pretrained model/data usage terms.
@@ -120,3 +141,5 @@ files. [File System Access semantics](https://developer.mozilla.org/en-US/docs/W
 
 Naming, merging and reassigning people are useful reference workflows for local
 photo managers. [Immich's people workflow](https://docs.immich.app/features/facial-recognition/).
+
+[↑ Back to Index](#index)

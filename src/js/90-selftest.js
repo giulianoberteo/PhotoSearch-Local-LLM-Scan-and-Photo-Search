@@ -3,8 +3,10 @@
    Runs the real pipeline against an OPFS scratch folder with mock model
    responses, so the worker, index, plan, move detection, vectors, checkpoint
    and derived data are all genuinely exercised without a picked folder. */
-const T = { pass:0, fail:0, lines:[] };
+const T = { pass:0, fail:0, lines:[], last:"", t0:0, tick:null, stop:null, env:null };
 function ok(name, cond, detail){
+  T.last = name;
+  if (T.tick && (T.pass + T.fail) % 25 === 24) T.tick();
   if (cond){ T.pass++; T.lines.push("PASS  " + name + (detail ? "  — " + detail : "")); }
   else { T.fail++; T.lines.push("FAIL  " + name + (detail ? "  — " + detail : "")); }
   // Streamed so a hang can be located: the last line printed is the last
@@ -34,10 +36,162 @@ async function rmAll(dir){
   for (const n of names){ try { await dir.removeEntry(n, { recursive:true }); } catch {} }
 }
 
+/* ---- the report ----
+   The suite streams PASS/FAIL lines (so a hang can be located), and the headless
+   runner reads them. People need something else: a verdict, what went wrong in
+   words, and what to do about it. */
+function splitCheck(line){
+  const body = line.replace(/^(PASS|FAIL)\s+/, "");
+  const i = body.indexOf("  — ");
+  const name = i < 0 ? body : body.slice(0, i), detail = i < 0 ? "" : body.slice(i + 4);
+  const m = detail.match(/^(.*) != (.*)$/s);
+  return { name, detail, got: m ? m[1] : null, want: m ? m[2] : null };
+}
+
+async function selfTestPreflight(){
+  const env = {
+    browser: (navigator.userAgent.match(/(Edg|Chrome|Chromium)\/([\d.]+)/) || []).slice(1).join(" ") || "an unknown browser",
+    page: location.protocol === "file:" ? "opened from disk (file://)" : location.origin,
+    storage: false
+  };
+  if (!navigator.storage || !navigator.storage.getDirectory)
+    return { env, problem:{ what:"This browser has no private file area, which the self-test builds its scratch folder in.",
+      why:"The self-test needs desktop Chrome or Edge.", steps:["Open PhotoSearch.html in desktop Chrome or Edge."] } };
+  /* Some browsers REJECT this with a SecurityError; others never answer at
+     all. Without a deadline the second kind looks exactly like a hung test. */
+  const within = (p, ms) => Promise.race([p, new Promise((_, rej) =>
+    setTimeout(() => rej(Object.assign(new Error("the browser did not answer within " + ms / 1000
+      + " s"), { name:"TimeoutError" })), ms))]);
+  try {
+    const root = await within(navigator.storage.getDirectory(), 5000);
+    await within(root.getDirectoryHandle("selftest-preflight", { create:true }), 5000);
+    await within(root.removeEntry("selftest-preflight", { recursive:true }), 5000);
+    env.storage = true;
+    return { env };
+  } catch (e){
+    const fromDisk = location.protocol === "file:";
+    return { env, error:e, problem:{
+      what:"The self-test could not create its scratch folder, so it did not run.",
+      why: fromDisk
+        ? "This page was opened from disk (file://). Chrome does not give such pages its private file area unless it is started with a flag. Depending on the version it either refuses with “" + errText(e) + "” or simply never answers; both mean only this. Nothing is wrong with your photos or your index, and scanning, searching and browsing work fine from a file."
+        : "The browser refused the private file area: " + humanError(e),
+      steps: fromDisk ? [
+        "Quit Chrome completely, then start it with the flag: open -a “Google Chrome” --args --allow-file-access-from-files, and open PhotoSearch.html#selftest.",
+        "Or serve the folder and open it by address: in the folder holding PhotoSearch.html run  python3 -m http.server 8000  and open  http://localhost:8000/PhotoSearch.html#selftest.",
+        "Chrome ignores the flag if it is already running, which is why it must be quit first." ]
+        : ((errExplain(e) || {}).steps || ["Reload the page and try again."]) } };
+  }
+}
+
+function selfTestReportText(){
+  const total = T.pass + T.fail, secs = ((performance.now() - T.t0) / 1000).toFixed(1);
+  const L = ["PhotoSearch self-test report", "App version: " + APP_VERSION,
+    "Browser: " + (T.env ? T.env.browser : "?") + "   Page: " + (T.env ? T.env.page : "?"),
+    "Result: " + T.pass + " passed, " + T.fail + " failed (" + total + " checks, " + secs + " s)"];
+  if (T.stop){
+    L.push("", "The run " + (T.stop.blocked ? "could not start" : "stopped early") + ".");
+    if (T.stop.problem) L.push(T.stop.problem.what, T.stop.problem.why);
+    if (T.stop.error) L.push("Error: " + errText(T.stop.error));
+    if (T.stop.last) L.push("Last check that completed: " + T.stop.last);
+  }
+  const bad = T.lines.filter(l => l.startsWith("FAIL"));
+  if (bad.length) L.push("", "Failures:", ...bad);
+  return L.join("\n");
+}
+
+function renderSelfTestReport(host){
+  const total = T.pass + T.fail, secs = ((performance.now() - T.t0) / 1000).toFixed(1);
+  const root = el("div", "stReport");
+  const stop = T.stop;
+  const verdict = stop ? (stop.blocked ? "The self-test could not start" : "The self-test stopped early")
+    : T.fail ? T.fail + " of " + total + " checks failed" : "All " + total + " checks passed";
+  const head = el("div", "stHead " + (T.fail ? "bad" : "good"));
+  head.append(el("span", "stIcon", T.fail ? "✕" : "✓"));
+  const ht = el("div");
+  ht.append(el("div", "stVerdict", verdict));
+  ht.append(el("div", "stSub", T.pass + " passed · " + T.fail + " failed · " + secs + " s"
+    + (T.env ? "  ·  " + T.env.browser + "  ·  page " + T.env.page + "  ·  app v" + APP_VERSION : "")));
+  head.append(ht);
+  root.append(head);
+
+  if (stop){
+    const card = el("div", "stCard");
+    const why = stop.problem
+      ? [stop.problem.what, stop.problem.why]
+      : ["The test hit an unexpected error and could not continue.", humanError(stop.error)];
+    card.append(el("div", "stH", "What happened"));
+    for (const w of why) card.append(el("p", null, w));
+    if (stop.last) card.append(el("p", "stMuted", "Last check that completed: “" + stop.last + "”. The problem is in what runs after it."));
+    const steps = stop.problem ? stop.problem.steps : ((errExplain(stop.error) || {}).steps
+      || ["Run it again. If it repeats, press Copy report and include it in an issue."]);
+    card.append(el("div", "stH", "What to do"));
+    const ol = el("ol"); for (const s of steps) ol.append(el("li", null, s)); card.append(ol);
+    if (stop.error){
+      const d = el("details"); d.append(el("summary", null, "Technical detail"));
+      d.append(Object.assign(el("pre"), { textContent: String(stop.error && stop.error.stack || stop.error) }));
+      card.append(d);
+    }
+    root.append(card);
+  }
+
+  const bad = T.lines.filter(l => l.startsWith("FAIL") && !(stop && l.includes("could not start") || stop && l.includes("stopped early")));
+  if (bad.length){
+    const card = el("div", "stCard");
+    card.append(el("div", "stH", bad.length === 1 ? "1 check failed" : bad.length + " checks failed"));
+    for (const l of bad){
+      const c = splitCheck(l), row = el("div", "stFail");
+      row.append(el("div", "stName", c.name));
+      if (c.got != null){
+        row.append(el("div", "stDetail", "got  " + c.got));
+        row.append(el("div", "stDetail", "wanted  " + c.want));
+      } else if (c.detail) row.append(el("div", "stDetail", c.detail));
+      card.append(row);
+    }
+    root.append(card);
+  }
+
+  const passed = T.lines.filter(l => l.startsWith("PASS"));
+  if (passed.length){
+    const d = el("details", "stCard");
+    d.append(el("summary", null, "Show the " + passed.length + " checks that passed"));
+    d.append(Object.assign(el("pre"), { textContent: passed.map(l => l.replace(/^PASS\s+/, "✓ ")).join("\n") }));
+    root.append(d);
+  }
+
+  const bar = el("div", "row"); bar.style.marginTop = "12px";
+  const copy = el("button", "btn sec", "Copy report");
+  copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(selfTestReportText()); toast("Report copied."); }
+    catch { toast("Could not copy; select the text under “Show” instead."); }
+  };
+  const again = el("button", "btn sec", "Run again");
+  again.onclick = () => selfTest();
+  bar.append(copy, again);
+  root.append(bar);
+  host.append(root);
+}
+
 async function selfTest(){
-  T.pass = 0; T.fail = 0; T.lines = [];
+  window.__selftestActive = true;     // the refresh-restore saver must not store the test's fake state
+  T.pass = 0; T.fail = 0; T.lines = []; T.last = ""; T.stop = null; T.env = null; T.tick = null;
+  T.t0 = performance.now();
   const host = $("#selfOut"); resetChecks(host);
   const st = step(host, "Self-test");
+  /* Find out first whether the test CAN run. Without this, a page opened from
+     disk fails deep inside with a bare SecurityError that explains nothing. */
+  st.note("Checking this browser can run the test\u2026");
+  const pre = await selfTestPreflight();
+  T.env = pre.env;
+  if (pre.problem){
+    T.fail++;
+    T.stop = { blocked:true, error:pre.error, problem:pre.problem, last:"" };
+    T.lines.push("FAIL  the self-test could not start: " + pre.problem.what + " " + pre.problem.why);
+    st.err(pre.problem.what);
+    renderSelfTestReport(host);
+    window.__selftest = { pass:T.pass, fail:T.fail, lines:T.lines };
+    return T;
+  }
+  T.tick = () => st.note(T.pass + T.fail + " checks done so far, " + T.fail + " failed\u2026");
   const wasMock = $("#mock").checked, savedDir = S.dirHandle, savedRoles = { ...S.roles };
   const savedIndexMode = S.indexMode, savedIndexDir = S.indexDirHandle;
   const savedSettings = localStorage.getItem(LS);
@@ -117,8 +271,32 @@ async function selfTest(){
     await writeInto(scratch, "three.webp", await makeImage(300, 300, "#44cc88", "image/webp"));
     await writeInto(sub, "four.png", await makeImage(200, 400, "#cc4488"));
     await writeInto(scratch, "notes.txt", new Blob(["hello"]));
-    await writeInto(scratch, "raw.CR2", new Blob([new Uint8Array(10)]));
+    await writeInto(scratch, "one.CR2", new Blob([new Uint8Array(10)]));
     await writeInto(scratch, "clip.mp4", new Blob([new Uint8Array(10)]));
+
+    /* ---- RAW through its embedded preview ---- */
+    {
+      const jpg = new Uint8Array(await (await makeImage(640, 480, "#ccaa44", "image/jpeg")).arrayBuffer());
+      const mk = orient => {
+        const t = new Uint8Array(68 + jpg.length), d = new DataView(t.buffer);
+        t.set([0x49, 0x49, 42, 0], 0); d.setUint32(4, 8, true);
+        d.setUint16(8, 2, true);                                   // IFD0: orientation + SubIFD
+        d.setUint16(10, 0x0112, true); d.setUint16(12, 3, true); d.setUint32(14, 1, true); d.setUint16(18, orient, true);
+        d.setUint16(22, 0x014A, true); d.setUint16(24, 4, true); d.setUint32(26, 1, true); d.setUint32(30, 38, true);
+        d.setUint16(38, 2, true);                                  // SubIFD: JPEG offset + length
+        d.setUint16(40, 0x0201, true); d.setUint16(42, 4, true); d.setUint32(44, 1, true); d.setUint32(48, 68, true);
+        d.setUint16(52, 0x0202, true); d.setUint16(54, 4, true); d.setUint32(56, 1, true); d.setUint32(60, jpg.length, true);
+        t.set(jpg, 68);
+        return new File([t], "shot.NEF");
+      };
+      const up = await processImage(mk(1), "raw");
+      eq("NEF: reads the embedded JPEG preview", [up.srcW, up.srcH, up.decoder], [640, 480, "raw-preview"]);
+      const turned = await processImage(mk(6), "raw");
+      eq("NEF: applies the camera's orientation", [turned.srcW, turned.srcH], [480, 640]);
+      let bad = "";
+      try { await processImage(new File([new Uint8Array(500)], "x.NEF"), "raw"); } catch (e){ bad = String(e.message || e); }
+      ok("NEF with no preview fails with a clear reason", /no embedded JPEG/.test(bad), bad);
+    }
 
     /* ---- worker decode ---- */
     await st.note("Decoding through the worker…");
@@ -159,11 +337,21 @@ async function selfTest(){
     await loadRecords(); await loadVectors(); await loadCheckpoint();
     let plan = await buildPlan();
     eq("plan finds 4 scannable images", plan.total, 4);
-    eq("plan counts RAW", plan.counts.raw, 1);
+    eq("RAW beside a same-named JPEG/PNG is not scanned twice", plan.counts.rawPaired, 1);
     eq("plan counts video", plan.counts.video, 1);
     eq("plan ignores .txt", plan.counts.other, 1);
     eq("all four are new", plan.new.length, 4);
     ok("subfolder was walked", plan.new.some(f => f.path === "sub/four.png"));
+    {
+      const keepEx = S.scanExclude;
+      try {
+        S.scanExclude = ["sub/"];
+        const px = await buildPlan();
+        eq("a folder left out is not walked", [px.total, px.counts.excludedDirs], [3, 1]);
+        ok("and its photos are not planned", !px.new.some(f => f.path.startsWith("sub/")));
+        ok("path rule covers everything inside", isExcludedPath("sub/deep/x.jpg") && !isExcludedPath("subway/x.jpg"));
+      } finally { S.scanExclude = keepEx; }
+    }
 
     await runScan(plan.new, "selftest");
     ok("all four scanned without error", RUN.errors.length === 0, RUN.errors.map(e=>e.error).join("; "));
@@ -576,6 +764,18 @@ async function selfTest(){
       ok("an object without either is still described",
          errText({}) !== "" && errText({}) !== "[object Object]", errText({}));
       eq("null does not produce blank", errText(null), "unknown error");
+      /* plain-language hints are added to, never substituted for, the real text */
+      const sec = new DOMException("It was determined that certain files are unsafe for access within a Web application, or that too many calls are being made on file resources.", "SecurityError");
+      ok("a SecurityError is explained in words", /security rule/.test(errHint(sec)), errHint(sec));
+      ok("and keeps the browser's own text", humanError(sec).startsWith(errText(sec)));
+      ok("the steps for it mention the file:// cause", errExplain(sec).steps.some(s => /allow-file-access-from-files/.test(s)));
+      ok("a permission error is explained", /Permission/.test(errHint(new DOMException("x", "NotAllowedError"))));
+      ok("an unreachable server is explained", /model server/.test(errHint(new TypeError("Failed to fetch"))));
+      eq("an ordinary error gets no invented hint", humanError(new Error("plain failure")), "plain failure");
+      eq("null is still safe", humanError(null), "unknown error");
+      const sp = splitCheck("FAIL  adds up  \u2014 3 != 4");
+      eq("a failed check splits into name, got and wanted", [sp.name, sp.got, sp.want], ["adds up", "3", "4"]);
+      eq("a check with no detail still splits", splitCheck("FAIL  just a name").name, "just a name");
 
       /* withRetry used to flatten its cause into prose, so "this folder is
          gone" became indistinguishable from "the share is down" -- and a
@@ -1731,6 +1931,173 @@ async function selfTest(){
       TL.built = 0;
     }
 
+    /* ---- library ----
+       One flat grid of every photo. The point of the design is that 6,635
+       tiles are never in the DOM at once, and that the viewer opens, steps and
+       closes without leaving the page stuck behind it. */
+    {
+      const keepRecords = IDX.records, sec = $("#tab-library");
+      const wasHidden = sec.hidden;
+      const recs = [];
+      for (let i = 0; i < 600; i++)
+        recs.push(["L" + i, { id:"L" + i, name:"L" + i + ".jpg", path:"L" + i + ".jpg",
+          status:"ok", caption:"c", date_taken:new Date(2020, 0, 1 + i).toISOString() }]);
+      recs.push(["Lundated", { id:"Lundated", name:"u.jpg", path:"u.jpg", status:"ok" }]);
+      recs.push(["Lgone", { id:"Lgone", name:"g.jpg", path:"g.jpg", status:"ok",
+        deleted:true, date_taken:"2030-01-01T00:00:00.000Z" }]);
+      recs.push(["Lerr", { id:"Lerr", name:"e.jpg", path:"e.jpg", status:"error" }]);
+      IDX.records = new Map(recs);
+      GAL.desc = true;
+      galBuild();
+      eq("the library lists every live photo", GAL.list.length, 601);
+      eq("the newest photo comes first", GAL.list[0].r.id, "L599");
+      eq("undated photos go last", GAL.list[600].r.id, "Lundated");
+      ok("deleted and failed records are left out",
+         !GAL.list.some(x => x.r.id === "Lgone" || x.r.id === "Lerr"));
+      GAL.desc = false; galBuild();
+      eq("reversing puts the oldest first", GAL.list[0].r.id, "L0");
+      eq("and still keeps undated photos last", GAL.list[600].r.id, "Lundated");
+      GAL.desc = true; galBuild();
+
+      sec.hidden = false;
+      try {
+        galClear(); GAL.cell = 0; galLayout();
+        ok("the grid is laid out in columns", GAL.cols > 0 && GAL.cell > 0,
+           GAL.cols + " cols, " + GAL.cell + "px");
+        ok("tiles are created only near the viewport, not for every photo",
+           GAL.shown.size > 0 && GAL.shown.size < 601, String(GAL.shown.size));
+        eq("the DOM holds exactly the tiles it tracks",
+           $("#galGrid").querySelectorAll(".gtile").length, GAL.shown.size);
+        const first = GAL.list[[...GAL.shown.keys()][0]].r.id;
+        ok("a shown tile pins its thumbnail", thumbPinned.has(first));
+        galClear();
+        eq("clearing removes every tile", $("#galGrid").querySelectorAll(".gtile").length, 0);
+        ok("and unpins their thumbnails", !thumbPinned.has(first));
+
+        galLayout();
+        await openViewer(0);
+        ok("clicking a photo opens the viewer", VW.open && !$("#viewer").hidden);
+        eq("on the right photo", VW.i, 0);
+        ok("with nothing before the first photo", $("#vwPrev").disabled);
+        vwStep(1);
+        eq("stepping forward moves to the next photo", VW.i, 1);
+        vwStep(-1); vwStep(-1);
+        eq("stepping back past the first photo stays put", VW.i, 0);
+        $("#vwInfoBtn").click();
+        ok("the info button opens the details panel", $("#viewer").classList.contains("info"));
+        ok("which lists the photo", $("#vwMeta").textContent.includes("L599.jpg"));
+        $("#vwInfoBtn").click();
+        eq("the viewer starts fitted", VW.z, 1);
+        vwZoomTo(3);
+        eq("zoom goes to the requested level", [VW.z, $("#vwImg").style.scale, $("#vwZr").value], [3, "3", "300"]);
+        vwZoomTo(100);
+        eq("zoom is capped", VW.z, VW_MAXZ);
+        $("#viewer").dispatchEvent(new WheelEvent("wheel", { deltaY:500, clientX:300, clientY:300, bubbles:true, cancelable:true }));
+        ok("scrolling the wheel down zooms out", VW.z < VW_MAXZ, String(VW.z));
+        $("#viewer").dispatchEvent(new WheelEvent("wheel", { deltaY:-200, clientX:300, clientY:300, bubbles:true, cancelable:true }));
+        VW.px = 1e6; vwPlace(false);
+        ok("panning cannot carry the photo out of the window", Math.abs(VW.px) < 1e5, String(VW.px));
+        vwZoomTo(1);
+        eq("fit resets the pan", [VW.z, VW.px, VW.py], [1, 0, 0]);
+        vwZoomTo(2.5); vwStep(1);
+        eq("stepping to another photo returns to fit", VW.z, 1);
+        vwStep(-1);
+        /* ---- what survives a refresh ---- */
+        {
+          const snap0 = restoreSnapshot();
+          ok("the snapshot records the open photo", snap0.open === GAL.list[VW.i].r.id, String(snap0.open));
+          const keep = { turns:CHAT.turns, messages:CHAT.messages, html:$("#chatLog").innerHTML, grids:RESTORE.grids };
+          try {
+            $("#chatLog").innerHTML = ""; RESTORE.grids = [];
+            const id0 = GAL.list[0].r.id;
+            chatRestoreTurns([{ q:"dogs on a beach", answer:"Found some.", ids:[id0], at:"2026-01-01T00:00:00Z" }]);
+            eq("restored chat shows the question and the answer", $("#chatLog").querySelectorAll(".msg").length, 2);
+            ok("its photo grid is drawn from the index", $("#chatLog").querySelectorAll(".gtile, .thumb, img").length > 0 || RESTORE.grids.length === 0);
+            eq("the model gets the earlier turns back", CHAT.messages.map(m => m.role), ["system", "user", "assistant"]);
+          } finally {
+            CHAT.turns = keep.turns; CHAT.messages = keep.messages; $("#chatLog").innerHTML = keep.html; RESTORE.grids = keep.grids;
+          }
+        }
+        closeViewer();
+        ok("closing releases the viewer", !VW.open);
+
+        /* Removing is an index-only change: no file is touched, the record is
+           flagged `hidden` (never `deleted`, which the scan plan would treat
+           as absent and re-index), and every surface that lists photos skips it. */
+        const real = { ei:ensureIndex, rf:readFullRecords, al:appendLines };
+        const written = [];
+        ensureIndex = async () => {};
+        readFullRecords = async () => new Map();
+        appendLines = async (name, lines) => { written.push(...lines); };
+        try {
+          galBuild(); galLayout();
+          const n0 = GAL.list.length;
+          eq("removing reports how many it hid",
+             await galApply(["L598", "L597"], true, true), 2);
+          ok("the records are flagged hidden, not deleted",
+             written.length === 2 && written.every(l => l.hidden === true && !l.deleted));
+          eq("they leave the library", GAL.list.length, n0 - 2);
+          eq("and are counted as removed", GAL.removed, 2);
+          ok("search no longer considers them", !candidateSet({}).some(r => r.hidden));
+          GAL.view = "removed"; galBuild();
+          eq("the Removed view lists exactly them", GAL.list.length, 2);
+          eq("and restoring brings one back", await galApply(["L598"], false, true), 1);
+          ok("restored records are no longer hidden", !IDX.records.get("L598").hidden);
+          GAL.view = "all"; galBuild();
+          eq("the library has one fewer removed photo", GAL.list.length, n0 - 1);
+
+          /* Rotation is a view setting kept in the record; the file is never
+             touched. Turns are relative to each photo's own angle, wrap at 360,
+             and queued so quick successive clicks cannot lose one. */
+          galClear(); galLayout();
+          const rid = GAL.list[0].r.id;
+          written.length = 0;
+          eq("rotating reports how many it turned", await galRotate([rid], 90, true), 1);
+          eq("a turn is stored on the record", IDX.records.get(rid).rotation, 90);
+          ok("and written to the index, not just held in memory",
+             written.length === 1 && written[0].rotation === 90 && !written[0].hidden);
+          await galRotate([rid], -180, true);
+          eq("turning left past zero wraps to 270", IDX.records.get(rid).rotation, 270);
+          await Promise.all([galRotate([rid], 90, true), galRotate([rid], 90, true),
+                             galRotate([rid], 90, true)]);
+          eq("three quick turns are all applied", IDX.records.get(rid).rotation, 180);
+          const rt = [...GAL.shown.values()].find(f => f.dataset.id === rid);
+          ok("the tile is drawn turned", !!rt && rt.firstChild.style.rotate === "180deg",
+             rt ? rt.firstChild.style.rotate : "no tile");
+          eq("the list sees the new angle", GAL.list[0].r.rotation, 180);
+          await galRotate([rid], 180, true);
+          eq("a half turn back returns to upright", IDX.records.get(rid).rotation, 0);
+          ok("an upright photo carries no turn on its tile",
+             rt.firstChild.style.rotate === "");
+          /* favourites: a mark on the record, shown as its own view */
+          written.length = 0;
+          eq("hearting reports how many", await galFavourite([rid], true, true), 1);
+          ok("a favourite is stored on the record and written to the index",
+             IDX.records.get(rid).favourite === true && written.length === 1
+             && written[0].favourite === true && !written[0].hidden && !written[0].deleted);
+          GAL.view = "favourites"; galBuild();
+          eq("the Favourites view lists only hearted photos", GAL.list.map(x => x.r.id), [rid]);
+          eq("unhearting reports how many", await galFavourite([rid], false, true), 1);
+          eq("an unhearted photo leaves the Favourites view", GAL.list.length, 0);
+          GAL.view = "all"; galBuild();
+          ok("and is no longer a favourite", !IDX.records.get(rid).favourite);
+          eq("turns snap to quarter turns", normRot(100), 90);
+          ok("odd quarter turns swap width and height", rotOdd(270) && rotOdd(-90) && !rotOdd(180));
+        } finally {
+          ensureIndex = real.ei; readFullRecords = real.rf; appendLines = real.al;
+          GAL.view = "all";
+        }
+        await sleep(450);
+        ok("and hides it again once the zoom-out finishes", $("#viewer").hidden);
+      } finally {
+        galClear();
+        if (VW.open) closeViewer();
+        sec.hidden = wasHidden;
+        IDX.records = keepRecords;
+        GAL.built = 0; GAL.cell = 0; GAL.list = [];
+      }
+    }
+
     /* ---- any OpenAI-compatible server, not just LM Studio ---- */
     {
       const keepUrl = S.baseUrl, keepMode = S.structuredMode;
@@ -1787,6 +2154,153 @@ async function selfTest(){
          /OLLAMA_ORIGINS/.test(corsHint()), corsHint());
 
       S.baseUrl = keepUrl; S.structuredMode = keepMode; S.provider = null;
+    }
+
+    /* ---- header search ----
+       Suggestions come from the index and the people, with no model call; a
+       chosen suggestion becomes a chip that maps onto searchPhotos' filters. */
+    {
+      const keep = { rec:IDX.records, ent:DERIVED.entities, fp:FACES.people, fc:FACES.clusters,
+                     ff:FACES.faces, fb:FACES.byPhoto, view:GAL.view, chips:GAL.chips,
+                     texts:GAL.texts, res:GAL.results, facts:SG.facts };
+      const mk = (id, iso, place) => [id, { id, name:id + ".jpg", path:id + ".jpg", status:"ok", caption:"c",
+        date_taken:iso, place, when:{ year:+iso.slice(0, 4), month:+iso.slice(5, 7), day:1 } }];
+      IDX.records = new Map([
+        mk("s1", "2021-06-10T12:00:00.000Z", "Sicily, IT"), mk("s2", "2022-06-11T12:00:00.000Z", "Sicily, IT"),
+        mk("s3", "2022-07-12T12:00:00.000Z", "Paris, FR"), mk("s4", "2023-01-02T12:00:00.000Z", "Paris, FR")]);
+      IDX.records.get("s4").hidden = true;
+      DERIVED.entities = new Map([
+        ["place:Sicily, IT", { type:"place", value:"Sicily, IT", count:2 }],
+        ["place:Paris, FR", { type:"place", value:"Paris, FR", count:1 }],
+        ["object:boat", { type:"object", value:"boat", count:2 }],
+        ["image_type:screenshot", { type:"image_type", value:"screenshot", count:1 }]]);
+      FACES.faces = new Map([["f1", { id:"f1", photo_id:"s1", box:[0, 0, 1, 1], score:1 }],
+                             ["f2", { id:"f2", photo_id:"s2", box:[0, 0, 1, 1], score:1 }],
+                             ["f3", { id:"f3", photo_id:"s4", box:[0, 0, 1, 1], score:1 }]]);
+      FACES.byPhoto = new Map([["s1", ["f1"]], ["s2", ["f2"]], ["s4", ["f3"]]]);
+      FACES.people = [{ id:"pa", name:"Anna", face_ids:["f1", "f2", "f3"] }];
+      FACES.clusters = [];
+      SG.facts = null;
+      try {
+        /* the two new filters */
+        eq("a month filter keeps that month in any year",
+           candidateSet({ month:6 }).map(r => r.id).sort(), ["s1", "s2"]);
+        eq("a photo-set filter keeps only members",
+           candidateSet({ photo_sets:[new Set(["s1", "s3"])] }).map(r => r.id).sort(), ["s1", "s3"]);
+        eq("several photo sets must all contain the photo",
+           candidateSet({ photo_sets:[new Set(["s1", "s3"]), new Set(["s3"])] }).map(r => r.id), ["s3"]);
+
+        /* suggestions */
+        const top = sgSuggest("ann");
+        eq("typed words always offer a text search first", top[0].items[0].kind, "text");
+        const anna = top.flatMap(s => s.items).find(i => i.kind === "person");
+        ok("a matching person is suggested", !!anna && anna.label === "Anna", anna && anna.label);
+        eq("and counts only visible photos (the hidden one is not counted)", anna.sub, "2");
+        ok("places are suggested by name", sgSuggest("sic").flatMap(s => s.items)
+             .some(i => i.kind === "place" && i.label === "Sicily, IT"));
+        const jd = sgSuggest("june 2022").flatMap(s => s.items).find(i => i.kind === "date");
+        eq("\"june 2022\" becomes a month and a year", jd && jd.chips.map(c => c.kind), ["month", "year"]);
+        ok("things in the picture are suggested", sgSuggest("boa").flatMap(s => s.items)
+             .some(i => i.kind === "thing" && i.label === "boat"));
+        ok("kinds of picture are suggested", sgSuggest("screen").flatMap(s => s.items)
+             .some(i => i.kind === "type"));
+        eq("an empty box suggests people first", sgSuggest("")[0].title, "People");
+
+        /* several people at once: "anna + ben" */
+        FACES.faces.set("f4", { id:"f4", photo_id:"s1", box:[0, 0, 1, 1], score:1 });
+        FACES.faces.set("f5", { id:"f5", photo_id:"s3", box:[0, 0, 1, 1], score:1 });
+        FACES.byPhoto.set("s1", ["f1", "f4"]); FACES.byPhoto.set("s3", ["f5"]);
+        FACES.people = [{ id:"pa", name:"Anna", face_ids:["f1", "f2", "f3"] },
+                        { id:"pb", name:"Ben", face_ids:["f4", "f5"] }];
+        SG.facts = null;
+        const flat = q => sgSuggest(q).flatMap(s => s.items);
+        const both = flat("anna + ben").find(i => i.kind === "people");
+        eq("\"anna + ben\" is one suggestion with both people", both && both.chips.map(c => c.id), ["pa", "pb"]);
+        eq("it counts only photos with both of them", both.sub, "1");
+        eq("a finished phrase of people comes before the text search", flat("anna + ben")[0].kind, "people");
+        eq("\"anna & ben\" works", (flat("anna & ben").find(i => i.kind === "people") || {}).label, "Anna + Ben");
+        eq("\"anna and ben\" works", (flat("anna and ben").find(i => i.kind === "people") || {}).label, "Anna + Ben");
+        eq("a partial second name still suggests the person", (flat("anna, b").find(i => i.kind === "people") || {}).label, "Anna + Ben");
+        eq("a unique prefix names the first person", (flat("an + ben").find(i => i.kind === "people") || {}).label, "Anna + Ben");
+        ok("words that are not people do not make a people search", !flat("anna + zzz").some(i => i.kind === "people"));
+        eq("both people as chips filter to photos with both", sgArgs.call(null) && (GAL.chips = both.chips, sgArgs().photo_sets.length), 2);
+        eq("and only photos containing both match",
+           candidateSet(sgArgs()).map(r => r.id), ["s1"]);
+
+        /* tokens live inside the field */
+        GAL.chips = both.chips.slice(); GAL.texts = ["sea"];
+        sgRenderChips();
+        eq("every chip and word is a token in the field", document.querySelectorAll("#sgChips .sgChip").length, 3);
+        ok("the field is marked as holding tokens", $("#sgField").classList.contains("has"));
+        ok("Backspace on an empty field removes the last token, words first", sgPop() && GAL.texts.length === 0 && GAL.chips.length === 2);
+        sgPop(); sgPop();
+        eq("and stops when there is nothing left", sgPop(), false);
+        sgRenderChips();
+        ok("an empty search shows no tokens", !$("#sgField").classList.contains("has"));
+        GAL.chips = [];
+        eq("unrelated words suggest nothing but the text search",
+           sgSuggest("zzzz").flatMap(s => s.items).length, 1);
+
+        /* chips become filters */
+        GAL.chips = [];
+        sgAddChip({ kind:"place", value:"Sicily, IT", label:"Sicily, IT" });
+        sgAddChip({ kind:"place", value:"Paris, FR", label:"Paris, FR" });
+        eq("a second place replaces the first", GAL.chips.map(c => c.value), ["Paris, FR"]);
+        sgAddChip({ kind:"person", id:"pa", label:"Anna" });
+        sgAddChip({ kind:"person", id:"pa", label:"Anna" });
+        eq("the same chip is not added twice", GAL.chips.filter(c => c.kind === "person").length, 1);
+        sgAddChip({ kind:"year", value:"2022", label:"2022" });
+        GAL.texts = ["boat", "sea"];
+        const a = sgArgs();
+        eq("a place chip filters by place", a.place, "Paris, FR");
+        eq("a year chip filters by date range", [a.date_from, a.date_to], ["2022-01-01", "2022-12-31"]);
+        eq("a person chip filters by that person's photos",
+           [...a.photo_sets[0]].sort(), ["s1", "s2"]);
+        eq("typed words become one query", a.query, "boat sea");
+        IDX.records.get("s1").favourite = true;
+        GAL.chips = [{ kind:"favourite", label:"Favourites" }];
+        eq("a Favourites chip filters to the hearted photos", [...sgArgs().photo_sets[0]], ["s1"]);
+        eq("Favourites is suggested when there are some", sgSuggest("fav").flatMap(s => s.items).some(i => i.kind === "favourite"), true);
+        GAL.chips = []; delete IDX.records.get("s1").favourite;
+        ok("the Library's results are not capped at the chat limit", a.max > 60);
+        const res = await searchPhotos({ ...a, query:"" });
+        eq("the filters combine (Paris + 2022 + Anna has no photo)", res.results.length, 0);
+
+        /* the Library shows results in ranked order and drops removed photos */
+        GAL.view = "search"; GAL.results = ["s2", "s4", "s1"];
+        galBuild();
+        eq("search results keep the ranker's order", GAL.list.map(x => x.r.id), ["s2", "s1"]);
+        ok("and a hidden photo never appears", !GAL.list.some(x => x.r.id === "s4"));
+      } finally {
+        IDX.records = keep.rec; DERIVED.entities = keep.ent;
+        FACES.people = keep.fp; FACES.clusters = keep.fc; FACES.faces = keep.ff; FACES.byPhoto = keep.fb;
+        GAL.view = keep.view; GAL.chips = keep.chips; GAL.texts = keep.texts; GAL.results = keep.res;
+        SG.facts = keep.facts; GAL.built = 0; GAL.list = [];
+      }
+    }
+
+    /* ---- tab links ----
+       PhotoSearch.html#library and friends open a tab directly. The address is
+       shared with #selftest, which must never be mistaken for a tab. */
+    {
+      eq("#library names the Library tab", tabFromHash("#library"), "library");
+      eq("#favourites names the Favourites tab", tabFromHash("#favourites"), "favourites");
+      eq("Favourites shows the Library's grid", TAB_SECTION.favourites, "library");
+      eq("tab names are case-insensitive", tabFromHash("#Timeline"), "timeline");
+      eq("extra parameters after a tab are ignored", tabFromHash("#people&x=1"), "people");
+      eq("a leading slash is tolerated", tabFromHash("#/settings"), "settings");
+      eq("percent-encoding is decoded", tabFromHash("#%63hat"), "chat");
+      eq("#selftest is not a tab", tabFromHash("#selftest"), null);
+      eq("nor is #selftest with parameters", tabFromHash("#selftest&heic=file:///x.heic"), null);
+      eq("an unknown name is not a tab", tabFromHash("#nonsense"), null);
+      eq("an empty address is not a tab", tabFromHash(""), null);
+      eq("every tab has a link name", TABS.length, document.querySelectorAll("nav button").length);
+      const was = curTab;
+      showTab("scan");
+      ok("showing a tab selects it and hides the others",
+         $("#tab-scan").hidden === false && $("#tab-chat").hidden === true
+         && document.querySelector('nav button[data-tab="scan"]').getAttribute("aria-selected") === "true");
+      showTab(was);
     }
 
     /* ---- escape sequences must never reach the screen ----
@@ -2415,8 +2929,10 @@ async function selfTest(){
     st[T.fail ? "err" : "ok"](T.pass + " passed, " + T.fail + " failed");
   } catch (e){
     T.fail++;
-    T.lines.push("FAIL  threw: " + String(e && e.stack || e));
-    st.err(String(e && e.message || e));
+    T.stop = { error:e, last:T.last };
+    T.lines.push("FAIL  the run stopped early after \u201c" + T.last + "\u201d: " + humanError(e)
+      + "  [" + String(e && e.stack || e).split("\n").slice(0, 3).join(" | ") + "]");
+    st.err("Stopped early: " + humanError(e));
   } finally {
     $("#mock").checked = wasMock;
     S.dirHandle = savedDir; S.roles = savedRoles;
@@ -2424,9 +2940,9 @@ async function selfTest(){
     if (savedSettings == null) localStorage.removeItem(LS); else localStorage.setItem(LS, savedSettings);
     IDX.loaded = false;
   }
-  const pre = el("pre");
-  pre.textContent = T.lines.join("\n");
-  $("#selfOut").append(pre);
+  T.tick = null;
+  window.__selftestActive = false;
+  renderSelfTestReport($("#selfOut"));
   window.__selftest = { pass:T.pass, fail:T.fail, lines:T.lines };
   return T;
 }

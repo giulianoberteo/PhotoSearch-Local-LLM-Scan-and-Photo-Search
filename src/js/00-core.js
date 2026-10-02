@@ -1,4 +1,6 @@
 "use strict";
+/* Keep in step with the newest heading in ChangeLog.md. */
+const APP_VERSION = "0.6.12";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -47,6 +49,7 @@ const S = {
   scanOrder: "newest",            // newest | oldest | path | smallest
   /* Always keep the library ROOT as the picked folder so paths stay unique and
      one index covers everything. Scope narrows only what a scan walks. */
+  scanExclude: [],                // folders left out of every scan, relative to the library root: ["2019/Screenshots/"]
   scanScope: "",                  // "" = whole library, else "Sicily/" etc.
   subfolders: [],
   /* deadlineFactor multiplies the MEASURED cost of a round trip; cap is the
@@ -94,7 +97,7 @@ function saveSettings(){
   try { localStorage.setItem(LS, JSON.stringify({
     baseUrl:S.baseUrl, roles:S.roles, scan:S.scan, date:S.date, events:S.events,
     search:S.search, ocr:S.ocr, backup:S.backup, chat:S.chat, faces:S.faces,
-    structuredMode:S.structuredMode, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
+    structuredMode:S.structuredMode, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, scanExclude:S.scanExclude, io:S.io,
     mock: $("#mock").checked })); } catch {}
 }
 function loadSettings(){
@@ -108,7 +111,12 @@ function loadSettings(){
     }
     const d = JSON.parse(raw || "{}");
     if (d.baseUrl){ S.baseUrl = d.baseUrl; $("#baseUrl").value = d.baseUrl; }
-    if (d.roles) S.roles = { ...S.roles, ...d.roles };
+    if (d.roles){
+      // Earlier self-test runs could save their mock roles; they are never a real choice.
+      const r = { ...d.roles };
+      for (const k of Object.keys(r)) if (/^mock-/.test(String(r[k])) && !d.mock) delete r[k];
+      S.roles = { ...S.roles, ...r };
+    }
     if (d.scan)  S.scan  = { ...S.scan,  ...d.scan };
     if (d.date)  S.date  = { ...S.date,  ...d.date };
     if (d.events) S.events = { ...S.events, ...d.events };
@@ -134,6 +142,7 @@ function loadSettings(){
     if (d.indexChosen) S.indexChosen = d.indexChosen;
     if (d.scanOrder) S.scanOrder = d.scanOrder;
     if (d.scanScope) S.scanScope = d.scanScope;
+    if (Array.isArray(d.scanExclude)) S.scanExclude = d.scanExclude.filter(x => typeof x === "string");
     if (d.io) S.io = { ...S.io, ...d.io };
     if (d.backup) S.backup = { ...S.backup, ...d.backup };
     if (d.mock) $("#mock").checked = true;
@@ -162,19 +171,54 @@ async function idbGet(k){ const db = await idb(); return new Promise((res, rej) 
   const t = db.transaction("kv","readonly"); const q = t.objectStore("kv").get(k);
   q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
 
-/* ================= tabs ================= */
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+/* ================= tabs =================
+   Each tab has an address: PhotoSearch.html#library, #chat, #timeline, #people,
+   #scan or #settings. Choosing a tab updates the address (so Back and Forward
+   work, and a tab can be bookmarked or shared), and opening or changing an
+   address chooses the tab. Hashes that are not a tab, such as #selftest, are
+   left alone. */
+const TABS = ["library","favourites","search","chat","timeline","people","scan","settings"];
+/* Favourites is the Library's grid showing only favourites, so it has no section of its own. */
+const TAB_SECTION = { favourites:"library" };
+let curTab = "settings";
+function tabFromHash(hash){
+  let h = hash == null ? location.hash : hash;
+  try { h = decodeURIComponent(h); } catch {}
+  h = h.replace(/^#\/?/, "").toLowerCase().split(/[&?\/]/)[0];
+  return TABS.includes(h) ? h : null;
+}
+/* Some tabs read the whole index, so they are built when first shown rather
+   than at boot: opening the app must not wait for them. */
+function tabShownHook(name){
+  if (name === "library" && typeof onLibraryShown === "function"){
+    onLibraryShown();
+    if (GAL.view === "favourites") galSetView("all");
+  }
+  if (name === "favourites" && typeof galSetView === "function") galSetView("favourites");
+  if (name === "search" && typeof onSearchShown === "function") onSearchShown();
+  if (name === "chat" && typeof chatFillGrids === "function") chatFillGrids();
+  if (name === "timeline" && typeof onTimelineShown === "function") onTimelineShown();
+  if (name === "people" && typeof onPeopleShown === "function") onPeopleShown();
+}
+function showTab(name){
+  curTab = name;
   document.querySelectorAll('nav button').forEach(x =>
-    x.setAttribute("aria-selected", String(x === b)));
-  ["search","chat","timeline","people","scan","settings"].forEach(t =>
-    $("#tab-" + t).hidden = (t !== b.dataset.tab));
-  /* The timeline reads the whole index, so it is built on first view rather
-     than at boot -- opening the app must not wait for it. */
-  if (b.dataset.tab === "timeline" && typeof onTimelineShown === "function")
-    onTimelineShown();
-  if (b.dataset.tab === "people" && typeof onPeopleShown === "function")
-    onPeopleShown();
-  if (b.dataset.tab === "search" && typeof onSearchShown === "function") onSearchShown();
+    x.setAttribute("aria-selected", String(x.dataset.tab === name)));
+  const sec = TAB_SECTION[name] || name;
+  TABS.forEach(t => { const s = $("#tab-" + t); if (s) s.hidden = (t !== sec); });
+  tabShownHook(name);
+}
+/* A folder connecting after the page loaded (Chrome drops access on reload, so
+   this is the normal order) must not leave the open tab on "connect a folder". */
+function refreshActiveTab(){ tabShownHook(curTab); }
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  const t = b.dataset.tab;
+  if (tabFromHash() !== t) location.hash = t;      // adds a history entry
+  showTab(t);
+});
+window.addEventListener("hashchange", () => {
+  const t = tabFromHash();
+  if (t && t !== curTab) showTab(t);
 });
 
 /* ================= browser gate ================= */
@@ -240,6 +284,56 @@ function errText(e){
   if (name) return name;
   const s = String(e);
   return s === "[object Object]" ? JSON.stringify(e).slice(0, 200) : s;
+}
+
+/* Browsers describe file and network trouble in terms that explain nothing to
+   the person looking at them: "It was determined that certain files are unsafe
+   for access within a Web application" is a security rule, not a damaged file.
+   This turns the common ones into a sentence plus the steps that fix them. It
+   only ever ADDS to errText(), which stays exactly as it was. */
+const ERR_HELP = [
+  { test: (n, m) => n === "SecurityError" || /unsafe for access|too many calls/i.test(m),
+    hint: "Chrome blocked access to a file or folder; this is a security rule, not damage to your files.",
+    steps: [
+      "Self-test, or anything using the browser's private storage: a page opened from disk (file://) is not given it. Quit Chrome completely and start it with --allow-file-access-from-files, or serve the folder and open http://localhost:8000/PhotoSearch.html (run: python3 -m http.server 8000).",
+      "Choosing a folder: Chrome refuses a few places outright (your home folder, Desktop, Documents, Downloads, and system folders themselves). Pick a subfolder inside one.",
+      "On a slow network share: lower \u201cFile-stat concurrency\u201d in Settings so fewer files are touched at once." ] },
+  { test: n => n === "NotAllowedError",
+    hint: "Permission to use the folder was refused or has expired.",
+    steps: [ "Chrome forgets folder access whenever the page reloads. Press Reconnect, or choose the folder again.",
+             "If Chrome asked for permission, choose Allow." ] },
+  { test: n => n === "NotFoundError",
+    hint: "A file or folder could not be found.",
+    steps: [ "Is the drive or network share still mounted?",
+             "Was the folder moved or renamed? Choose it again, then press Refresh plan." ] },
+  { test: n => n === "AbortError",
+    hint: "The action was cancelled.",
+    steps: [ "If you closed a picker, this is expected. Otherwise try again." ] },
+  { test: n => n === "QuotaExceededError",
+    hint: "There is no space left for this.",
+    steps: [ "Free some disk space, or choose another place for the index in Settings." ] },
+  { test: n => n === "NoModificationAllowedError" || n === "InvalidStateError",
+    hint: "The file is locked or read-only.",
+    steps: [ "Close any other tab or program using the same index.",
+             "Check the folder is not read-only (network shares often are)." ] },
+  { test: (n, m) => /failed to fetch|networkerror|load failed/i.test(m),
+    hint: "Could not reach the model server.",
+    steps: [ "Is the server running?", "Is the URL in Settings right?",
+             "Is this page allowed to connect (CORS)? Settings \u2192 Test connection names the fix." ] },
+  { test: (n, m) => /did not finish within|timed out|timeout/i.test(m) || n === "TimeoutError",
+    hint: "A storage operation took too long.",
+    steps: [ "A sleeping NAS can take half a minute to wake. Wait, then try again." ] }
+];
+function errExplain(e){
+  if (!e) return null;
+  const n = String(e.name || ""), m = String(e.message || "");
+  return ERR_HELP.find(h => h.test(n, m)) || null;
+}
+function errHint(e){ const h = errExplain(e); return h ? h.hint : ""; }
+/* errText plus the plain-language reading, for anything shown to a person. */
+function humanError(e){
+  const t = errText(e), h = errHint(e);
+  return h ? t + " \u2014 " + h : t;
 }
 
 function toast(msg){
