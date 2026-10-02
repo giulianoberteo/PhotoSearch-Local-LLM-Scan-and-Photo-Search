@@ -192,9 +192,13 @@ async function selfTest(){
   }
   T.tick = () => st.note(T.pass + T.fail + " checks done so far, " + T.fail + " failed\u2026");
   const wasMock = $("#mock").checked, savedDir = S.dirHandle, savedRoles = { ...S.roles };
+  const savedIndexMode = S.indexMode, savedIndexDir = S.indexDirHandle;
+  const savedSettings = localStorage.getItem(LS);
   // Boot-time detection runs in the background and rewrites S.roles when it
   // lands. Let it finish first, or it clobbers the mock roles mid-test.
   try { if (connecting) await connecting; } catch {}
+  S.indexMode = "folder"; S.indexDirHandle = null;
+  IDX.dir = null; resetFaceState();
   $("#mock").checked = true;
   S.roles = { scan:"mock-vlm", embed:"mock-embed", chat:"auto" };
   ok("mock roles are in place for the run", S.roles.embed === "mock-embed", S.roles.embed);
@@ -1654,7 +1658,7 @@ async function selfTest(){
     ok("find_similar excludes the source photo", sim.every(x => x.rec.id !== anyRec.id));
     const cm = compact(anyRec, 0.5);
     ok("tool results stay compact", (cm.caption || "").length <= 150
-       && Object.keys(cm).length <= 8, Object.keys(cm).join(","));
+       && Object.keys(cm).length <= 9 && Array.isArray(cm.named_people), Object.keys(cm).join(","));
     const libStats = await runTool("library_stats", {});
     ok("library_stats tool answers", libStats.photos >= 1, JSON.stringify(libStats).slice(0,80));
     const ents = await runTool("list_entities", { type:"object", limit:5 });
@@ -2886,6 +2890,8 @@ async function selfTest(){
       }
     }
 
+    await consumerSelfTest(scratch);
+
     /* ---- compaction ---- */
     const c = await compactRecords();
     ok("compaction shrinks the log", c.after <= c.before, c.before + " -> " + c.after);
@@ -2903,7 +2909,8 @@ async function selfTest(){
   } finally {
     $("#mock").checked = wasMock;
     S.dirHandle = savedDir; S.roles = savedRoles;
-    saveSettings();   // the run saved its mock roles; put the real ones back
+    S.indexMode = savedIndexMode; S.indexDirHandle = savedIndexDir;
+    if (savedSettings == null) localStorage.removeItem(LS); else localStorage.setItem(LS, savedSettings);
     IDX.loaded = false;
   }
   T.tick = null;

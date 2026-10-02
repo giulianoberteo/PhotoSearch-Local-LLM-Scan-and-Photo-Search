@@ -17,6 +17,8 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
+- [0.6.9 (2026-10-02)](#069-2026-10-02)
+  - [Changed](#changed)
 - [0.6.8 (2026-10-02)](#068-2026-10-02)
   - [Added](#added)
 - [0.6.7 (2026-10-02)](#067-2026-10-02)
@@ -29,44 +31,62 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
   - [Added](#added-2)
 - [0.6.3 (2026-10-01)](#063-2026-10-01)
   - [Added](#added-3)
-  - [Changed](#changed)
+  - [Changed](#changed-1)
 - [0.6.2 (2026-10-01)](#062-2026-10-01)
   - [Added](#added-4)
-  - [Changed](#changed-1)
+  - [Changed](#changed-2)
 - [0.6.1 (2026-10-01)](#061-2026-10-01)
   - [Added](#added-5)
-  - [Changed](#changed-2)
+  - [Changed](#changed-3)
 - [0.6.0 (2026-10-01)](#060-2026-10-01)
   - [Added](#added-6)
-  - [Changed](#changed-3)
-- [0.5.4 (2026-10-01)](#054-2026-10-01)
   - [Changed](#changed-4)
+- [0.5.4 (2026-10-01)](#054-2026-10-01)
+  - [Changed](#changed-5)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed-2)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
   - [Added](#added-7)
-  - [Changed](#changed-5)
-- [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-6)
+- [0.5.1 (2026-10-01)](#051-2026-10-01)
+  - [Changed](#changed-7)
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-8)
-  - [Changed](#changed-7)
+  - [Changed](#changed-8)
   - [Fixed](#fixed-3)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-9)
-  - [Changed](#changed-8)
+  - [Changed](#changed-9)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-10)
-  - [Changed](#changed-9)
+  - [Changed](#changed-10)
   - [Fixed](#fixed-4)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
   - [Added](#added-11)
-  - [Changed](#changed-10)
+  - [Changed](#changed-11)
   - [Fixed](#fixed-5)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
   - [Added](#added-12)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.9 (2026-10-02)
+
+**Summary:** brought in the original repository's newer `main`.
+
+### Changed
+
+- Merged the original author's changes: durable people corrections, face vectors appended
+  instead of rewritten, the **Search tab** (people, place and date filters with pagination),
+  backup improvements and the consumer self-test. Both searches now exist: the Search tab and
+  the header Search field.
+- The self-test now restores the saved settings exactly as they were, which replaces the
+  0.6.6 fix for the same problem; the load-time clean-up of stray mock models stays.
+- Where the two sides edited the same documentation, the sections from both are kept. Expect
+  some overlap in `docs/` until it is tidied.
+
+[↑ Back to Index](#index)
+
 
 ## 0.6.8 (2026-10-02)
 

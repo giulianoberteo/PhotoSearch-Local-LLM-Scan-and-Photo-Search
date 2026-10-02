@@ -75,12 +75,12 @@ async function runTool(name, args){
   switch (name){
     case "search_photos": {
       const r = await searchPhotos({ ...args, signal: CHAT.abort && CHAT.abort.signal });
-      return { how:r.used, count:r.results.length,
+      return { how:r.used, filters:r.applied, count:r.results.length, total:r.total,
         results:r.results.map(x => compact(x.rec, x.score)) };
     }
     case "filter_photos": {
       const r = await searchPhotos({ ...args, query:"" });
-      return { how:r.used, count:r.results.length,
+      return { how:r.used, filters:r.applied, count:r.results.length, total:r.total,
         results:r.results.map(x => compact(x.rec, null)) };
     }
     case "list_people": {

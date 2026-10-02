@@ -33,6 +33,7 @@ mock responses and an
 scratch folder, so your real photos and index are never touched.
 
 **About 500 assertions** cover:
+**534 assertions** (479 baseline plus 55 consumer-readiness regressions) covering:
 
 - **pure logic:** Easter and occasion dates, singularisation, validation caps, enum checks
 - **`image_type` correction** from filename, EXIF, dimensions and caption
@@ -75,6 +76,23 @@ scratch folder, so your real photos and index are never touched.
 - **thumbnail rebuild:** missing ones are detected and remade, error stubs are not queued,
   orphans are reported but never deleted, and photos outside the open folder are reported
   rather than silently skipped
+
+The consumer suite in `src/js/91-consumer-selftest.js` additionally exercises persistent
+separations/rejections, one-step undo, same-photo exclusions, ambiguous-match review,
+hard name constraints, exclusions, literal quotes, duplicate-name disambiguation,
+multi-person/date/place intersections, full-result pagination, the actual Search form,
+failed-save rollback, checksum corruption, face-data restore, legacy restore, `keep=1`,
+maintenance exclusion and library identity isolation. All writes use OPFS scratch data.
+
+The runner loads a fresh build using a unique query parameter and then runs the suite
+**twice in the same page** by default. A navigation to the identical URL can leave an old
+build loaded; this is why refreshing the document explicitly matters. The optional fifth
+argument sets the number of runs. Settings are restored after the test.
+
+No connected interactive browser was available during this change. The Search screen's
+DOM and actions were exercised in isolated headless Chrome; visual appearance, real-model
+recognition precision, NAS write recovery, and a full private-library migration are not
+claimed as validated. See CONSUMER-REVIEW.md and ROADMAP.md for the remaining gates.
 
 A real HEIC decode is skipped unless you supply a sample:
 
@@ -304,6 +322,8 @@ removing the fix and confirming the suite goes red:
 | the pre-scan safety copy goes back to running silently | *the safety copy is given a progress callback*, *the progress card is already visible while it runs* |
 | the thumbnail rebuild stops calling `saveThumb` | *nothing is missing afterwards* plus a read-back throw |
 | a face row carries everything the engine returned | *no age, gender, emotion or ethnicity is ever stored* |
+| face vectors rewrite the whole file instead of appending | *adding one face writes exactly one row* (counts bytes written, not file size) |
+| face vector memory is published before the write commits | *memory is unchanged by a failed write* |
 | a saved threshold is carried straight across a meaning change | *an old threshold is not applied to ArcFace* |
 | the face plan walks with no progress callback | *the walk is given a progress callback* |
 | the People tab stops mirroring run progress | *the People tab shows how far along it is* |

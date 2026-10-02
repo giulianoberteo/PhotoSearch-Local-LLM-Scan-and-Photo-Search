@@ -1,9 +1,40 @@
 
 /* ================= the People tab =================
    Groups of faces that look alike, and a box to type a name into. The app
-   proposes nothing: a group is "Group 1" until you say otherwise. */
+   invents no names: a group is "Group 1" until you name it. Later possible
+   matches to your named people can be confirmed in the review queue. */
 
-const PUI = { open: null, picked: new Set(), mergeFrom: null };
+const PUI = { open: null, picked: new Set(), mergeFrom: null, faceLimit:80, groupLimit:60 };
+
+function renderPeopleReview(){
+  $("#peopleUndo").disabled = !FACES.undo || RUN.active || libraryMaintenance;
+  const host = $("#peopleReview"); host.textContent = "";
+  const pending = FACES.review.filter(r => FACES.faces.has(r.face_id) && findPerson(r.person_id));
+  if (!pending.length) return;
+  host.append(el("h3", null, pending.length + " possible matches to review"));
+  host.append(el("p", "hint", "These faces are not included under the suggested name until you confirm them."));
+  for (const r of pending.slice(0, 12)){
+    const p = findPerson(r.person_id), row = el("div", "row");
+    row.append(faceTile(FACES.faces.get(r.face_id)), faceTile(bestFaceOf(p)),
+      el("span", null, "Is this " + p.name + "? " + r.reason));
+    for (const [label, accept] of [["Yes, same person", true], ["No, different person", false]]){
+      const b = el("button", "btn sec", label); b.disabled = RUN.active;
+      b.onclick = async () => {
+        b.disabled = true;
+        try { await reviewFace(r.face_id, p.id, accept); rebuildDerived(); renderPeople(); }
+        catch (e){ toast(errText(e)); b.disabled = false; }
+      };
+      row.append(b);
+    }
+    host.append(row);
+  }
+  if (pending.length > 12) host.append(el("p", "hint", "More matches appear as you review these."));
+}
+$("#peopleUndo").onclick = async () => {
+  try { await undoPeopleEdit(); rebuildDerived(); renderPeople(); toast("People edit undone."); }
+  catch (e){ toast(errText(e)); }
+};
+$("#peopleFilter").oninput = () => { PUI.groupLimit = 60; renderPeople(); };
 
 /* A face tile is the photo's existing thumbnail, zoomed to the face box. No
    crops are stored: the box is kept in 0..1 so it maps onto any size, which
@@ -41,6 +72,7 @@ function groupLabel(g, i){
 }
 
 function renderPeople(){
+  renderPeopleReview();
   const box = $("#peopleBox");
   box.textContent = "";
   const all = [...FACES.people, ...FACES.clusters];
@@ -56,8 +88,8 @@ function renderPeople(){
     + FACES.clusters.length + " unnamed group"
     + (FACES.clusters.length === 1 ? "" : "s")
     + ". Type a name to label a group; it becomes searchable straight away."
-    + "  If people are mixed together, raise the strictness and re-group — it is "
-    + "instant and keeps your names.";
+    + "  If a group contains the wrong person, select their faces and move them out. "
+    + "Your corrections survive re-grouping; Undo restores the previous edit.";
   const rep = faceSizeReport();
   if (rep && rep.belowPct >= 25)
     $("#faceNote").textContent += "  " + rep.belowPct + "% of faces are smaller than the "
@@ -68,7 +100,9 @@ function renderPeople(){
       + rep.belowPct + "% below the model's 112px input.";
 
   const grid = el("div", "people");
-  all.forEach((g, i) => {
+  const filter = personKey($("#peopleFilter").value);
+  const visible = all.filter((g,i) => personKey(groupLabel(g,i)).includes(filter));
+  visible.slice(0, PUI.groupLimit).forEach((g, i) => {
     const named = !!g.name;
     const card = el("div", "pcard" + (PUI.mergeFrom === g.id ? " sel" : ""));
     const top = el("div", "top");
@@ -78,6 +112,8 @@ function renderPeople(){
     right.style.minWidth = "0";
     const inp = el("input");
     inp.type = "text";
+    inp.setAttribute("aria-label", "Name for " + groupLabel(g, i));
+    inp.disabled = RUN.active;
     inp.value = g.name || "";
     inp.placeholder = named ? "" : "Name this group…";
     inp.onchange = async () => {
@@ -86,19 +122,20 @@ function renderPeople(){
         rebuildDerived();                 // names are searchable text
         renderPeople();
         toast(inp.value ? "Named " + inp.value + "." : "Name cleared.");
-      } catch (e){ toast(humanError(e)); }
+      } catch (e){ renderPeople(); toast(humanError(e)); }
     };
     right.append(inp);
-    right.append(Object.assign(el("div", "hint"),
-      { textContent: g.face_ids.length + " face"
-        + (g.face_ids.length === 1 ? "" : "s") }));
+    const photoCount = new Set(g.face_ids.map(id => FACES.faces.get(id)?.photo_id).filter(Boolean)).size;
+    right.append(el("div", "hint", photoCount + " photos · " + g.face_ids.length + " faces"));
+    if (g.face_ids.length > photoCount)
+      right.append(el("div", "hint", "Review: more than one face in the same photo is assigned here."));
     top.append(right);
     card.append(top);
 
     const acts = el("div", "acts");
     const view = el("button", null, PUI.open === g.id ? "Hide faces" : "Show faces");
     view.onclick = () => { PUI.open = PUI.open === g.id ? null : g.id;
-      PUI.picked.clear(); renderPeople(); };
+      PUI.faceLimit = 80; PUI.picked.clear(); renderPeople(); };
     acts.append(view);
 
     const photos = el("button", null, "Photos");
@@ -125,18 +162,26 @@ function renderPeople(){
 
     if (PUI.open === g.id){
       const strip = el("div", "facestrip");
-      for (const fid of g.face_ids){
+      for (const fid of g.face_ids.slice(0, PUI.faceLimit)){
         const f = FACES.faces.get(fid);
         if (!f) continue;
         const t = faceTile(f, PUI.picked.has(fid) ? "pick" : "");
         t.title = "Select to move this face out of the group";
+        t.tabIndex = 0; t.setAttribute("role", "button");
+        t.setAttribute("aria-label", "Select face from " + (IDX.records.get(f.photo_id)?.name || "photo"));
+        t.setAttribute("aria-pressed", String(PUI.picked.has(fid)));
         t.onclick = () => {
           PUI.picked.has(fid) ? PUI.picked.delete(fid) : PUI.picked.add(fid);
           renderPeople();
         };
+        t.onkeydown = e => { if (e.key === " " || e.key === "Enter"){ e.preventDefault(); t.click(); } };
         strip.append(t);
       }
       card.append(strip);
+      if (g.face_ids.length > PUI.faceLimit){
+        const more = el("button", "btn sec", "Show more faces (" + g.face_ids.length + " total)");
+        more.onclick = () => { PUI.faceLimit += 80; renderPeople(); }; card.append(more);
+      }
       const picked = g.face_ids.filter(id => PUI.picked.has(id));
       const sp = el("div", "acts");
       const b = el("button", null, "Move " + picked.length + " out to a new group");
@@ -155,6 +200,11 @@ function renderPeople(){
     grid.append(card);
   });
   box.append(grid);
+  if (visible.length > PUI.groupLimit){
+    const more = el("button", "btn sec", "Show more groups");
+    more.onclick = () => { PUI.groupLimit += 60; renderPeople(); }; box.append(more);
+  }
+  if (!visible.length) box.append(el("p", "hint", "No groups match that name."));
 }
 
 function showPersonPhotos(g, label){
@@ -163,7 +213,15 @@ function showPersonPhotos(g, label){
     const f = FACES.faces.get(fid);
     if (f) ids.add(f.photo_id);
   }
-  const recs = [...ids].map(id => IDX.records.get(id)).filter(r => r && !r.hidden)
+  if (g.name){
+    document.querySelector('nav [data-tab="search"]').click();
+    renderSearchPeople();
+    $("#photoQuery").value = ""; $("#photoPlace").value = "";
+    $("#photoFrom").value = ""; $("#photoTo").value = "";
+    for (const input of $("#photoPeople").querySelectorAll("input")) input.checked = input.value === g.id;
+    submitPhotoSearch(); return;
+  }
+  const recs = [...ids].map(id => IDX.records.get(id)).filter(r => r && !r.deleted && !r.hidden && r.status !== "error" && !r.probe)
     .sort((a, b) => (b.date_taken || "").localeCompare(a.date_taken || ""));
   const host = $("#faceOut");
   host.textContent = "";
@@ -187,23 +245,10 @@ function renderFaceStale(){
   box.hidden = false;
   box.textContent = "";
   box.append(el("b", null, "These faces were measured the old way. "));
-  box.append(document.createTextNode(
-    "They were described without landmark alignment (" + stale.join(", ")
-    + "), which encodes the angle of the head rather than who it is — which is "
-    + "why groups mixed people together. Re-grouping cannot fix it; the faces "
-    + "have to be looked at again. Delete the face data and press Find faces."));
-  const b = el("button", "btn");
-  b.textContent = "Delete face data and start again";
-  b.style.marginTop = "8px";
-  b.onclick = async () => {
-    try {
-      await deleteAllFaceData();
-      rebuildDerived(); renderFaceStale(); renderPeople();
-      toast("Face data deleted — press Find faces.");
-    } catch (e){ toast(humanError(e)); }
-  };
-  box.append(el("div"));
-  box.append(b);
+  box.append(document.createTextNode("The stored measurements use " + stale.join(", ")
+    + ". Re-grouping is paused because they cannot be compared with the selected model. "
+    + "Back up first. Re-measure requires a complete set of stored crops; otherwise a staged migration from originals is needed. "
+    + "Existing names remain available for search and correction."));
 }
 
 /* ---- actions ---- */
@@ -273,11 +318,12 @@ $("#btnRefine").onclick = async () => {
 };
 
 $("#btnReembed").onclick = async () => {
+  if (RUN.active || libraryMaintenance){ toast("Wait for the current library operation."); return; }
   if (!FACES.faces.size){ toast("Press Find faces first."); return; }
   const host = $("#faceOut"); resetChecks(host);
   const st = step(host, "Re-measure faces");
   try {
-    const r = await reembedFromCrops(async m => { await st.note(m); });
+    const r = await withLibraryMaintenance(() => reembedFromCrops(async m => { await st.note(m); }));
     rebuildDerived(); renderFaceStale(); renderPeople();
     (r.missing ? st.warn : st.ok)(r.measured + " faces re-measured with "
       + faceEngineId() + (r.missing ? ", " + r.missing + " had no stored crop" : "")
@@ -368,8 +414,9 @@ $("#sFaceTh").onchange = async () => {
   if (!FACES.vec.ids.length) return;
   /* Instant: the vectors are already on disk, so trying a different strictness
      costs nothing and never re-reads a photo. */
-  clusterFaces();
-  await savePeople();
+  if (RUN.active || libraryMaintenance){ toast("Wait for the current library operation before re-grouping."); return; }
+  try { clusterFaces(); await savePeople(); }
+  catch (e){ toast(errText(e)); return; }
   rebuildDerived();
   renderPeople();
   toast("Re-grouped at " + faceThreshold().toFixed(2) + " — "
@@ -447,6 +494,7 @@ $("#btnFaceScan").onclick = async () => {
 };
 
 $("#btnRecluster").onclick = async () => {
+  if (RUN.active || libraryMaintenance){ toast("Wait for the current library operation before re-grouping."); return; }
   if (!FACES.loaded){ toast("Press Find faces first."); return; }
   const host = $("#faceOut"); resetChecks(host);
   const st = step(host, "Re-group");

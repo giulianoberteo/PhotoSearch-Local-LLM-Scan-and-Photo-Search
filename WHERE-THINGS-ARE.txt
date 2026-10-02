@@ -1,0 +1,28 @@
+PhotoSearch — local copies, and which is which
+==============================================
+Consolidated 2 October 2026; app at commit ee6ce51.
+
+THIS FOLDER (~/PhotoSearch) is the only active app and source workspace.
+Double-click PhotoSearch.html in this folder.
+The consumer-readiness changes and roadmap are here.
+
+~/PhotoSearch.html is a symbolic link to this folder's PhotoSearch.html, so the
+existing browser URL file:///Users/vitolicari/PhotoSearch.html opens this build.
+Rebuilds and updates here also update what that link opens. Reload an already
+open browser tab to load the new code; reconnect folders if prompted.
+
+The Desktop workspace was moved here, not copied. The older standalone app and
+PhotoSearch-dev repository were moved to the recoverable Trash folder:
+~/.Trash/PhotoSearch-before-consolidation-20261002.lVl3Zu/
+
+GitHub: https://github.com/giuvilas/Local-aiPhotos
+
+To rebuild the single file from source, in this folder:
+    python3 build.py            # writes PhotoSearch.html
+    python3 build.py --check    # fails if the committed file is out of date
+
+To bring this copy up to date later:
+    cd ~/PhotoSearch && git pull
+
+Your scanned data is NOT in here. It lives on the NAS at
+/Volumes/Photos/.photoindex/ — see docs/OPERATIONS.md.
