@@ -14,6 +14,7 @@ window.addEventListener("unhandledrejection", e => {
 
 /* ================= boot ================= */
 loadSettings();
+exclSummary();          // the summary was drawn before the saved list was read
 loadOverrideBox();
 $("#baseUrl").onchange = () => { S.baseUrl = $("#baseUrl").value.trim(); saveSettings(); };
 $("#mock").onchange = saveSettings;
