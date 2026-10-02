@@ -1,6 +1,6 @@
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.11";
+const APP_VERSION = "0.6.12";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -49,6 +49,7 @@ const S = {
   scanOrder: "newest",            // newest | oldest | path | smallest
   /* Always keep the library ROOT as the picked folder so paths stay unique and
      one index covers everything. Scope narrows only what a scan walks. */
+  scanExclude: [],                // folders left out of every scan, relative to the library root: ["2019/Screenshots/"]
   scanScope: "",                  // "" = whole library, else "Sicily/" etc.
   subfolders: [],
   /* deadlineFactor multiplies the MEASURED cost of a round trip; cap is the
@@ -96,7 +97,7 @@ function saveSettings(){
   try { localStorage.setItem(LS, JSON.stringify({
     baseUrl:S.baseUrl, roles:S.roles, scan:S.scan, date:S.date, events:S.events,
     search:S.search, ocr:S.ocr, backup:S.backup, chat:S.chat, faces:S.faces,
-    structuredMode:S.structuredMode, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
+    structuredMode:S.structuredMode, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, scanExclude:S.scanExclude, io:S.io,
     mock: $("#mock").checked })); } catch {}
 }
 function loadSettings(){
@@ -141,6 +142,7 @@ function loadSettings(){
     if (d.indexChosen) S.indexChosen = d.indexChosen;
     if (d.scanOrder) S.scanOrder = d.scanOrder;
     if (d.scanScope) S.scanScope = d.scanScope;
+    if (Array.isArray(d.scanExclude)) S.scanExclude = d.scanExclude.filter(x => typeof x === "string");
     if (d.io) S.io = { ...S.io, ...d.io };
     if (d.backup) S.backup = { ...S.backup, ...d.backup };
     if (d.mock) $("#mock").checked = true;

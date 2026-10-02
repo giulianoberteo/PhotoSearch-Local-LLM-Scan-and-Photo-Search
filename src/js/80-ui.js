@@ -184,6 +184,98 @@ async function fillScopes(){
   if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
   else { S.scanScope = ""; sel.value = ""; }
 }
+/* ---- folders to leave out ---- */
+async function exclHandle(path){
+  let h = S.dirHandle;
+  for (const part of path.split("/").filter(Boolean)) h = await h.getDirectoryHandle(part);
+  return h;
+}
+async function exclChildren(path){
+  const out = [];
+  const h = path ? await exclHandle(path) : S.dirHandle;
+  for await (const [name, ent] of h.entries()){
+    if (ent.kind !== "directory" || SKIP_DIR.has(name) || name.startsWith(".")) continue;
+    out.push(name);
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+function exclSummary(){
+  const n = S.scanExclude.length;
+  $("#exclSummary").textContent = n
+    ? n + " folder" + (n === 1 ? "" : "s") + " left out: " + S.scanExclude.map(x => x.replace(/\/$/, "")).join(", ")
+    : "Every folder is scanned.";
+}
+let exclTimer = null;
+function exclChanged(){
+  S.scanExclude.sort();
+  saveSettings(); exclSummary();
+  clearTimeout(exclTimer);
+  exclTimer = setTimeout(() => refreshPlan(), 600);   // several ticks in a row make one refresh
+}
+function exclSet(path, include){
+  const p = path + "/";
+  if (include){
+    S.scanExclude = S.scanExclude.filter(e => e !== p && !e.startsWith(p));
+  } else if (!isExcludedPath(p)){
+    S.scanExclude = S.scanExclude.filter(e => !e.startsWith(p));   // the parent now covers them
+    S.scanExclude.push(p);
+  }
+  exclChanged();
+}
+async function exclNode(host, path, name, parentOff){
+  const full = path ? path + "/" + name : name;
+  const off = isExcludedPath(full + "/");
+  const wrap = el("div");
+  const row = el("div", "exclRow" + (off ? " off" : ""));
+  const tw = el("button", "tw", "\u25B8"); tw.title = "Look inside";
+  const cb = document.createElement("input"); cb.type = "checkbox";
+  cb.checked = !off; cb.disabled = parentOff; cb.id = "excl-" + full;
+  cb.title = parentOff ? "Its parent folder is left out" : "";
+  const lab = el("label", null, name); lab.htmlFor = cb.id;
+  row.append(tw, cb, lab); wrap.append(row);
+  const kids = el("div", "exclKids"); kids.hidden = true; wrap.append(kids);
+  let loaded = false;
+  const open = async () => {
+    kids.hidden = !kids.hidden;
+    tw.textContent = kids.hidden ? "\u25B8" : "\u25BE";
+    if (kids.hidden || loaded) return;
+    loaded = true;
+    kids.textContent = "Reading\u2026";
+    try {
+      const names = await exclChildren(full);
+      kids.textContent = "";
+      if (!names.length) kids.append(el("div", "hint", "No subfolders."));
+      for (const n of names) kids.append(await exclNode(kids, full, n, !cb.checked));
+    } catch (e){ kids.textContent = humanError(e); }
+  };
+  tw.onclick = open;
+  cb.onchange = () => {
+    exclSet(full, cb.checked);
+    row.classList.toggle("off", !cb.checked);
+    for (const c of kids.querySelectorAll("input[type=checkbox]")){
+      c.disabled = !cb.checked;
+      c.checked = !isExcludedPath(c.id.slice(5) + "/");
+      c.closest(".exclRow").classList.toggle("off", !c.checked);
+    }
+  };
+  return wrap;
+}
+async function exclRender(){
+  const host = $("#exclTree"); host.textContent = "";
+  if (!S.dirHandle){ host.append(el("div", "hint", "Choose or reconnect a folder first.")); return; }
+  try {
+    for (const n of await exclChildren("")) host.append(await exclNode(host, "", n, false));
+    if (!host.firstChild) host.append(el("div", "hint", "This folder has no subfolders."));
+  } catch (e){ host.textContent = humanError(e); }
+}
+$("#btnExcl").onclick = async () => {
+  const p = $("#exclPanel");
+  p.hidden = !p.hidden;
+  if (!p.hidden) await exclRender();
+};
+$("#exclAll").onclick = () => { S.scanExclude = []; exclChanged(); exclRender(); };
+exclSummary();
+
 $("#sScope").onchange = async () => {
   S.scanScope = $("#sScope").value;
   saveSettings();
@@ -322,7 +414,8 @@ async function refreshPlan(){
       else st.note(m);
     }, sig);
     st.ok(p.total + " photos found in " + fmtDur((performance.now() - t0) / 1000)
-      + (p.counts.skippedDirs ? " (" + p.counts.skippedDirs + " hidden folders skipped)" : ""));
+      + (p.counts.skippedDirs ? " (" + p.counts.skippedDirs + " hidden folders skipped)" : "")
+      + (p.counts.excludedDirs ? " (" + p.counts.excludedDirs + " folders left out by you)" : ""));
     st = step(host, "Matching them to the index");
     await st.paint();
     if (p.moved.length){
@@ -390,6 +483,7 @@ function renderPlan(p){
   if (c.vector) bits.push(c.vector + " vector/PDF skipped");
   if (p.unreadable.length) bits.push(p.unreadable.length + " unreadable");
   if (c.skippedDirs) bits.push(c.skippedDirs + " hidden folders skipped");
+  if (c.excludedDirs) bits.push(c.excludedDirs + " folder" + (c.excludedDirs === 1 ? "" : "s") + " left out by you");
   bits.push(p.scope ? ("scope: " + p.scope + " — index holds " + p.indexTotal
     + " photos from the whole library") : "scope: whole library");
   if (RUN.vecError)

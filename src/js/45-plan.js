@@ -3,9 +3,18 @@
 const SKIP_DIR = new Set([".photoindex","@eaDir",".AppleDouble",".Trashes","#recycle",
   "$RECYCLE.BIN","System Volume Information",".Spotlight-V100",".fseventsd",".DS_Store"]);
 
-async function walk(dir, onTick, signal){
+/* A folder is left out when its path (from the library root, ending in "/") is on the
+   exclusion list or inside a listed folder. */
+function isExcludedPath(path){
+  const list = S.scanExclude || [];
+  if (!list.length) return false;
+  const p = path.endsWith("/") ? path : path + "/";
+  return list.some(e => p === e || p.startsWith(e));
+}
+async function walk(dir, onTick, signal, base){
+  base = base || "";
   const files = [];
-  const counts = { raw:0, rawPaired:0, vector:0, video:0, other:0, skippedDirs:0 };
+  const counts = { excludedDirs:0, raw:0, rawPaired:0, vector:0, video:0, other:0, skippedDirs:0 };
   async function rec(h, prefix, depth){
     if (depth > 24) return;                         // guard against pathological nesting
     const raws = [], stems = new Set();
@@ -13,6 +22,7 @@ async function walk(dir, onTick, signal){
       if (signal && signal.aborted) throw new DOMException("aborted","AbortError");
       if (ent.kind === "directory"){
         if (SKIP_DIR.has(name) || name.startsWith(".")){ counts.skippedDirs++; continue; }
+        if (isExcludedPath(base + prefix + name + "/")){ counts.excludedDirs++; continue; }
         await rec(ent, prefix + name + "/", depth + 1);
       } else {
         if (name.startsWith("._")) continue;        // AppleDouble sidecars
@@ -117,7 +127,7 @@ async function contentTag(file){
 async function buildPlan(onTick, signal){
   const { handle: scopeHandle, prefix } = await scopedRoot();
   const { files, counts } = await walk(scopeHandle, n =>
-    onTick && onTick("Walking " + (prefix || "library") + ": " + n + " images"), signal);
+    onTick && onTick("Walking " + (prefix || "library") + ": " + n + " images"), signal, prefix);
   // Paths are always stored relative to the library root so two subfolders can
   // never produce the same id for different photos.
   if (prefix) for (const f of files) f.path = prefix + f.path;
@@ -133,7 +143,7 @@ async function buildPlan(onTick, signal){
                  unreadable:[], counts, total: files.length, scope: prefix };
   /* Only records inside the scanned scope may be judged. Everything else was
      simply not looked at, and must never be reported missing or moved. */
-  const inScope = r => !prefix || (r.path || "").startsWith(prefix);
+  const inScope = r => (!prefix || (r.path || "").startsWith(prefix)) && !isExcludedPath(r.path || "");
 
   /* ---- identity matching ----
      A record is keyed by the FILE, not by where the picker happened to point.

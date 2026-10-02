@@ -342,6 +342,16 @@ async function selfTest(){
     eq("plan ignores .txt", plan.counts.other, 1);
     eq("all four are new", plan.new.length, 4);
     ok("subfolder was walked", plan.new.some(f => f.path === "sub/four.png"));
+    {
+      const keepEx = S.scanExclude;
+      try {
+        S.scanExclude = ["sub/"];
+        const px = await buildPlan();
+        eq("a folder left out is not walked", [px.total, px.counts.excludedDirs], [3, 1]);
+        ok("and its photos are not planned", !px.new.some(f => f.path.startsWith("sub/")));
+        ok("path rule covers everything inside", isExcludedPath("sub/deep/x.jpg") && !isExcludedPath("subway/x.jpg"));
+      } finally { S.scanExclude = keepEx; }
+    }
 
     await runScan(plan.new, "selftest");
     ok("all four scanned without error", RUN.errors.length === 0, RUN.errors.map(e=>e.error).join("; "));

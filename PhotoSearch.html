@@ -351,6 +351,12 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   top .3s cubic-bezier(.2,.8,.2,1),width .3s cubic-bezier(.2,.8,.2,1),
   height .3s cubic-bezier(.2,.8,.2,1),rotate .3s cubic-bezier(.2,.8,.2,1),opacity .2s}
 #vwImg.still{transition:none}
+.exclTree{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px 8px;margin-top:8px;background:var(--panel2)}
+.exclRow{display:flex;align-items:center;gap:6px;padding:2px 0;font-size:13px}
+.exclRow .tw{width:18px;border:0;background:none;color:var(--dim);cursor:pointer;padding:0;font-size:12px}
+.exclRow .tw:disabled{visibility:hidden}
+.exclRow.off label{color:var(--dim);text-decoration:line-through}
+.exclKids{margin-left:20px}
 #vwImg.zoomed{cursor:grab;touch-action:none} #vwImg.drag{cursor:grabbing}
 .vwZoom{position:absolute;bottom:18px;left:50%;translate:-50% 0;z-index:2;display:flex;align-items:center;
   gap:8px;padding:6px 12px;border-radius:99px;background:color-mix(in srgb,var(--panel) 85%,transparent);
@@ -659,6 +665,17 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
             <option value="smallest">Smallest files first</option>
           </select></div>
       </div>
+      <div class="row" style="margin-top:10px;align-items:center">
+        <button class="btn sec" id="btnExcl">Choose folders to leave out&hellip;</button>
+        <span class="hint" id="exclSummary" style="margin:0"></span>
+      </div>
+      <div id="exclPanel" hidden>
+        <div class="hint">Untick a folder to leave it, and everything inside it, out of every scan. Photos already
+          in the index from a folder you leave out stay searchable; they are just no longer checked or rescanned.
+          Click &#9656; to look inside a folder.</div>
+        <div id="exclTree" class="exclTree"></div>
+        <div class="row" style="margin-top:8px"><button class="btn sec" id="exclAll">Include everything</button></div>
+      </div>
       <div class="hint" id="indexWhere"></div>
       <div class="hint">Photos are identified by the file itself, not by where you point the
         picker, so you can scan a subfolder today and the whole library tomorrow and still end
@@ -796,7 +813,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.11";
+const APP_VERSION = "0.6.12";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -845,6 +862,7 @@ const S = {
   scanOrder: "newest",            // newest | oldest | path | smallest
   /* Always keep the library ROOT as the picked folder so paths stay unique and
      one index covers everything. Scope narrows only what a scan walks. */
+  scanExclude: [],                // folders left out of every scan, relative to the library root: ["2019/Screenshots/"]
   scanScope: "",                  // "" = whole library, else "Sicily/" etc.
   subfolders: [],
   /* deadlineFactor multiplies the MEASURED cost of a round trip; cap is the
@@ -892,7 +910,7 @@ function saveSettings(){
   try { localStorage.setItem(LS, JSON.stringify({
     baseUrl:S.baseUrl, roles:S.roles, scan:S.scan, date:S.date, events:S.events,
     search:S.search, ocr:S.ocr, backup:S.backup, chat:S.chat, faces:S.faces,
-    structuredMode:S.structuredMode, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, io:S.io,
+    structuredMode:S.structuredMode, indexMode:S.indexMode, indexChosen:S.indexChosen, scanOrder:S.scanOrder, scanScope:S.scanScope, scanExclude:S.scanExclude, io:S.io,
     mock: $("#mock").checked })); } catch {}
 }
 function loadSettings(){
@@ -937,6 +955,7 @@ function loadSettings(){
     if (d.indexChosen) S.indexChosen = d.indexChosen;
     if (d.scanOrder) S.scanOrder = d.scanOrder;
     if (d.scanScope) S.scanScope = d.scanScope;
+    if (Array.isArray(d.scanExclude)) S.scanExclude = d.scanExclude.filter(x => typeof x === "string");
     if (d.io) S.io = { ...S.io, ...d.io };
     if (d.backup) S.backup = { ...S.backup, ...d.backup };
     if (d.mock) $("#mock").checked = true;
@@ -3226,9 +3245,18 @@ async function restoreIndexBackup(name, onProgress){
 const SKIP_DIR = new Set([".photoindex","@eaDir",".AppleDouble",".Trashes","#recycle",
   "$RECYCLE.BIN","System Volume Information",".Spotlight-V100",".fseventsd",".DS_Store"]);
 
-async function walk(dir, onTick, signal){
+/* A folder is left out when its path (from the library root, ending in "/") is on the
+   exclusion list or inside a listed folder. */
+function isExcludedPath(path){
+  const list = S.scanExclude || [];
+  if (!list.length) return false;
+  const p = path.endsWith("/") ? path : path + "/";
+  return list.some(e => p === e || p.startsWith(e));
+}
+async function walk(dir, onTick, signal, base){
+  base = base || "";
   const files = [];
-  const counts = { raw:0, rawPaired:0, vector:0, video:0, other:0, skippedDirs:0 };
+  const counts = { excludedDirs:0, raw:0, rawPaired:0, vector:0, video:0, other:0, skippedDirs:0 };
   async function rec(h, prefix, depth){
     if (depth > 24) return;                         // guard against pathological nesting
     const raws = [], stems = new Set();
@@ -3236,6 +3264,7 @@ async function walk(dir, onTick, signal){
       if (signal && signal.aborted) throw new DOMException("aborted","AbortError");
       if (ent.kind === "directory"){
         if (SKIP_DIR.has(name) || name.startsWith(".")){ counts.skippedDirs++; continue; }
+        if (isExcludedPath(base + prefix + name + "/")){ counts.excludedDirs++; continue; }
         await rec(ent, prefix + name + "/", depth + 1);
       } else {
         if (name.startsWith("._")) continue;        // AppleDouble sidecars
@@ -3340,7 +3369,7 @@ async function contentTag(file){
 async function buildPlan(onTick, signal){
   const { handle: scopeHandle, prefix } = await scopedRoot();
   const { files, counts } = await walk(scopeHandle, n =>
-    onTick && onTick("Walking " + (prefix || "library") + ": " + n + " images"), signal);
+    onTick && onTick("Walking " + (prefix || "library") + ": " + n + " images"), signal, prefix);
   // Paths are always stored relative to the library root so two subfolders can
   // never produce the same id for different photos.
   if (prefix) for (const f of files) f.path = prefix + f.path;
@@ -3356,7 +3385,7 @@ async function buildPlan(onTick, signal){
                  unreadable:[], counts, total: files.length, scope: prefix };
   /* Only records inside the scanned scope may be judged. Everything else was
      simply not looked at, and must never be reported missing or moved. */
-  const inScope = r => !prefix || (r.path || "").startsWith(prefix);
+  const inScope = r => (!prefix || (r.path || "").startsWith(prefix)) && !isExcludedPath(r.path || "");
 
   /* ---- identity matching ----
      A record is keyed by the FILE, not by where the picker happened to point.
@@ -5436,6 +5465,98 @@ async function fillScopes(){
   if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
   else { S.scanScope = ""; sel.value = ""; }
 }
+/* ---- folders to leave out ---- */
+async function exclHandle(path){
+  let h = S.dirHandle;
+  for (const part of path.split("/").filter(Boolean)) h = await h.getDirectoryHandle(part);
+  return h;
+}
+async function exclChildren(path){
+  const out = [];
+  const h = path ? await exclHandle(path) : S.dirHandle;
+  for await (const [name, ent] of h.entries()){
+    if (ent.kind !== "directory" || SKIP_DIR.has(name) || name.startsWith(".")) continue;
+    out.push(name);
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+function exclSummary(){
+  const n = S.scanExclude.length;
+  $("#exclSummary").textContent = n
+    ? n + " folder" + (n === 1 ? "" : "s") + " left out: " + S.scanExclude.map(x => x.replace(/\/$/, "")).join(", ")
+    : "Every folder is scanned.";
+}
+let exclTimer = null;
+function exclChanged(){
+  S.scanExclude.sort();
+  saveSettings(); exclSummary();
+  clearTimeout(exclTimer);
+  exclTimer = setTimeout(() => refreshPlan(), 600);   // several ticks in a row make one refresh
+}
+function exclSet(path, include){
+  const p = path + "/";
+  if (include){
+    S.scanExclude = S.scanExclude.filter(e => e !== p && !e.startsWith(p));
+  } else if (!isExcludedPath(p)){
+    S.scanExclude = S.scanExclude.filter(e => !e.startsWith(p));   // the parent now covers them
+    S.scanExclude.push(p);
+  }
+  exclChanged();
+}
+async function exclNode(host, path, name, parentOff){
+  const full = path ? path + "/" + name : name;
+  const off = isExcludedPath(full + "/");
+  const wrap = el("div");
+  const row = el("div", "exclRow" + (off ? " off" : ""));
+  const tw = el("button", "tw", "\u25B8"); tw.title = "Look inside";
+  const cb = document.createElement("input"); cb.type = "checkbox";
+  cb.checked = !off; cb.disabled = parentOff; cb.id = "excl-" + full;
+  cb.title = parentOff ? "Its parent folder is left out" : "";
+  const lab = el("label", null, name); lab.htmlFor = cb.id;
+  row.append(tw, cb, lab); wrap.append(row);
+  const kids = el("div", "exclKids"); kids.hidden = true; wrap.append(kids);
+  let loaded = false;
+  const open = async () => {
+    kids.hidden = !kids.hidden;
+    tw.textContent = kids.hidden ? "\u25B8" : "\u25BE";
+    if (kids.hidden || loaded) return;
+    loaded = true;
+    kids.textContent = "Reading\u2026";
+    try {
+      const names = await exclChildren(full);
+      kids.textContent = "";
+      if (!names.length) kids.append(el("div", "hint", "No subfolders."));
+      for (const n of names) kids.append(await exclNode(kids, full, n, !cb.checked));
+    } catch (e){ kids.textContent = humanError(e); }
+  };
+  tw.onclick = open;
+  cb.onchange = () => {
+    exclSet(full, cb.checked);
+    row.classList.toggle("off", !cb.checked);
+    for (const c of kids.querySelectorAll("input[type=checkbox]")){
+      c.disabled = !cb.checked;
+      c.checked = !isExcludedPath(c.id.slice(5) + "/");
+      c.closest(".exclRow").classList.toggle("off", !c.checked);
+    }
+  };
+  return wrap;
+}
+async function exclRender(){
+  const host = $("#exclTree"); host.textContent = "";
+  if (!S.dirHandle){ host.append(el("div", "hint", "Choose or reconnect a folder first.")); return; }
+  try {
+    for (const n of await exclChildren("")) host.append(await exclNode(host, "", n, false));
+    if (!host.firstChild) host.append(el("div", "hint", "This folder has no subfolders."));
+  } catch (e){ host.textContent = humanError(e); }
+}
+$("#btnExcl").onclick = async () => {
+  const p = $("#exclPanel");
+  p.hidden = !p.hidden;
+  if (!p.hidden) await exclRender();
+};
+$("#exclAll").onclick = () => { S.scanExclude = []; exclChanged(); exclRender(); };
+exclSummary();
+
 $("#sScope").onchange = async () => {
   S.scanScope = $("#sScope").value;
   saveSettings();
@@ -5574,7 +5695,8 @@ async function refreshPlan(){
       else st.note(m);
     }, sig);
     st.ok(p.total + " photos found in " + fmtDur((performance.now() - t0) / 1000)
-      + (p.counts.skippedDirs ? " (" + p.counts.skippedDirs + " hidden folders skipped)" : ""));
+      + (p.counts.skippedDirs ? " (" + p.counts.skippedDirs + " hidden folders skipped)" : "")
+      + (p.counts.excludedDirs ? " (" + p.counts.excludedDirs + " folders left out by you)" : ""));
     st = step(host, "Matching them to the index");
     await st.paint();
     if (p.moved.length){
@@ -5642,6 +5764,7 @@ function renderPlan(p){
   if (c.vector) bits.push(c.vector + " vector/PDF skipped");
   if (p.unreadable.length) bits.push(p.unreadable.length + " unreadable");
   if (c.skippedDirs) bits.push(c.skippedDirs + " hidden folders skipped");
+  if (c.excludedDirs) bits.push(c.excludedDirs + " folder" + (c.excludedDirs === 1 ? "" : "s") + " left out by you");
   bits.push(p.scope ? ("scope: " + p.scope + " — index holds " + p.indexTotal
     + " photos from the whole library") : "scope: whole library");
   if (RUN.vecError)
@@ -10404,6 +10527,16 @@ async function selfTest(){
     eq("plan ignores .txt", plan.counts.other, 1);
     eq("all four are new", plan.new.length, 4);
     ok("subfolder was walked", plan.new.some(f => f.path === "sub/four.png"));
+    {
+      const keepEx = S.scanExclude;
+      try {
+        S.scanExclude = ["sub/"];
+        const px = await buildPlan();
+        eq("a folder left out is not walked", [px.total, px.counts.excludedDirs], [3, 1]);
+        ok("and its photos are not planned", !px.new.some(f => f.path.startsWith("sub/")));
+        ok("path rule covers everything inside", isExcludedPath("sub/deep/x.jpg") && !isExcludedPath("subway/x.jpg"));
+      } finally { S.scanExclude = keepEx; }
+    }
 
     await runScan(plan.new, "selftest");
     ok("all four scanned without error", RUN.errors.length === 0, RUN.errors.map(e=>e.error).join("; "));
