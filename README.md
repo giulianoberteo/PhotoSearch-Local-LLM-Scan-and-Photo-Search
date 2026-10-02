@@ -75,8 +75,6 @@ needed. Where each piece of data lives is spelled out in
 The current version is shown in the app's footer; the [ChangeLog](ChangeLog.md) says what changed and when.
 
 ## Index
-
-## Index
 <!-- index:start -->
 - [At a glance](#at-a-glance)
 - [Quick start](#quick-start)
