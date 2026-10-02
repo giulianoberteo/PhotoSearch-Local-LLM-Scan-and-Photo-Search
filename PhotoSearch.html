@@ -377,6 +377,10 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   gap:8px;padding:6px 12px;border-radius:99px;background:color-mix(in srgb,var(--panel) 85%,transparent);
   border:1px solid var(--line);backdrop-filter:blur(12px);opacity:0;transition:opacity .25s}
 #viewer.on .vwZoom{opacity:1}
+.vwStatus{position:absolute;bottom:62px;left:50%;translate:-50% 0;z-index:2;max-width:min(560px,90%);padding:6px 12px;
+  border-radius:12px;font-size:12px;background:color-mix(in srgb,var(--panel) 85%,transparent);border:1px solid var(--line);
+  backdrop-filter:blur(12px)}
+#viewer.info .vwStatus{left:calc((100% - 320px)/2)}
 #viewer.info .vwZoom{left:calc((100% - 320px)/2)}
 .vwZoom button{border:0;background:none;color:var(--text);font:inherit;cursor:pointer;min-width:26px;height:26px;border-radius:50%}
 .vwZoom button:hover{background:color-mix(in srgb,var(--text) 14%,transparent)}
@@ -803,6 +807,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   <img id="vwImg" alt="" draggable="false">
   <button class="vwNav" id="vwPrev" title="Previous (&larr;)" aria-label="Previous">&#8249;</button>
   <button class="vwNav" id="vwNext" title="Next (&rarr;)" aria-label="Next">&#8250;</button>
+  <div class="vwStatus" id="vwStatus" role="status" hidden></div>
   <div class="vwZoom" id="vwZoom" title="Scroll or pinch to zoom, drag to pan, double-click to toggle">
     <button id="vwZm" aria-label="Zoom out">&minus;</button>
     <input type="range" id="vwZr" min="100" max="800" step="1" value="100" aria-label="Zoom">
@@ -831,7 +836,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.20";
+const APP_VERSION = "0.6.21";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -7568,6 +7573,7 @@ function vwFill(r){
   const meta = $("#vwMeta"); meta.textContent = "";
   meta.append(metaList(r));
   $("#vwNote").textContent = "";
+  $("#vwStatus").hidden = true;
   $("#vwRemove").textContent = GAL.view === "removed" ? "Restore" : "Remove";
   vwHeart();
   $("#vwPrev").disabled = VW.i <= 0;
@@ -7577,7 +7583,13 @@ function vwFill(r){
 /* The stored thumbnail is on screen the instant the viewer opens; the original
    replaces it once it has decoded, in the same box, so nothing jumps. */
 async function vwLoadOriginal(r, tok){
-  const note = t => { if (tok === VW.tok) $("#vwNote").textContent = t; };
+  /* Shown over the photo as well as in the Info panel: when this is the
+     thumbnail, zooming is blurry and the reason has to be visible. */
+  const note = t => {
+    if (tok !== VW.tok) return;
+    $("#vwNote").textContent = t;
+    const st = $("#vwStatus"); st.textContent = t; st.hidden = !t;
+  };
   try {
     const f = await fileByPath(r.path);
     if (!f){

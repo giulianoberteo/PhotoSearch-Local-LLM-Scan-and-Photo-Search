@@ -523,6 +523,7 @@ function vwFill(r){
   const meta = $("#vwMeta"); meta.textContent = "";
   meta.append(metaList(r));
   $("#vwNote").textContent = "";
+  $("#vwStatus").hidden = true;
   $("#vwRemove").textContent = GAL.view === "removed" ? "Restore" : "Remove";
   vwHeart();
   $("#vwPrev").disabled = VW.i <= 0;
@@ -532,7 +533,13 @@ function vwFill(r){
 /* The stored thumbnail is on screen the instant the viewer opens; the original
    replaces it once it has decoded, in the same box, so nothing jumps. */
 async function vwLoadOriginal(r, tok){
-  const note = t => { if (tok === VW.tok) $("#vwNote").textContent = t; };
+  /* Shown over the photo as well as in the Info panel: when this is the
+     thumbnail, zooming is blurry and the reason has to be visible. */
+  const note = t => {
+    if (tok !== VW.tok) return;
+    $("#vwNote").textContent = t;
+    const st = $("#vwStatus"); st.textContent = t; st.hidden = !t;
+  };
   try {
     const f = await fileByPath(r.path);
     if (!f){
