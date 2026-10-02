@@ -48,9 +48,19 @@ def render(text):
         a, b = lines.index(START), lines.index(END)
         lines[a + 1:b] = []
     else:
-        first = next((h for h in headings(lines) if h[2] != "Index"), None)
-        at = first[0] if first else len(lines)
-        lines[at:at] = ["## Index", START, END, ""]
+        # An "## Index" heading already written by hand must be ADOPTED, not
+        # duplicated. Searching for the first heading that is not named Index
+        # lands the insertion point just after it, which is how four files in
+        # the upstream fork came to carry two consecutive "## Index" headings.
+        # --check cannot notice, because it is a fixed-point test: once the
+        # duplicate exists, rendering is stable forever.
+        existing = next((h for h in headings(lines) if h[2] == "Index" and h[1] == 2), None)
+        if existing:
+            lines[existing[0] + 1:existing[0] + 1] = [START, END, ""]
+        else:
+            first = next((h for h in headings(lines) if h[2] != "Index"), None)
+            at = first[0] if first else len(lines)
+            lines[at:at] = ["## Index", START, END, ""]
 
     hs = [h for h in headings(lines) if h[2] != "Index"]
     seen = {"index": 1}
@@ -94,6 +104,11 @@ def main():
     check = "--check" in sys.argv
     stale = []
     for f in FILES:
+        if not f.exists():
+            # Governed-but-absent is a normal state (a repo may not have a
+            # ChangeLog yet). Say so and carry on rather than dying.
+            print("skipped (missing): %s" % f.relative_to(ROOT))
+            continue
         old = f.read_text()
         new = render(old)
         if new != old:

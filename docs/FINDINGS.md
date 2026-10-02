@@ -11,8 +11,6 @@ does about it. For how the pieces fit together, see [ARCHITECTURE.md](ARCHITECTU
 runtime, `qwen3.5-9b-mlx` (4-bit), and `text-embedding-nomic-embed-text-v1.5`.
 
 ## Index
-
-## Index
 <!-- index:start -->
 - [1. Structured output suppresses reasoning](#1-structured-output-suppresses-reasoning)
   - [What does *not* work in LM Studio 0.4.12](#what-does-not-work-in-lm-studio-0412)
