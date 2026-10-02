@@ -15,6 +15,8 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
+- [0.6.21 (2026-10-02)](#0621-2026-10-02)
+  - [Fixed](#fixed)
 - [0.6.20 (2026-10-02)](#0620-2026-10-02)
   - [Changed](#changed)
 - [0.6.19 (2026-10-02)](#0619-2026-10-02)
@@ -22,11 +24,11 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 - [0.6.18 (2026-10-02)](#0618-2026-10-02)
   - [Added](#added)
 - [0.6.17 (2026-10-02)](#0617-2026-10-02)
-  - [Fixed](#fixed)
+  - [Fixed](#fixed-1)
 - [0.6.16 (2026-10-02)](#0616-2026-10-02)
   - [Added](#added-1)
 - [0.6.15 (2026-10-02)](#0615-2026-10-02)
-  - [Fixed](#fixed-1)
+  - [Fixed](#fixed-2)
 - [0.6.14 (2026-10-02)](#0614-2026-10-02)
   - [Changed](#changed-2)
 - [0.6.13 (2026-10-02)](#0613-2026-10-02)
@@ -42,9 +44,9 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 - [0.6.8 (2026-10-02)](#068-2026-10-02)
   - [Added](#added-4)
 - [0.6.7 (2026-10-02)](#067-2026-10-02)
-  - [Fixed](#fixed-2)
-- [0.6.6 (2026-10-02)](#066-2026-10-02)
   - [Fixed](#fixed-3)
+- [0.6.6 (2026-10-02)](#066-2026-10-02)
+  - [Fixed](#fixed-4)
 - [0.6.5 (2026-10-02)](#065-2026-10-02)
   - [Added](#added-5)
 - [0.6.4 (2026-10-02)](#064-2026-10-02)
@@ -64,7 +66,7 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 - [0.5.4 (2026-10-01)](#054-2026-10-01)
   - [Changed](#changed-10)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
-  - [Fixed](#fixed-4)
+  - [Fixed](#fixed-5)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
   - [Added](#added-11)
   - [Changed](#changed-11)
@@ -73,22 +75,35 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
   - [Added](#added-12)
   - [Changed](#changed-13)
-  - [Fixed](#fixed-5)
+  - [Fixed](#fixed-6)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
   - [Added](#added-13)
   - [Changed](#changed-14)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
   - [Added](#added-14)
   - [Changed](#changed-15)
-  - [Fixed](#fixed-6)
+  - [Fixed](#fixed-7)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
   - [Added](#added-15)
   - [Changed](#changed-16)
-  - [Fixed](#fixed-7)
+  - [Fixed](#fixed-8)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
   - [Added](#added-16)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.21 (2026-10-02)
+
+**Summary:** the viewer now says why zooming is not showing the full-resolution photo.
+
+### Fixed
+
+- The viewer's "original not reachable" and "loading the full-size picture" messages were
+  only in the Info panel, so with it closed, zooming into a thumbnail gave no explanation.
+  They now appear over the photo as well.
+
+[↑ Back to Index](#index)
+
 
 ## 0.6.20 (2026-10-02)
 

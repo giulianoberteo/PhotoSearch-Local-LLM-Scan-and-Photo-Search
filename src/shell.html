@@ -377,6 +377,10 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   gap:8px;padding:6px 12px;border-radius:99px;background:color-mix(in srgb,var(--panel) 85%,transparent);
   border:1px solid var(--line);backdrop-filter:blur(12px);opacity:0;transition:opacity .25s}
 #viewer.on .vwZoom{opacity:1}
+.vwStatus{position:absolute;bottom:62px;left:50%;translate:-50% 0;z-index:2;max-width:min(560px,90%);padding:6px 12px;
+  border-radius:12px;font-size:12px;background:color-mix(in srgb,var(--panel) 85%,transparent);border:1px solid var(--line);
+  backdrop-filter:blur(12px)}
+#viewer.info .vwStatus{left:calc((100% - 320px)/2)}
 #viewer.info .vwZoom{left:calc((100% - 320px)/2)}
 .vwZoom button{border:0;background:none;color:var(--text);font:inherit;cursor:pointer;min-width:26px;height:26px;border-radius:50%}
 .vwZoom button:hover{background:color-mix(in srgb,var(--text) 14%,transparent)}
@@ -803,6 +807,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
   <img id="vwImg" alt="" draggable="false">
   <button class="vwNav" id="vwPrev" title="Previous (&larr;)" aria-label="Previous">&#8249;</button>
   <button class="vwNav" id="vwNext" title="Next (&rarr;)" aria-label="Next">&#8250;</button>
+  <div class="vwStatus" id="vwStatus" role="status" hidden></div>
   <div class="vwZoom" id="vwZoom" title="Scroll or pinch to zoom, drag to pan, double-click to toggle">
     <button id="vwZm" aria-label="Zoom out">&minus;</button>
     <input type="range" id="vwZr" min="100" max="800" step="1" value="100" aria-label="Zoom">
