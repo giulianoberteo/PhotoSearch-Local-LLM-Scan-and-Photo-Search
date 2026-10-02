@@ -818,7 +818,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.16";
+const APP_VERSION = "0.6.17";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -5676,21 +5676,26 @@ async function refreshPlan(){
   planAbort = new AbortController();
   const sig = planAbort.signal;
   resetChecks(host);
-  const where = S.indexMode === "custom" && S.indexDirHandle
-    ? S.indexDirHandle.name + "/.photoindex" : S.dirHandle.name + "/.photoindex";
+  const custom = S.indexMode === "custom";
+  const idxName = custom ? (S.indexDirHandle ? S.indexDirHandle.name : "(not connected)") : S.dirHandle.name;
+  const where = idxName + "/.photoindex" + (custom ? "  \u2014 the index folder you chose" : "  \u2014 beside the photos");
   checksBox(host).append(Object.assign(el("div","hint"), { textContent:
-    "Checking '" + S.dirHandle.name + (S.scanScope ? "/" + S.scanScope : "") + "' against the index in "
-    + where + ". This only reads: nothing is scanned, sent to a model or changed until you press a scan button." }));
+    "Checking photos in '" + S.dirHandle.name + (S.scanExclude.length ? "' (" + S.scanExclude.length + " folders left out)" : "'")
+    + (S.scanScope ? ", scope " + S.scanScope : "") + " against the index in " + where
+    + ". This only reads: nothing is scanned, sent to a model or changed until you press a scan button." }));
   let st = step(host, "Opening the index");
   try {
     if (!S.models.length && !$("#mock").checked){
       await st.note("Detecting models\u2026");
       await autoConnect();
     }
+    if (custom && !S.indexDirHandle && !await ensureIndexConnected())
+      throw new Error("Your index folder is not connected. Chrome drops folder access when the page reloads: "
+        + "press \u201cChoose where to save the DB\u2026\u201d in Settings and pick it again, or reconnect it from there.");
     await ensureIndex(null, { write:false });
     await st.note("Waking the drive\u2026");
     await wakeStorage(m => st.note(m));
-    st.ok(where);
+    st.ok(((await indexParent()).name) + "/.photoindex" + (custom ? "  \u2014 the index folder you chose" : "  \u2014 beside the photos"));
     if (!IDX.loaded){
       st = step(host, "Loading what is already in the index");
       await loadRecords((pct, n) => st.note("Reading records\u2026 " + pct + "% (" + n + " so far)"));
