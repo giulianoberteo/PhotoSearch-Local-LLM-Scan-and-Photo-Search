@@ -144,7 +144,30 @@ async function useDirectory(handle){
   await refreshPlan();
   refreshActiveTab();
 }
+/* Says, in one place, where the index is RIGHT NOW. The browser only hands over folder
+   names, never full paths, so this is the name of the folder that holds .photoindex. */
+async function renderIndexNow(){
+  const box = $("#idxNow");
+  if (!box) return;
+  box.textContent = "";
+  let parent = null;
+  try { parent = await indexParent(); } catch {}
+  if (!parent){
+    box.append(el("b", null, "No index location yet. "),
+      document.createTextNode(S.indexMode === "custom"
+        ? "Choose where to save the DB, or reconnect the index folder."
+        : "Choose a photo folder; the index will sit inside it."));
+    return;
+  }
+  const custom = S.indexMode === "custom";
+  box.append(el("b", null, "Index right now: "), document.createTextNode(parent.name + "/.photoindex"));
+  box.append(el("div", "hint", (custom ? "A folder you chose for the index" : "Beside the photos, inside the connected photo folder '"
+    + (S.dirHandle ? S.dirHandle.name : "?") + "'")
+    + (IDX.records.size ? " \u00b7 " + IDX.records.size + " photos recorded" : "")
+    + ". Chrome shares folder names, not full paths: to find it in Finder, search for the name above, then press Cmd+Shift+. to show hidden folders."));
+}
 function renderIndexWhere(){
+  renderIndexNow();
   const n = $("#indexWhere");
   const where = S.indexMode === "custom"
     ? (S.indexDirHandle ? S.indexDirHandle.name : null)
@@ -797,6 +820,43 @@ $("#btnStop").onclick = () => {
   toast("Stopping… progress is saved and resumable.");
 };
 
+/* ---- move the index ---- */
+$("#btnIndexMove").onclick = async () => {
+  if (RUN.active){ toast("Wait for the scan to finish before moving the index."); return; }
+  if (!(await ensureIndexConnected()) || !(await ensureConnected("the move"))) return;
+  let dest;
+  try { await ensureIndex(null, { write:false }); dest = await pickDirectory(); }
+  catch (e){
+    if (e.name === "AbortError") return;
+    if (isPickerStuck(e)){ offerPickerReset(); return; }
+    toast(humanError(e)); return;
+  }
+  const host = $("#fsOut"); resetChecks(host);
+  let cur = null;
+  try { cur = await indexParent(); } catch {}
+  try { if (cur && await cur.isSameEntry(dest)){ toast("The index is already in " + dest.name + "."); return; } } catch {}
+  const rec = IDX.records.size;
+  if (!confirm("Move the index to '" + dest.name + "/.photoindex'?\n\n"
+      + "From: " + (cur ? cur.name : "?") + "/.photoindex  (" + rec + " photos recorded)\n"
+      + "To:   " + dest.name + "/.photoindex\n\n"
+      + "The index is copied, checked, and only then switched over. The old copy is left where it is, "
+      + "so nothing is lost; delete it yourself once you are happy. Your photos are not touched.\n\n"
+      + "If '" + dest.name + "' is not the folder you meant (the macOS picker returns a highlighted "
+      + "subfolder), press Cancel and choose again.")) return;
+  const btn = $("#btnIndexMove"); btn.disabled = true;
+  const st = step(host, "Moving the index to " + dest.name);
+  try {
+    const r = await withLibraryMaintenance(() => moveIndexTo(dest, m => st.note(m), { thumbs:true }));
+    st.ok(r.records + " photos recorded, " + (r.bytes / 1048576).toFixed(1) + " MB of index files copied. "
+      + "The old copy in " + (cur ? cur.name : "the old folder") + " is untouched.");
+    renderIndexWhere();
+    toast("Index moved to " + dest.name + "/.photoindex");
+    await refreshPlan();
+  } catch (e){
+    st.err(humanError(e) + " Nothing was switched: the index is still where it was.");
+  }
+  btn.disabled = false;
+};
 $("#btnIndexReveal").onclick = async () => {
   if (!(await ensureIndexConnected()) || !(await ensureConnected("the index listing"))) return;
   const host = $("#fsOut"); resetChecks(host);

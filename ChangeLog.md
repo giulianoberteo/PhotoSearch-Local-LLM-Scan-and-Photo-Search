@@ -15,10 +15,12 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 
 ## Index
 <!-- index:start -->
+- [0.6.18 (2026-10-02)](#0618-2026-10-02)
+  - [Added](#added)
 - [0.6.17 (2026-10-02)](#0617-2026-10-02)
   - [Fixed](#fixed)
 - [0.6.16 (2026-10-02)](#0616-2026-10-02)
-  - [Added](#added)
+  - [Added](#added-1)
 - [0.6.15 (2026-10-02)](#0615-2026-10-02)
   - [Fixed](#fixed-1)
 - [0.6.14 (2026-10-02)](#0614-2026-10-02)
@@ -26,63 +28,80 @@ The current version is shown in the app's footer and is defined as `APP_VERSION`
 - [0.6.13 (2026-10-02)](#0613-2026-10-02)
   - [Changed](#changed-1)
 - [0.6.12 (2026-10-02)](#0612-2026-10-02)
-  - [Added](#added-1)
-- [0.6.11 (2026-10-02)](#0611-2026-10-02)
   - [Added](#added-2)
+- [0.6.11 (2026-10-02)](#0611-2026-10-02)
+  - [Added](#added-3)
 - [0.6.10 (2026-10-02)](#0610-2026-10-02)
   - [Changed](#changed-2)
 - [0.6.9 (2026-10-02)](#069-2026-10-02)
   - [Changed](#changed-3)
 - [0.6.8 (2026-10-02)](#068-2026-10-02)
-  - [Added](#added-3)
+  - [Added](#added-4)
 - [0.6.7 (2026-10-02)](#067-2026-10-02)
   - [Fixed](#fixed-2)
 - [0.6.6 (2026-10-02)](#066-2026-10-02)
   - [Fixed](#fixed-3)
 - [0.6.5 (2026-10-02)](#065-2026-10-02)
-  - [Added](#added-4)
-- [0.6.4 (2026-10-02)](#064-2026-10-02)
   - [Added](#added-5)
-- [0.6.3 (2026-10-01)](#063-2026-10-01)
+- [0.6.4 (2026-10-02)](#064-2026-10-02)
   - [Added](#added-6)
+- [0.6.3 (2026-10-01)](#063-2026-10-01)
+  - [Added](#added-7)
   - [Changed](#changed-4)
 - [0.6.2 (2026-10-01)](#062-2026-10-01)
-  - [Added](#added-7)
+  - [Added](#added-8)
   - [Changed](#changed-5)
 - [0.6.1 (2026-10-01)](#061-2026-10-01)
-  - [Added](#added-8)
+  - [Added](#added-9)
   - [Changed](#changed-6)
 - [0.6.0 (2026-10-01)](#060-2026-10-01)
-  - [Added](#added-9)
+  - [Added](#added-10)
   - [Changed](#changed-7)
 - [0.5.4 (2026-10-01)](#054-2026-10-01)
   - [Changed](#changed-8)
 - [0.5.3 (2026-10-01)](#053-2026-10-01)
   - [Fixed](#fixed-4)
 - [0.5.2 (2026-10-01)](#052-2026-10-01)
-  - [Added](#added-10)
+  - [Added](#added-11)
   - [Changed](#changed-9)
 - [0.5.1 (2026-10-01)](#051-2026-10-01)
   - [Changed](#changed-10)
 - [0.5.0 (2026-10-01)](#050-2026-10-01)
-  - [Added](#added-11)
+  - [Added](#added-12)
   - [Changed](#changed-11)
   - [Fixed](#fixed-5)
 - [0.4.0 (2026-10-01)](#040-2026-10-01)
-  - [Added](#added-12)
+  - [Added](#added-13)
   - [Changed](#changed-12)
 - [0.3.0 (2026-09-30)](#030-2026-09-30)
-  - [Added](#added-13)
+  - [Added](#added-14)
   - [Changed](#changed-13)
   - [Fixed](#fixed-6)
 - [0.2.0 (2026-09-29)](#020-2026-09-29)
-  - [Added](#added-14)
+  - [Added](#added-15)
   - [Changed](#changed-14)
   - [Fixed](#fixed-7)
 - [0.1.0 (2026-09-23)](#010-2026-09-23)
-  - [Added](#added-15)
+  - [Added](#added-16)
   - [Fixed (in the days that followed, before 0.2.0)](#fixed-in-the-days-that-followed-before-020)
 <!-- index:end -->
+
+## 0.6.18 (2026-10-02)
+
+**Summary:** see where the index is, and move it.
+
+### Added
+
+- **Index right now** in Settings: the folder that holds `.photoindex`, whether it is beside
+  the photos or a folder you chose, and how many photos it records.
+- **Move the index…** copies the index (records, vectors, faces, settings files, place names
+  and the thumbnails) into a folder you pick, checks the copy, and only then switches over.
+  The old copy is left in place, never deleted, and your photos are not touched. Choosing the
+  photo folder itself puts the index back "beside the photos". The confirmation names both
+  folders so a wrong pick in the macOS dialog can be caught before anything is copied.
+
+[↑ Back to Index](#index)
+
 
 ## 0.6.17 (2026-10-02)
 
