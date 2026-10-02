@@ -233,6 +233,15 @@ footer{position:fixed;bottom:0;left:0;right:0;display:flex;gap:18px;align-items:
 #toast{background:var(--bar) !important;-webkit-backdrop-filter:blur(22px);
   backdrop-filter:blur(22px);border:0 !important;border-radius:99px !important;
   padding:9px 20px !important}
+dialog.dlg{border:0;border-radius:16px;background:var(--panel);color:var(--text);
+  box-shadow:0 12px 48px rgba(0,0,0,.32);padding:24px 26px 20px;width:min(460px,92vw);
+  animation:rise .2s ease}
+dialog.dlg::backdrop{background:rgba(0,0,0,.4);-webkit-backdrop-filter:blur(6px);
+  backdrop-filter:blur(6px)}
+dialog.dlg h3{margin:0 0 10px;font-size:17px}
+dialog.dlg p{margin:0 0 10px;font-size:14px;line-height:1.45}
+dialog.dlg .dlgNote{color:var(--dim);font-size:13px}
+.dlgActs{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block;
   margin-right:6px;vertical-align:middle;flex:0 0 auto}
 .dot.on{background:var(--ok)} .dot.off{background:var(--err)} .dot.busy{background:var(--warn)}
@@ -822,7 +831,7 @@ body:has(#tab-library:not([hidden])) main{max-width:none;padding-left:6px;paddin
 /* ==================== 00-core.js ==================== */
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.18";
+const APP_VERSION = "0.6.19";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -1163,6 +1172,36 @@ function toast(msg){
   t.textContent = msg; t.hidden = false;
   clearTimeout(toast._t);
   toast._t = setTimeout(() => { t.hidden = true; }, 7000);
+}
+
+/* In-app replacement for window.confirm(): a styled <dialog> that resolves true
+   (confirm) or false (Cancel, Esc, or a click outside). `body` is an array of
+   paragraphs; an item may be a string or an array of strings/Nodes. */
+function confirmDialog({ title, body = [], confirmLabel = "Continue", cancelLabel = "Cancel", note }){
+  return new Promise(resolve => {
+    const d = el("dialog", "dlg");
+    d.setAttribute("aria-labelledby", "dlgTitle");
+    d.append(el("h3", null, title));
+    d.firstChild.id = "dlgTitle";
+    for (const p of body){
+      const para = el("p");
+      para.append(...[].concat(p));
+      d.append(para);
+    }
+    if (note) d.append(el("p", "dlgNote", note));
+    const acts = el("div", "dlgActs");
+    const no = el("button", "btn sec", cancelLabel), yes = el("button", "btn", confirmLabel);
+    acts.append(no, yes);
+    d.append(acts);
+    let result = false;
+    no.onclick = () => d.close();
+    yes.onclick = () => { result = true; d.close(); };
+    d.addEventListener("click", e => { if (e.target === d) d.close(); });
+    d.addEventListener("close", () => { d.remove(); resolve(result); });
+    document.body.append(d);
+    d.showModal();
+    yes.focus();
+  });
 }
 
 /* A mounted SMB share drops reads under load. One failure should not become a
@@ -4938,11 +4977,18 @@ async function resumeScan(){
      reassuring toast: anything not in the CURRENT plan may simply be out of
      scope, not finished. Say so, and let the user decide. */
   if (gone > 0 && files.length < cp.pending.length * 0.9){
-    const go = confirm(gone + " of " + cp.pending.length + " queued photos are not in the "
-      + "current plan.\n\nThey may be finished, deleted, or simply outside the current "
-      + "scan scope" + (S.scanScope ? " (" + S.scanScope + ")" : "") + ".\n\n"
-      + "Resume with the remaining " + files.length + "?\n\n"
-      + "Cancel keeps the checkpoint intact so nothing is lost.");
+    const go = await confirmDialog({
+      title: "Resume with " + files.length.toLocaleString() + " photos?",
+      body: [
+        [el("strong", null, gone.toLocaleString()), " of " + cp.pending.length.toLocaleString()
+          + " queued photos are not in the current plan."],
+        "They may be finished, deleted, or simply outside the current scan scope"
+          + (S.scanScope ? " (" + S.scanScope + ")" : "") + "."
+      ],
+      note: "Cancel keeps the checkpoint intact so nothing is lost.",
+      confirmLabel: "Resume " + files.length.toLocaleString(),
+      cancelLabel: "Cancel"
+    });
     if (!go) return;
   }
   if (!files.length){ await clearCheckpoint(); toast("Nothing left to resume."); await refreshPlan(); return; }

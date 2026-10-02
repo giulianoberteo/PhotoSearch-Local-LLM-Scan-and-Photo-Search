@@ -233,6 +233,15 @@ footer{position:fixed;bottom:0;left:0;right:0;display:flex;gap:18px;align-items:
 #toast{background:var(--bar) !important;-webkit-backdrop-filter:blur(22px);
   backdrop-filter:blur(22px);border:0 !important;border-radius:99px !important;
   padding:9px 20px !important}
+dialog.dlg{border:0;border-radius:16px;background:var(--panel);color:var(--text);
+  box-shadow:0 12px 48px rgba(0,0,0,.32);padding:24px 26px 20px;width:min(460px,92vw);
+  animation:rise .2s ease}
+dialog.dlg::backdrop{background:rgba(0,0,0,.4);-webkit-backdrop-filter:blur(6px);
+  backdrop-filter:blur(6px)}
+dialog.dlg h3{margin:0 0 10px;font-size:17px}
+dialog.dlg p{margin:0 0 10px;font-size:14px;line-height:1.45}
+dialog.dlg .dlgNote{color:var(--dim);font-size:13px}
+.dlgActs{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block;
   margin-right:6px;vertical-align:middle;flex:0 0 auto}
 .dot.on{background:var(--ok)} .dot.off{background:var(--err)} .dot.busy{background:var(--warn)}
