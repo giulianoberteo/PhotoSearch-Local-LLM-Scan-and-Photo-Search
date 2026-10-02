@@ -274,6 +274,13 @@ $("#btnExcl").onclick = async () => {
   if (!p.hidden) await exclRender();
 };
 $("#exclAll").onclick = () => { S.scanExclude = []; exclChanged(); exclRender(); };
+/* Deselect all leaves out every folder, so a few can then be ticked back in. Photos sitting
+   directly in the library root belong to no folder and are still scanned. */
+$("#exclNone").onclick = async () => {
+  if (!S.dirHandle){ toast("Choose or reconnect a folder first."); return; }
+  try { S.scanExclude = (await exclChildren("")).map(n => n + "/"); } catch (e){ toast(humanError(e)); return; }
+  exclChanged(); exclRender();
+};
 exclSummary();
 
 $("#sScope").onchange = async () => {
