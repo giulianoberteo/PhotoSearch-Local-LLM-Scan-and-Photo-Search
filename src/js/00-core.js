@@ -1,6 +1,6 @@
 "use strict";
 /* Keep in step with the newest heading in ChangeLog.md. */
-const APP_VERSION = "0.6.18";
+const APP_VERSION = "0.6.19";
 /* ================= helpers ================= */
 const $ = s => document.querySelector(s);
 const el = (tag, cls, txt) => { const n = document.createElement(tag);
@@ -341,6 +341,36 @@ function toast(msg){
   t.textContent = msg; t.hidden = false;
   clearTimeout(toast._t);
   toast._t = setTimeout(() => { t.hidden = true; }, 7000);
+}
+
+/* In-app replacement for window.confirm(): a styled <dialog> that resolves true
+   (confirm) or false (Cancel, Esc, or a click outside). `body` is an array of
+   paragraphs; an item may be a string or an array of strings/Nodes. */
+function confirmDialog({ title, body = [], confirmLabel = "Continue", cancelLabel = "Cancel", note }){
+  return new Promise(resolve => {
+    const d = el("dialog", "dlg");
+    d.setAttribute("aria-labelledby", "dlgTitle");
+    d.append(el("h3", null, title));
+    d.firstChild.id = "dlgTitle";
+    for (const p of body){
+      const para = el("p");
+      para.append(...[].concat(p));
+      d.append(para);
+    }
+    if (note) d.append(el("p", "dlgNote", note));
+    const acts = el("div", "dlgActs");
+    const no = el("button", "btn sec", cancelLabel), yes = el("button", "btn", confirmLabel);
+    acts.append(no, yes);
+    d.append(acts);
+    let result = false;
+    no.onclick = () => d.close();
+    yes.onclick = () => { result = true; d.close(); };
+    d.addEventListener("click", e => { if (e.target === d) d.close(); });
+    d.addEventListener("close", () => { d.remove(); resolve(result); });
+    document.body.append(d);
+    d.showModal();
+    yes.focus();
+  });
 }
 
 /* A mounted SMB share drops reads under load. One failure should not become a

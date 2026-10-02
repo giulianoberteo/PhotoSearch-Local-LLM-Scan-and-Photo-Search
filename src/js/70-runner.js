@@ -516,11 +516,18 @@ async function resumeScan(){
      reassuring toast: anything not in the CURRENT plan may simply be out of
      scope, not finished. Say so, and let the user decide. */
   if (gone > 0 && files.length < cp.pending.length * 0.9){
-    const go = confirm(gone + " of " + cp.pending.length + " queued photos are not in the "
-      + "current plan.\n\nThey may be finished, deleted, or simply outside the current "
-      + "scan scope" + (S.scanScope ? " (" + S.scanScope + ")" : "") + ".\n\n"
-      + "Resume with the remaining " + files.length + "?\n\n"
-      + "Cancel keeps the checkpoint intact so nothing is lost.");
+    const go = await confirmDialog({
+      title: "Resume with " + files.length.toLocaleString() + " photos?",
+      body: [
+        [el("strong", null, gone.toLocaleString()), " of " + cp.pending.length.toLocaleString()
+          + " queued photos are not in the current plan."],
+        "They may be finished, deleted, or simply outside the current scan scope"
+          + (S.scanScope ? " (" + S.scanScope + ")" : "") + "."
+      ],
+      note: "Cancel keeps the checkpoint intact so nothing is lost.",
+      confirmLabel: "Resume " + files.length.toLocaleString(),
+      cancelLabel: "Cancel"
+    });
     if (!go) return;
   }
   if (!files.length){ await clearCheckpoint(); toast("Nothing left to resume."); await refreshPlan(); return; }
