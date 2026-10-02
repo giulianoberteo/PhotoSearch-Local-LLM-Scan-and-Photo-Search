@@ -372,6 +372,8 @@ from thumbnails.
 
 - **Desktop Chrome or Edge.** The File System Access API has no equivalent in Firefox or
   Safari. The app detects this and says so rather than half-working.
+  The page must also be on `https://` or `localhost`; opened over plain `http://` from another
+  machine the folder picker is hidden. See [docs/SETUP.md](docs/SETUP.md#serving-it-to-other-machines).
 - **A local server that speaks the OpenAI API**, with a vision model loaded and CORS allowed
   for this page.
 - **An embedding model** (optional but recommended).
