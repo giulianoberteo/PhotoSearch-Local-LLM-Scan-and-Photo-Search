@@ -368,30 +368,53 @@ async function appendFaceVectors(pairs){
       + "). Keep your face data: a complete model migration is needed before scanning with this model.");
   const fresh = pairs.filter(p => !FACES.vec.index.has(p.id));
   if (!fresh.length) return;
+
+  /* Build the new state LOCALLY and publish it only after the bytes are on
+     disk. Mutating FACES.vec first meant a failed write left memory claiming
+     rows the file did not have -- and because the next call then wrote an even
+     longer buffer, one failure poisoned every subsequent one. That is how 2,951
+     face crops came to exist beside no vectors at all. */
   const old = FACES.vec.rows || new Float32Array(0);
-  const next = new Float32Array(old.length + fresh.length * dim);
-  next.set(old, 0);
+  const rows = new Float32Array(old.length + fresh.length * dim);
+  rows.set(old, 0);
+  const ids = FACES.vec.ids.slice();
   for (const p of fresh){
-    const row = FACES.vec.ids.length;
-    next.set(faceNormalise(p.vec), row * dim);   // stored normalised: cosine is a dot
-    FACES.vec.index.set(p.id, row);
-    FACES.vec.ids.push(p.id);
+    rows.set(faceNormalise(p.vec), ids.length * dim);  // normalised: cosine is a dot
+    ids.push(p.id);
   }
-  FACES.vec.rows = next;
-  FACES.vec.dim = dim;
+
   await exclusive(async () => {
     const dir = await facesDir();
     const fh = await dir.getFileHandle("facevecs.bin", { create:true });
-    const wanted = FACES.vec.ids.length * dim * 4;
-    const w = await fh.createWritable();
-    await w.write(FACES.vec.rows.buffer);
-    await w.close();
+    const onDisk = (await fh.getFile()).size;
+    const wanted = ids.length * dim * 4;
+    /* APPEND the new rows. Rewriting the whole file per face is quadratic: at
+       5,247 faces that is ~5 MB written per face, which on a 430 KB/s share is
+       about 17 hours of pure vector writing -- longer than reading the photos.
+       A file longer than expected is the one case that needs a full rewrite. */
+    if (onDisk > wanted){
+      const w = await fh.createWritable();
+      await w.write(rows.buffer); await w.close();
+    } else if (onDisk < wanted){
+      const w = await fh.createWritable({ keepExistingData:true });
+      await w.seek(onDisk);
+      await w.write(rows.buffer.slice(onDisk, wanted));
+      await w.close();
+    }
     const size = (await fh.getFile()).size;
     if (size !== wanted)
-      throw new Error("facevecs.bin is " + size + " bytes, expected " + wanted);
+      throw new Error("facevecs.bin is " + size + " bytes, expected " + wanted
+        + " — not recording ids the file does not contain");
     await writeFile(await dir.getFileHandle("facevecs.json", { create:true }),
-      JSON.stringify({ dim, engine: FACE_ENGINE_NAME, ids: FACES.vec.ids }));
+      JSON.stringify({ dim, engine: FACE_ENGINE_NAME, ids }));
   });
+
+  /* Committed. Now it is safe to say so. */
+  FACES.vec.rows = rows;
+  FACES.vec.ids = ids;
+  FACES.vec.dim = dim;
+  FACES.vec.index = new Map();
+  ids.forEach((id, i) => FACES.vec.index.set(id, i));
 }
 
 async function appendFaces(list){

@@ -1,6 +1,9 @@
 # PhotoSearch — how it works and where everything is
 
-Current workspace: `~/Desktop/PhotoSearch`; open its `PhotoSearch.html`.
+Current workspace: `~/PhotoSearch`; open its `PhotoSearch.html`.
+The existing `~/PhotoSearch.html` is a symbolic link to that same app, not a separate
+copy. The Desktop workspace was moved here on 2 October 2026. Older duplicate
+copies are recoverable from Trash; see `../WHERE-THINGS-ARE.txt`.
 The older measurements below are historical. See [the current review](CONSUMER-REVIEW.md)
 for the live library audit and the people/search update at the end of this document
 for the new face-backup format.
@@ -16,8 +19,9 @@ network storage misbehaves. Paths below use `/Volumes/Photos` as an example libr
 
 | | |
 |---|---|
-| `~/Desktop/PhotoSearch/PhotoSearch.html` | The current app. Double-click to open in Chrome. |
-| `~/Desktop/PhotoSearch/` | Active source, build script, review and roadmap. |
+| `~/PhotoSearch/PhotoSearch.html` | The current app. Double-click to open in Chrome. |
+| `~/PhotoSearch.html` | Symbolic link to the current app; keeps the existing browser URL working. |
+| `~/PhotoSearch/` | Active source, build script, review and roadmap. |
 | GitHub | https://github.com/giuvilas/PhotoSearch-Local-LLM-Scan-and-Photo-Search |
 
 To use it on another machine, copy **`PhotoSearch.html`** only. Nothing else is needed
@@ -281,8 +285,8 @@ records belonging to the folder actually walked are considered.
 
 ## People/search update — 1 October 2026
 
-The active app is now `~/Desktop/PhotoSearch/PhotoSearch.html`; source and builds live
-in that Desktop folder. The index remains `/Volumes/Photos/.photoindex/`.
+The updated app and source were initially on the Desktop, then consolidated into
+`~/PhotoSearch/` on 2 October 2026. The index remains `/Volumes/Photos/.photoindex/`.
 
 New backups include the essential `faces/` records, vector files, `people.json`
 (names, corrections and undo), and `people.previous.json`. Face files have checksums.

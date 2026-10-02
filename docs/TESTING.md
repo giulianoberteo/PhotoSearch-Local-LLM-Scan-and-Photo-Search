@@ -181,6 +181,8 @@ removing the fix and confirming the suite goes red:
 | the pre-scan safety copy goes back to running silently | *the safety copy is given a progress callback*, *the progress card is already visible while it runs* |
 | the thumbnail rebuild stops calling `saveThumb` | *nothing is missing afterwards* + a read-back throw |
 | a face row carries everything the engine returned | *no age, gender, emotion or ethnicity is ever stored* |
+| face vectors rewrite the whole file instead of appending | *adding one face writes exactly one row* (counts bytes written, not file size) |
+| face vector memory is published before the write commits | *memory is unchanged by a failed write* |
 | a saved threshold is carried straight across a meaning change | *an old threshold is not applied to ArcFace* |
 | the face plan walks with no progress callback | *the walk is given a progress callback* |
 | the People tab stops mirroring run progress | *the People tab shows how far along it is* |

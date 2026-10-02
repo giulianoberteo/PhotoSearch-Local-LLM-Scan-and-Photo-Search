@@ -443,7 +443,37 @@ exactly as breaking while looking like nothing happened.
 
 ---
 
-## 15. Index size
+## 15. Writing the whole file every time is quadratic, and the symptom is silence
+
+The face vector store rewrote `facevecs.bin` in full on every face. At 5,247 faces that is
+10.7 MB final and ~5 MB written per face — about **17 hours of pure vector writing** on a
+430 KB/s share, longer than reading the photos it came from. The photo-vector path had
+appended correctly since the beginning; this one simply never did.
+
+Worse, it published to memory **before** the write succeeded. So one failure made every
+later write larger, and the run produced **2,951 aligned face crops beside no vectors and
+no face records at all** — crops are written inside `try{}catch{}`, so they accumulated
+while nothing was persisted. The visible symptom was a scan that appeared to work.
+
+**A test that measures the result cannot see this.** A full rewrite and an append leave a
+byte-identical file, so `fileSize === rows × dim × 4` passes either way — my first attempt
+at a regression test asserted exactly that and the mutation sailed through. The assertion
+has to measure the bytes *actually written*, which means spying on `createWritable`:
+
+```js
+async createWritable(opts){
+  keptExisting = !!(opts && opts.keepExistingData);
+  const w = await fh.createWritable(opts);
+  return { write(d){ wrote += d.byteLength ?? d.size ?? 0; return w.write(d); }, … };
+}
+```
+
+Then `adding one face writes exactly one row` fails with `288 != 32` when the rewrite comes
+back, and `memory is unchanged by a failed write` fails with `10 != 9`.
+
+---
+
+## 16. Index size
 
 Measured on real photos, then projected:
 

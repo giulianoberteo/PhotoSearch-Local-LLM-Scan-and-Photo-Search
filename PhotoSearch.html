@@ -6621,30 +6621,53 @@ async function appendFaceVectors(pairs){
       + "). Keep your face data: a complete model migration is needed before scanning with this model.");
   const fresh = pairs.filter(p => !FACES.vec.index.has(p.id));
   if (!fresh.length) return;
+
+  /* Build the new state LOCALLY and publish it only after the bytes are on
+     disk. Mutating FACES.vec first meant a failed write left memory claiming
+     rows the file did not have -- and because the next call then wrote an even
+     longer buffer, one failure poisoned every subsequent one. That is how 2,951
+     face crops came to exist beside no vectors at all. */
   const old = FACES.vec.rows || new Float32Array(0);
-  const next = new Float32Array(old.length + fresh.length * dim);
-  next.set(old, 0);
+  const rows = new Float32Array(old.length + fresh.length * dim);
+  rows.set(old, 0);
+  const ids = FACES.vec.ids.slice();
   for (const p of fresh){
-    const row = FACES.vec.ids.length;
-    next.set(faceNormalise(p.vec), row * dim);   // stored normalised: cosine is a dot
-    FACES.vec.index.set(p.id, row);
-    FACES.vec.ids.push(p.id);
+    rows.set(faceNormalise(p.vec), ids.length * dim);  // normalised: cosine is a dot
+    ids.push(p.id);
   }
-  FACES.vec.rows = next;
-  FACES.vec.dim = dim;
+
   await exclusive(async () => {
     const dir = await facesDir();
     const fh = await dir.getFileHandle("facevecs.bin", { create:true });
-    const wanted = FACES.vec.ids.length * dim * 4;
-    const w = await fh.createWritable();
-    await w.write(FACES.vec.rows.buffer);
-    await w.close();
+    const onDisk = (await fh.getFile()).size;
+    const wanted = ids.length * dim * 4;
+    /* APPEND the new rows. Rewriting the whole file per face is quadratic: at
+       5,247 faces that is ~5 MB written per face, which on a 430 KB/s share is
+       about 17 hours of pure vector writing -- longer than reading the photos.
+       A file longer than expected is the one case that needs a full rewrite. */
+    if (onDisk > wanted){
+      const w = await fh.createWritable();
+      await w.write(rows.buffer); await w.close();
+    } else if (onDisk < wanted){
+      const w = await fh.createWritable({ keepExistingData:true });
+      await w.seek(onDisk);
+      await w.write(rows.buffer.slice(onDisk, wanted));
+      await w.close();
+    }
     const size = (await fh.getFile()).size;
     if (size !== wanted)
-      throw new Error("facevecs.bin is " + size + " bytes, expected " + wanted);
+      throw new Error("facevecs.bin is " + size + " bytes, expected " + wanted
+        + " — not recording ids the file does not contain");
     await writeFile(await dir.getFileHandle("facevecs.json", { create:true }),
-      JSON.stringify({ dim, engine: FACE_ENGINE_NAME, ids: FACES.vec.ids }));
+      JSON.stringify({ dim, engine: FACE_ENGINE_NAME, ids }));
   });
+
+  /* Committed. Now it is safe to say so. */
+  FACES.vec.rows = rows;
+  FACES.vec.ids = ids;
+  FACES.vec.dim = dim;
+  FACES.vec.index = new Map();
+  ids.forEach((id, i) => FACES.vec.index.set(id, i));
 }
 
 async function appendFaces(list){
@@ -10760,6 +10783,91 @@ async function consumerSelfTest(scratch){
   try {
     await deleteAllFaceData();
     S.faces.embedder = "arcface"; S.faces.threshold = 0.7;
+
+    /* ---- face vectors must append, and must not publish before committing ----
+       Rewriting the whole file per face is quadratic: at 5,247 faces that is
+       ~5 MB per face, about 17 hours on a 430 KB/s share. And publishing memory
+       before the write succeeded meant one failure made every later write
+       longer, so the run produced 2,951 crops beside no vectors at all. */
+    {
+      const dim = 8;
+      const vec = seed => Float32Array.from(
+        Array.from({ length:dim }, (_, i) => Math.sin(seed * 3.7 + i)));
+      await deleteAllFaceData();
+      const dir = await facesDir();
+      const binSize = async () => {
+        try { return (await (await dir.getFileHandle("facevecs.bin")).getFile()).size; }
+        catch { return 0; }
+      };
+      await appendFaceVectors([{ id:"fv-1", vec: vec(1) }]);
+      eq("one face writes one row", await binSize(), dim * 4);
+      await appendFaceVectors([{ id:"fv-2", vec: vec(2) }]);
+      eq("a second face appends a second row", await binSize(), 2 * dim * 4);
+      eq("and memory agrees with the file", FACES.vec.ids.length, 2);
+
+      for (let i = 3; i <= 8; i++) await appendFaceVectors([{ id:"fv-" + i, vec: vec(i) }]);
+      eq("eight rows on disk", await binSize(), 8 * dim * 4);
+      eq("and eight ids", FACES.vec.ids.length, 8);
+      ok("every vector reads back", [1,4,8].every(i => !!faceVectorOf("fv-" + i)));
+
+      /* Measure the bytes actually WRITTEN, not the resulting file size: a full
+         rewrite and an append leave an identical file, so size cannot tell them
+         apart. This is the assertion that detects the quadratic behaviour. */
+      {
+        const realDir = await facesDir();
+        let wrote = 0, keptExisting = null;
+        const spy = {
+          async getFileHandle(name, o){
+            const fh = await realDir.getFileHandle(name, o);
+            if (name !== "facevecs.bin") return fh;
+            return { getFile: () => fh.getFile(),
+              async createWritable(opts){
+                keptExisting = !!(opts && opts.keepExistingData);
+                const w = await fh.createWritable(opts);
+                return { seek: pos => w.seek(pos),
+                  write(d){
+                    wrote += (d && d.byteLength != null) ? d.byteLength
+                           : (d && d.size) || 0;
+                    return w.write(d);
+                  },
+                  close: () => w.close(), abort: () => w.abort() };
+              } };
+          },
+          getDirectoryHandle: (n, o) => realDir.getDirectoryHandle(n, o),
+          removeEntry: (n, o) => realDir.removeEntry(n, o),
+          entries: () => realDir.entries(), keys: () => realDir.keys(),
+          values: () => realDir.values()
+        };
+        FACES.dir = spy;
+        await appendFaceVectors([{ id:"fv-measured", vec: vec(42) }]);
+        FACES.dir = realDir;
+        eq("adding one face writes exactly one row", wrote, dim * 4);
+        ok("by appending rather than rewriting", keptExisting === true,
+           String(keptExisting));
+        eq("and the file grew by one row", await binSize(), 9 * dim * 4);
+      }
+
+      /* A failed write must leave memory exactly as it was, so the next attempt
+         is the same size rather than larger. */
+      const idsBefore = FACES.vec.ids.length;
+      const rowsBefore = FACES.vec.rows.length;
+      const realFacesDir = facesDir;
+      facesDir = async () => { throw new Error("share went away"); };
+      let threw = false;
+      try { await appendFaceVectors([{ id:"fv-fail", vec: vec(99) }]); }
+      catch { threw = true; }
+      facesDir = realFacesDir;
+      ok("a failed vector write is reported", threw);
+      eq("and memory is unchanged by it", FACES.vec.ids.length, idsBefore);
+      eq("including the row buffer", FACES.vec.rows.length, rowsBefore);
+      ok("so the id that failed is not claimed", !FACES.vec.index.has("fv-fail"));
+      /* The next write must therefore be the ordinary one-row append. */
+      await appendFaceVectors([{ id:"fv-9", vec: vec(9) }]);
+      eq("and the next append is still one row", await binSize(), 10 * dim * 4);
+
+      await deleteAllFaceData();
+    }
+
     S.roles.embed = "";
     const records = Array.from({ length:75 }, (_,i) => ({ id:"consumer-" + i,
       name:"photo-" + i + ".jpg", caption:i % 2 ? "a beach holiday" : "a garden",
